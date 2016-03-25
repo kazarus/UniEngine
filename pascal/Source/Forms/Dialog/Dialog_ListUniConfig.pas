@@ -4,10 +4,13 @@ interface
 
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
-  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs;
+  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, System.Rtti,
+  FMX.Layouts, FMX.Grid, FMX.Controls.Presentation, FMX.StdCtrls;
 
 type
   TDialogListUniConfig = class(TForm)
+    Panl_1: TPanel;
+    StringGrid1: TStringGrid;
   private
   public
   end;

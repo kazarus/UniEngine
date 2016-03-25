@@ -8,4 +8,23 @@ object DialogListUniConfig: TDialogListUniConfig
   FormFactor.Height = 480
   FormFactor.Devices = [Desktop]
   DesignerMasterStyle = 0
+  object Panl_1: TPanel
+    Align = Bottom
+    Position.Y = 444.000000000000000000
+    Size.Width = 640.000000000000000000
+    Size.Height = 36.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 0
+  end
+  object StringGrid1: TStringGrid
+    Align = Client
+    Size.Width = 640.000000000000000000
+    Size.Height = 444.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 1
+    RowCount = 100
+    RowHeight = 21.000000000000000000
+    Viewport.Width = 636.000000000000000000
+    Viewport.Height = 419.000000000000000000
+  end
 end
