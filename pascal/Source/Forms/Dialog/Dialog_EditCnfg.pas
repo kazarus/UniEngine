@@ -7,13 +7,13 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs;
 
 type
-  TForm1 = class(TForm)
+  TDialogEditCnfg = class(TForm)
   private
   public
   end;
 
 var
-  Form1: TForm1;
+  DialogEditCnfg: TDialogEditCnfg;
 
 implementation
 

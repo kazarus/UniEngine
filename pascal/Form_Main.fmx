@@ -11,23 +11,23 @@ object FormMain: TFormMain
   DesignerMasterStyle = 0
   object Tool_Main: TToolBar
     Size.Width = 640.000000000000000000
-    Size.Height = 44.000000000000000000
+    Size.Height = 30.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 0
-    object Btnx_1: TButton
+    object Btnv_View: TButton
       Align = Left
       Size.Width = 80.000000000000000000
-      Size.Height = 44.000000000000000000
+      Size.Height = 30.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 0
-      Text = 'Btnx_1'
-      OnClick = Btnx_1Click
+      Text = 'Btnv_View'
+      OnClick = Btnv_ViewClick
     end
     object Btnx_2: TButton
       Align = Left
       Position.X = 80.000000000000000000
       Size.Width = 80.000000000000000000
-      Size.Height = 44.000000000000000000
+      Size.Height = 30.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 1
       Text = 'Btnx_2'
@@ -37,17 +37,34 @@ object FormMain: TFormMain
     Align = Left
     Cursor = crHSplit
     MinSize = 20.000000000000000000
-    Position.Y = 84.000000000000000000
+    Position.Y = 30.000000000000000000
     ShowGrip = False
     Size.Width = 305.000000000000000000
-    Size.Height = 396.000000000000000000
+    Size.Height = 450.000000000000000000
     Size.PlatformDefault = False
     object Panl_1: TPanel
       Align = Client
       Size.Width = 305.000000000000000000
-      Size.Height = 396.000000000000000000
+      Size.Height = 450.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 1
+      object StringGrid1: TStringGrid
+        Align = Client
+        Size.Width = 305.000000000000000000
+        Size.Height = 450.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        RowCount = 100
+        RowHeight = 21.000000000000000000
+        Viewport.Width = 285.000000000000000000
+        Viewport.Height = 425.000000000000000000
+        object strngclmn1: TStringColumn
+          Size.Width = 100.000000000000000000
+          Size.Height = 63.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 0
+        end
+      end
     end
   end
 end
