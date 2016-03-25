@@ -4,8 +4,8 @@ uses
   System.StartUpCopy,
   FMX.Forms,
   Form_Main in 'Form_Main.pas' {FormMain},
-  Dialog_EditCnfg in 'Source\Forms\Dialog\Dialog_EditCnfg.pas' {DialogEditCnfg},
-  Dialog_ListCnfg in 'Source\Forms\Dialog\Dialog_ListCnfg.pas' {DialogListCnfg};
+  Dialog_EditUniConfig in 'Source\Forms\Dialog\Dialog_EditUniConfig.pas' {DialogEditCnfg},
+  Dialog_ListUniConfig in 'Source\Forms\Dialog\Dialog_ListUniConfig.pas' {DialogListUniConfig};
 
 {$R *.res}
 
@@ -13,6 +13,6 @@ begin
   Application.Initialize;
   Application.CreateForm(TFormMain, FormMain);
   Application.CreateForm(TDialogEditCnfg, DialogEditCnfg);
-  Application.CreateForm(TDialogListCnfg, DialogListCnfg);
+  Application.CreateForm(TDialogListUniConfig, DialogListUniConfig);
   Application.Run;
 end.

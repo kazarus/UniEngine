@@ -60,7 +60,7 @@ object FormMain: TFormMain
         Viewport.Height = 425.000000000000000000
         object strngclmn1: TStringColumn
           Size.Width = 100.000000000000000000
-          Size.Height = 63.000000000000000000
+          Size.Height = 441.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 0
         end

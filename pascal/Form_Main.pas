@@ -30,7 +30,7 @@ var
 
 implementation
 uses
-  Dialog_ListCnfg;
+  Dialog_ListUniConfig;
 
 {$R *.fmx}
 
@@ -40,7 +40,7 @@ var
 begin
   try
     Objt:=TObject.Create;
-    if ViewListCnfg(Objt)=Mrok then
+    if ViewListUniConfig(Objt)=Mrok then
     begin
       //
     end;
