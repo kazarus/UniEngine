@@ -5,12 +5,15 @@ interface
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, System.Rtti,
-  FMX.Layouts, FMX.Grid, FMX.Controls.Presentation, FMX.StdCtrls;
+  FMX.Layouts, FMX.Grid, FMX.Controls.Presentation, FMX.StdCtrls, FMX.TMSToolBar;
 
 type
   TDialogListUniConfig = class(TForm)
-    Panl_1: TPanel;
     StringGrid1: TStringGrid;
+    Tool_1: TToolBar;
+    CornerButton1: TCornerButton;
+    Btnv_1: TButton;
+    procedure Btnv_1Click(Sender: TObject);
   private
   public
   end;
@@ -32,6 +35,11 @@ begin
   finally
     FreeAndNil(DialogListUniConfig);
   end;
+end;
+
+procedure TDialogListUniConfig.Btnv_1Click(Sender: TObject);
+begin
+  //
 end;
 
 end.

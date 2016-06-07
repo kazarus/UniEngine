@@ -21,6 +21,7 @@ type
     procedure FormShow(Sender: TObject);
     procedure Grid_1Click(Sender: TObject);
     procedure Btnv_ViewClick(Sender: TObject);
+    procedure Btnx_2Click(Sender: TObject);
   private
   public
   end;
@@ -33,6 +34,7 @@ uses
   Dialog_ListUniConfig;
 
 {$R *.fmx}
+{$R *.Windows.fmx MSWINDOWS}
 
 procedure TFormMain.Btnv_ViewClick(Sender: TObject);
 var
@@ -49,10 +51,17 @@ begin
   end;
 end;
 
+procedure TFormMain.Btnx_2Click(Sender: TObject);
+begin
+  Application.Terminate;
+end;
+
 procedure TFormMain.FormShow(Sender: TObject);
 var
   I:Integer;
 begin
+  self.Width :=1024;
+  self.Height:=768;
   {Self.Grid_1.RowCount:=1200;
   for I := 0 to 1100 do
   begin
@@ -60,11 +69,10 @@ begin
     self.Grid_1.AddCheckBox(2,I,False);
   end;}
 
-  Self.StringGrid1.RowCount:=101;
+  self.StringGrid1.RowCount:=101;
   for I := 0 to 100 do
   begin
-    Self.StringGrid1.Cells[0,I]:='cELL'+I.ToString;
-
+    self.StringGrid1.Cells[0,I]:='cELL'+I.ToString;
   end;
 end;
 

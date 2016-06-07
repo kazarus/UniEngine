@@ -1,23 +1,26 @@
 object FormMain: TFormMain
-  Left = 0
-  Top = 0
+  Left = 382
+  Top = 225
   Caption = 'Form1'
-  ClientHeight = 480
-  ClientWidth = 640
+  ClientHeight = 311
+  ClientWidth = 781
+  Position = Designed
   FormFactor.Width = 320
   FormFactor.Height = 480
   FormFactor.Devices = [Desktop]
   OnShow = FormShow
+  Left = 382
+  Top = 225
   DesignerMasterStyle = 0
   object Tool_Main: TToolBar
-    Size.Width = 640.000000000000000000
-    Size.Height = 30.000000000000000000
+    Size.Width = 781.000000000000000000
+    Size.Height = 44.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 0
     object Btnv_View: TButton
       Align = Left
       Size.Width = 80.000000000000000000
-      Size.Height = 30.000000000000000000
+      Size.Height = 44.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 0
       Text = 'Btnv_View'
@@ -27,40 +30,41 @@ object FormMain: TFormMain
       Align = Left
       Position.X = 80.000000000000000000
       Size.Width = 80.000000000000000000
-      Size.Height = 30.000000000000000000
+      Size.Height = 44.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 1
       Text = 'Btnx_2'
+      OnClick = Btnx_2Click
     end
   end
   object spl1: TSplitter
     Align = Left
     Cursor = crHSplit
     MinSize = 20.000000000000000000
-    Position.Y = 30.000000000000000000
+    Position.Y = 44.000000000000000000
     ShowGrip = False
     Size.Width = 305.000000000000000000
-    Size.Height = 450.000000000000000000
+    Size.Height = 267.000000000000000000
     Size.PlatformDefault = False
     object Panl_1: TPanel
       Align = Client
       Size.Width = 305.000000000000000000
-      Size.Height = 450.000000000000000000
+      Size.Height = 267.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 1
       object StringGrid1: TStringGrid
         Align = Client
         Size.Width = 305.000000000000000000
-        Size.Height = 450.000000000000000000
+        Size.Height = 267.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 1
         RowCount = 100
         RowHeight = 21.000000000000000000
         Viewport.Width = 285.000000000000000000
-        Viewport.Height = 425.000000000000000000
+        Viewport.Height = 242.000000000000000000
         object strngclmn1: TStringColumn
           Size.Width = 100.000000000000000000
-          Size.Height = 441.000000000000000000
+          Size.Height = 252.000000000000000000
           Size.PlatformDefault = False
           TabOrder = 0
         end
