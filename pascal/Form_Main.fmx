@@ -5,6 +5,7 @@ object FormMain: TFormMain
   ClientHeight = 311
   ClientWidth = 781
   Position = Designed
+  StyleBook = stylbk1
   FormFactor.Width = 320
   FormFactor.Height = 480
   FormFactor.Devices = [Desktop]
@@ -70,5 +71,19 @@ object FormMain: TFormMain
         end
       end
     end
+  end
+  object stylbk1: TStyleBook
+    UseStyleManager = True
+    Styles = <
+      item
+      end>
+    Left = 440
+    Top = 128
+  end
+  object Btnv_1: TButton
+    Position.X = 344.000000000000000000
+    Position.Y = 80.000000000000000000
+    TabOrder = 3
+    Text = 'Btnv_1'
   end
 end

@@ -18,6 +18,8 @@ type
     Panl_1: TPanel;
     StringGrid1: TStringGrid;
     strngclmn1: TStringColumn;
+    stylbk1: TStyleBook;
+    Btnv_1: TButton;
     procedure FormShow(Sender: TObject);
     procedure Grid_1Click(Sender: TObject);
     procedure Btnv_ViewClick(Sender: TObject);
@@ -62,6 +64,10 @@ var
 begin
   self.Width :=1024;
   self.Height:=768;
+
+  self.stylbk1.FileName:='Air.style';
+
+  //Application.ShowException();
   {Self.Grid_1.RowCount:=1200;
   for I := 0 to 1100 do
   begin
