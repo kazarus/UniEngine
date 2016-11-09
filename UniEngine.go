@@ -307,12 +307,16 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	//#fmt.Println(cField)
 	//#fmt.Println(cWhere)
 
-	cSQL := fmt.Sprintf("update %s set %s where %s", cTable.TableName, cField, cWhere)
-	//#fmt.Println(cSQL)
-	self.prepare(cSQL)
+	cSQL := fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
+	fmt.Println(cSQL)
+	var eror error
+	eror = self.prepare(cSQL)
+	if eror != nil {
+		return eror
+	}
 
 	//@ _, eror := self.DB.Exec(cSQL,cValue...)
-	_, eror := self.st.Exec(cValue...)
+	_, eror = self.st.Exec(cValue...)
 	if eror != nil {
 		return eror
 	}
@@ -371,9 +375,14 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	//#fmt.Println("cField:", string(cField[1:]))
 	//#fmt.Println("cParam:", string(cParam[1:]))
 
-	cSQL := fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", cTable.TableName, cField, cParam)
+	cSQL := fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", cTableName, cField, cParam)
 	//#fmt.Println(cSQL)
-	_, eror := self.DB.Exec(cSQL, cValue...)
+	var eror error
+	eror = self.prepare(cSQL)
+	if eror != nil {
+		return eror
+	}
+	_, eror = self.tx.Exec(cSQL, cValue...)
 	if eror != nil {
 		return eror
 	}
@@ -415,11 +424,16 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	cWhere = string(cWhere[4:])
 	//#fmt.Println(cWhere)
 
-	cSQL := fmt.Sprintf("delete from %s where %s", cTable.TableName, cWhere)
+	cSQL := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
 	//#fmt.Println(cSQL)
 	//@ _, eror := self.DB.Exec(cSQL, cValue...)
-	self.prepare(cSQL)
-	_, eror := self.st.Exec(cValue...)
+	var eror error
+	eror = self.prepare(cSQL)
+	if eror != nil {
+		return eror
+	}
+
+	_, eror = self.st.Exec(cValue...)
 	if eror != nil {
 		return eror
 	}
