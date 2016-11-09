@@ -7,7 +7,7 @@ import "reflect"
 import "database/sql"
 
 type TUniEngine struct {
-	DB *sql.DB
+	Db *sql.DB
 	tx *sql.Tx
 	st *sql.Stmt
 
@@ -74,7 +74,7 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 //return slice;
 func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
 
-	rows, eror := self.DB.Query(query, args...)
+	rows, eror := self.Db.Query(query, args...)
 	if eror != nil {
 		return eror
 	}
@@ -139,10 +139,63 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	return nil
 }
 
+//return int64;
+func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
+	var eror error
+	var size int64
+	rows, eror := self.Db.Query(query, args...)
+	if eror != nil {
+		return 0, eror
+	}
+	defer rows.Close()
+
+	/*
+		if !rows.Next() {
+			return 0, sql.ErrNoRows
+		}
+		rows.Scan(&size)
+		return size, nil
+	*/
+	for rows.Next() {
+		eror = rows.Scan(&size)
+		if eror != nil {
+			return 0, eror
+		}
+	}
+	return size, nil
+}
+
+//return string;
+func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, error) {
+	var eror error
+	var text string
+	rows, eror := self.Db.Query(query, args...)
+	if eror != nil {
+		return "", eror
+	}
+	defer rows.Close()
+
+	/*
+		if !rows.Next() {
+			return 0, sql.ErrNoRows
+		}
+		rows.Scan(&size)
+		return size, nil
+	*/
+	for rows.Next() {
+		eror = rows.Scan(&text)
+		if eror != nil {
+			return "", eror
+		}
+	}
+	return text, nil
+
+}
+
 //return map;use HasMapIndex;
 func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
 
-	rows, eror := self.DB.Query(query, args...)
+	rows, eror := self.Db.Query(query, args...)
 	if eror != nil {
 		return eror
 	}
@@ -199,7 +252,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 //return map;use custom function;
 func (self *TUniEngine) SelectF(i interface{}, f MapHandler, query string, args ...interface{}) error {
 
-	rows, eror := self.DB.Query(query, args...)
+	rows, eror := self.Db.Query(query, args...)
 	if eror != nil {
 		return eror
 	}
@@ -466,7 +519,7 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 	var eror error
 
 	if self.canClose {
-		self.st, eror = self.DB.Prepare(sqlQuery)
+		self.st, eror = self.Db.Prepare(sqlQuery)
 	} else {
 		self.st, eror = self.tx.Prepare(sqlQuery)
 	}
@@ -486,7 +539,7 @@ func (self *TUniEngine) prepare(sqlQuery string) error {
 	var eror error
 
 	if self.canClose {
-		self.st, eror = self.DB.Prepare(sqlQuery)
+		self.st, eror = self.Db.Prepare(sqlQuery)
 	} else {
 		self.st, eror = self.tx.Prepare(sqlQuery)
 	}
@@ -495,7 +548,7 @@ func (self *TUniEngine) prepare(sqlQuery string) error {
 
 func (self *TUniEngine) Begin() error {
 	var eror error
-	self.tx, eror = self.DB.Begin()
+	self.tx, eror = self.Db.Begin()
 	if eror != nil {
 		return eror
 	}
