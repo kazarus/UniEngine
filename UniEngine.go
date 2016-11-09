@@ -53,7 +53,6 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 
 	for i := 0; i < n; i++ {
 		f := t.Field(i)
-		//#fmt.Println(f)
 
 		var cField = TUniField{}
 		cField.AttriName = f.Name
