@@ -94,7 +94,10 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	}
 
 	cName := t.String()
-	cTable := self.ListTabl[cName]
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
 
 	cols, _ := rows.Columns()
 
@@ -158,7 +161,10 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 
 	cName := t.String()
 
-	cTable := self.ListTabl[cName]
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
 
 	cols, _ := rows.Columns()
 
@@ -219,7 +225,11 @@ func (self *TUniEngine) SelectF(i interface{}, f MapHandler, query string, args 
 
 	//#fmt.Println(t.Kind())
 
-	cTable := self.ListTabl[cName]
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
+
 	//#fmt.Println(cTable)
 
 	cols, _ := rows.Columns()
@@ -272,7 +282,10 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	cTable := self.ListTabl[t.String()]
+	cTable, Valid := self.ListTabl[t.String()]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", t.String()))
+	}
 	if cTableName == "" {
 		cTableName = cTable.TableName
 	}
@@ -335,7 +348,10 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	cTable := self.ListTabl[t.String()]
+	cTable, Valid := self.ListTabl[t.String()]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", t.String()))
+	}
 	if cTableName == "" {
 		cTableName = cTable.TableName
 	}
@@ -402,7 +418,10 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	cTable := self.ListTabl[t.String()]
+	cTable, Valid := self.ListTabl[t.String()]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", t.String()))
+	}
 	if cTableName == "" {
 		cTableName = cTable.TableName
 	}
