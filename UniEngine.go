@@ -59,7 +59,7 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 		cField.AttriName = f.Name
 		cField.FieldType = f.Type
 
-		cField.initialize(f.Tag.Get("db"))
+		cField.initialize(f.Tag.Get(self.ColLabel))
 
 		cTable.ListField[cField.FieldName] = cField
 	}
@@ -308,7 +308,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	//#fmt.Println(cWhere)
 
 	cSQL := fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
-	fmt.Println(cSQL)
+	//#fmt.Println(cSQL)
 	var eror error
 	eror = self.prepare(cSQL)
 	if eror != nil {
@@ -376,13 +376,15 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	//#fmt.Println("cParam:", string(cParam[1:]))
 
 	cSQL := fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", cTableName, cField, cParam)
-	//#fmt.Println(cSQL)
+	fmt.Println(cSQL)
 	var eror error
+
 	eror = self.prepare(cSQL)
 	if eror != nil {
 		return eror
 	}
-	_, eror = self.tx.Exec(cSQL, cValue...)
+
+	_, eror = self.st.Exec(cValue...)
 	if eror != nil {
 		return eror
 	}
