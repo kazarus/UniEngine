@@ -443,8 +443,24 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	return nil
 }
 
-func (self *TUniEngine) Execute() {
+func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
+	var eror error
 
+	if self.canClose {
+		self.st, eror = self.DB.Prepare(sqlQuery)
+	} else {
+		self.st, eror = self.tx.Prepare(sqlQuery)
+	}
+
+	if eror != nil {
+		return eror
+	}
+	_, eror = self.st.Exec(args...)
+	if eror != nil {
+		return eror
+	}
+
+	return nil
 }
 
 func (self *TUniEngine) prepare(sqlQuery string) error {
@@ -510,7 +526,6 @@ func (self *TUniEngine) Initialize() error {
 
 //i just do not like this function name
 /*
-
 func (self *TUniEngine) Rollback() error {
 	return self.Cancel()
 }
