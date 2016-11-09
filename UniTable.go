@@ -1,7 +1,7 @@
 // UniTable
 package UniEngine
 
-import "fmt"
+//#import "fmt"
 
 type TUniTable struct {
 	TableName string
@@ -25,9 +25,9 @@ func (self *TUniTable) SetKeys(cFields ...interface{}) error {
 	*/
 
 	for _, cItem := range cFields {
-		fmt.Println("citem:", cItem)
+		//#fmt.Println("citem:", cItem)
 		if dItem, valid := self.ListField[cItem.(string)]; valid {
-			fmt.Println("dItem:", dItem)
+			//#fmt.Println("dItem:", dItem)
 			self.ListPkeys[cItem.(string)] = dItem
 		}
 	}
