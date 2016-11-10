@@ -1,4 +1,4 @@
-// UniEngine
+// UniEngine i change the title
 package UniEngine
 
 import "fmt"
@@ -14,7 +14,7 @@ type TUniEngine struct {
 	ListTabl map[string]TUniTable
 	ColLabel string
 
-	//#sqlQuery string
+	//@sqlQuery string
 	canClose bool //default is true;if is transaction,canClose = false
 }
 
