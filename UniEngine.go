@@ -110,7 +110,10 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 
 			u := reflect.New(t)
 			for indx, item := range cols {
-				cField := cTable.ListField[item]
+				cField, Valid := cTable.ListField[item]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+				}
 				dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 			}
 
@@ -124,7 +127,10 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 		} else {
 
 			for indx, item := range cols {
-				cField := cTable.ListField[item]
+				cField, Valid := cTable.ListField[item]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+				}
 				dest[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
 			}
 
@@ -229,7 +235,10 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		u := reflect.New(t)
 
 		for indx, item := range cols {
-			cField := cTable.ListField[item]
+			cField, Valid := cTable.ListField[item]
+			if !Valid {
+				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+			}
 			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 		}
 
@@ -301,8 +310,10 @@ func (self *TUniEngine) SelectF(i interface{}, f MapHandler, query string, args 
 		for indx, item := range cols {
 			//#dest[indx] = &userindx
 			//#fmt.Println(indx, item)
-			cField := cTable.ListField[item]
-			//#fmt.Println(cField.AttriName)
+			cField, Valid := cTable.ListField[item]
+			if !Valid {
+				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+			}
 			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 		}
 
@@ -444,7 +455,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	//#fmt.Println("cParam:", string(cParam[1:]))
 
 	cSQL := fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", cTableName, cField, cParam)
-	fmt.Println(cSQL)
+	//#fmt.Println(cSQL)
 	var eror error
 
 	eror = self.prepare(cSQL)
