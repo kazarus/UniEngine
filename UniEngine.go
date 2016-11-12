@@ -147,7 +147,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 //return int64;
 func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
 	var eror error
-	var size int64
+	var size sql.NullInt64
 	rows, eror := self.Db.Query(query, args...)
 	if eror != nil {
 		return 0, eror
@@ -167,13 +167,39 @@ func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error
 			return 0, eror
 		}
 	}
-	return size, nil
+	return size.Int64, nil
+}
+
+//return int64;
+func (self *TUniEngine) SelectX(query string, args ...interface{}) (float64, error) {
+	var eror error
+	var size sql.NullFloat64
+	rows, eror := self.Db.Query(query, args...)
+	if eror != nil {
+		return 0, eror
+	}
+	defer rows.Close()
+
+	/*
+		if !rows.Next() {
+			return 0, sql.ErrNoRows
+		}
+		rows.Scan(&size)
+		return size, nil
+	*/
+	for rows.Next() {
+		eror = rows.Scan(&size)
+		if eror != nil {
+			return 0, eror
+		}
+	}
+	return size.Float64, nil
 }
 
 //return string;
 func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, error) {
 	var eror error
-	var text string
+	var text sql.NullString
 	rows, eror := self.Db.Query(query, args...)
 	if eror != nil {
 		return "", eror
@@ -193,7 +219,7 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 			return "", eror
 		}
 	}
-	return text, nil
+	return text.String, nil
 
 }
 
