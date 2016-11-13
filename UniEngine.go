@@ -73,7 +73,14 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 //return slice;
 func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
 
-	rows, eror := self.Db.Query(query, args...)
+	var eror error
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
 	if eror != nil {
 		return eror
 	}
@@ -107,7 +114,6 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	for rows.Next() {
 
 		if isList {
-
 			u := reflect.New(t)
 			for indx, item := range cols {
 				cField, Valid := cTable.ListField[item]
@@ -146,9 +152,17 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 
 //return int64;
 func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
+
 	var eror error
+
 	var size sql.NullInt64
-	rows, eror := self.Db.Query(query, args...)
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return 0, eror
+	}
+
+	rows, eror := self.st.Query(args...)
 	if eror != nil {
 		return 0, eror
 	}
@@ -172,9 +186,17 @@ func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error
 
 //return int64;
 func (self *TUniEngine) SelectX(query string, args ...interface{}) (float64, error) {
+
 	var eror error
 	var size sql.NullFloat64
-	rows, eror := self.Db.Query(query, args...)
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return 0, eror
+	}
+
+	rows, eror := self.st.Query(args...)
+
 	if eror != nil {
 		return 0, eror
 	}
@@ -198,9 +220,17 @@ func (self *TUniEngine) SelectX(query string, args ...interface{}) (float64, err
 
 //return string;
 func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, error) {
+
 	var eror error
+
 	var text sql.NullString
-	rows, eror := self.Db.Query(query, args...)
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return "", eror
+	}
+
+	rows, eror := self.st.Query(args...)
 	if eror != nil {
 		return "", eror
 	}
@@ -226,7 +256,14 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 //return map;use HasMapIndex;
 func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
 
-	rows, eror := self.Db.Query(query, args...)
+	var eror error
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
 	if eror != nil {
 		return eror
 	}
@@ -286,7 +323,14 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 //return map;use custom function;
 func (self *TUniEngine) SelectF(i interface{}, f MapHandler, query string, args ...interface{}) error {
 
-	rows, eror := self.Db.Query(query, args...)
+	var eror error
+
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
 	if eror != nil {
 		return eror
 	}
