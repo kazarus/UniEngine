@@ -70,7 +70,7 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 	return &cTable
 }
 
-//return slice;
+//return object or slice;
 func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
 
 	var eror error
