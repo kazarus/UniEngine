@@ -44,3 +44,7 @@ type HasGetSqlInsert interface {
 type HasGetSqlDelete interface {
 	GetSqlDelete() string
 }
+
+type HasSetSqlValues interface {
+	SetSqlValues(u interface{})
+}

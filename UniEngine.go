@@ -513,7 +513,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 		cParam = cParam + "," + fmt.Sprintf("$%d", cIndex)
 		cIndex = cIndex + 1
 		//#fmt.Println(t.FieldByName(item.AttriName))
-		////#fmt.Println(t.FieldByName(item.AttriName).Interface())
+		//#fmt.Println(t.FieldByName(item.AttriName).Interface())
 		cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
 	}
 
