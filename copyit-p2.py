@@ -1,19 +1,19 @@
 #! /usr/bin/env python  
 # -*- coding: utf-8 -*-  
-#@author zcwang3@gmail.com  
-#@version 2010-09-25 14:57  
+
    
 import os  
-import time  
+import time
+import shutil
    
 sourceDir = r"C:\GOPATH\src\github.com\kazarus\UniEngine" 
 targetDir = r"D:\GITHUB\UniEngine" 
-copyFileCounts = 0 
+fileCount = 0 
    
 def copyFiles(sourceDir, targetDir):  
-    global copyFileCounts  
+    global fileCount  
     print sourceDir  
-    print u"%s 当前处理文件夹%s已处理%s 个文件" %(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())), sourceDir,copyFileCounts)  
+    print u"%s 当前处理文件夹%s已处理%s 个文件" %(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())), sourceDir,fileCount)  
     for f in os.listdir(sourceDir):
         
         if f ==".git":
@@ -27,15 +27,9 @@ def copyFiles(sourceDir, targetDir):
             #创建目录  
             if not os.path.exists(targetDir):  
                 os.makedirs(targetDir)  
-            copyFileCounts += 1 
-               
-            #文件不存在，或者存在但是大小不同，覆盖  
-            if not os.path.exists(targetF) or (os.path.exists(targetF) and (os.path.getsize(targetF) != os.path.getsize(sourceF))):  
-                #2进制文件  
-                open(targetF, "wb").write(open(sourceF, "rb").read())  
-                print u"%s %s 复制完毕" %(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())), targetF)  
-            else:  
-                print u"%s %s 已存在，不重复复制" %(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())), targetF)  
+            fileCount += 1
+            
+        shutil.copy(sourceF,targetF)
            
         if os.path.isdir(sourceF):  
             copyFiles(sourceF, targetF)  
