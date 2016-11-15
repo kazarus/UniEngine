@@ -51,6 +51,6 @@ type HasGetSqlDelete interface {
 	GetSqlDelete() string
 }
 
-type HasSetSqlValues interface {
-	SetSqlValues(u interface{})
+type HasGetSqlValues interface {
+	GetSqlValues() []interface{}
 }
