@@ -1,6 +1,8 @@
 // DbaEngine
 package UniEngine
 
+import "reflect"
+
 type HasGetMapUnique interface {
 	GetMapUnique() string
 }
@@ -53,4 +55,12 @@ type HasGetSqlDelete interface {
 
 type HasGetSqlValues interface {
 	GetSqlValues(TExeccuteType) []interface{}
+}
+
+type HasSetSqlValues interface {
+	SetSqlValues(TExeccuteType, *[]interface{})
+}
+
+type HasSetSqlResult interface {
+	SetSqlResult(reflect.Value, []interface{}, []string)
 }

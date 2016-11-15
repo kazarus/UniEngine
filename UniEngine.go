@@ -104,50 +104,89 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	if !Valid {
 		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
 	}
+	fmt.Println(cTable)
 
 	cols, _ := rows.Columns()
-
-	dest := make([]interface{}, len(cols))
+	fmt.Println("cols", cols)
+	fields := make([]interface{}, len(cols))
+	values := make([]interface{}, len(cols))
 
 	var sValue = reflect.Indirect(reflect.ValueOf(i))
 
 	for rows.Next() {
-
 		if isList {
 			u := reflect.New(t)
-			for indx, item := range cols {
-				cField, Valid := cTable.ListField[item]
-				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+
+			if x, ok := u.Interface().(HasSetSqlResult); ok {
+				fmt.Println("HasSetSqlResult")
+				for i := 0; i < len(cols); i++ {
+					values[i] = &fields[i]
 				}
-				dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+				fmt.Println(values)
+				fmt.Println(fields)
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+				fmt.Println(values)
+				fmt.Println(fields)
+				fmt.Println(x)
+				x.SetSqlResult(u, fields, cols)
+				fmt.Println("u.Elem().Interface()", u.Elem().Interface())
+
+				sValue.Set(reflect.Append(sValue, u.Elem()))
 			}
-
-			eror = rows.Scan(dest...)
-			if eror != nil {
-				return eror
-			}
-
-			sValue.Set(reflect.Append(sValue, u.Elem()))
-
 		} else {
 
-			for indx, item := range cols {
-				cField, Valid := cTable.ListField[item]
-				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-				}
-				dest[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
-			}
-
-			eror = rows.Scan(dest...)
-			if eror != nil {
-				return eror
-			}
 		}
-
 	}
+
 	return nil
+	/*
+		cols, _ := rows.Columns()
+
+		dest := make([]interface{}, len(cols))
+
+		var sValue = reflect.Indirect(reflect.ValueOf(i))
+
+		for rows.Next() {
+
+			if isList {
+				u := reflect.New(t)
+				for indx, item := range cols {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(dest...)
+				if eror != nil {
+					return eror
+				}
+
+				sValue.Set(reflect.Append(sValue, u.Elem()))
+
+			} else {
+
+				for indx, item := range cols {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					dest[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(dest...)
+				if eror != nil {
+					return eror
+				}
+			}
+
+		}
+		return nil
+	*/
 }
 
 //return int64;
@@ -243,6 +282,7 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 		rows.Scan(&size)
 		return size, nil
 	*/
+
 	for rows.Next() {
 		eror = rows.Scan(&text)
 		if eror != nil {
@@ -310,11 +350,11 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 			return eror
 		}
 
-		var mapIndex string
+		var MapUnique string
 		if x, ok := u.Interface().(HasGetMapUnique); ok {
-			mapIndex = x.GetMapUnique()
+			MapUnique = x.GetMapUnique()
 		}
-		sValue.SetMapIndex(reflect.ValueOf(mapIndex), u.Elem())
+		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
 	}
 
 	return nil
@@ -394,11 +434,11 @@ func (self *TUniEngine) SelectF(i interface{}, f GetMapUnique, query string, arg
 
 		//#fmt.Println("u.value", u)
 
-		var mapIndex string
+		var MapUnique string
 		if f != nil {
-			mapIndex = f(u.Elem().Interface())
+			MapUnique = f(u.Elem().Interface())
 		}
-		sValue.SetMapIndex(reflect.ValueOf(mapIndex), u.Elem())
+		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
 
 	}
 
@@ -441,8 +481,13 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
 		cQuery = x.GetSqlUpdate()
 	}
-	if x, ok := v.Interface().(HasGetSqlValues); ok {
-		cValue = x.GetSqlValues(EtUpdate)
+	/*
+		if x, ok := v.Interface().(HasGetSqlValues); ok {
+			cValue = x.GetSqlValues(EtUpdate)
+		}
+	*/
+	if x, ok := v.Interface().(HasSetSqlValues); ok {
+		x.SetSqlValues(EtUpdate, &cValue)
 	}
 
 	if cQuery == "" && len(cValue) == 0 {
@@ -515,8 +560,13 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	if x, ok := v.Interface().(HasGetSqlInsert); ok {
 		cQuery = x.GetSqlInsert()
 	}
-	if x, ok := v.Interface().(HasGetSqlValues); ok {
-		cValue = x.GetSqlValues(EtInsert)
+	/*
+		if x, ok := v.Interface().(HasGetSqlValues); ok {
+			cValue = x.GetSqlValues(EtInsert)
+		}
+	*/
+	if x, ok := v.Interface().(HasSetSqlValues); ok {
+		x.SetSqlValues(EtInsert, &cValue)
 	}
 
 	if cQuery == "" && len(cValue) == 0 {
