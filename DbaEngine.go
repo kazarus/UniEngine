@@ -1,6 +1,12 @@
 // DbaEngine
 package UniEngine
 
+type HasGetMapUnique interface {
+	GetMapUnique() string
+}
+
+type GetMapUnique func(u interface{}) string
+
 type HasStartSelect interface {
 	StartSelect(TUniEngine) error
 }

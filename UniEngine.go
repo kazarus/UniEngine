@@ -1,4 +1,3 @@
-// UniEngine i change the title
 package UniEngine
 
 import "fmt"
@@ -14,16 +13,8 @@ type TUniEngine struct {
 	ListTabl map[string]TUniTable
 	ColLabel string
 
-	//@sqlQuery string
 	canClose bool //default is true;if is transaction,canClose = false
 }
-
-type HasMapIndex interface {
-	GetMapIndex() string
-}
-
-//type GetMapIndex() func{}
-type MapHandler func(u interface{}) string
 
 func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TUniTable {
 
@@ -311,8 +302,8 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		}
 
 		var mapIndex string
-		if x, ok := u.Interface().(HasMapIndex); ok {
-			mapIndex = x.GetMapIndex()
+		if x, ok := u.Interface().(HasGetMapUnique); ok {
+			mapIndex = x.GetMapUnique()
 		}
 		sValue.SetMapIndex(reflect.ValueOf(mapIndex), u.Elem())
 	}
@@ -321,7 +312,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 }
 
 //return map;use custom function;
-func (self *TUniEngine) SelectF(i interface{}, f MapHandler, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectF(i interface{}, f GetMapUnique, query string, args ...interface{}) error {
 
 	var eror error
 

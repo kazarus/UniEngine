@@ -11,7 +11,7 @@ type TUniField struct {
 	FieldType reflect.Type
 
 	ReadOnly bool
-	AutoIncr bool
+	//@AutoIncr bool
 }
 
 func (self *TUniField) initialize(aValue string) {
