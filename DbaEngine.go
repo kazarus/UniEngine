@@ -52,5 +52,5 @@ type HasGetSqlDelete interface {
 }
 
 type HasGetSqlValues interface {
-	GetSqlValues() []interface{}
+	GetSqlValues(TExeccuteType) []interface{}
 }

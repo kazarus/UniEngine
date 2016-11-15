@@ -5,6 +5,15 @@ import "errors"
 import "reflect"
 import "database/sql"
 
+type TExeccuteType int
+
+const (
+	EtSelect TExeccuteType = 1 + iota //0
+	EtInsert                          //1
+	EtUpdate                          //2
+	EtDelele                          //3
+)
+
 type TUniEngine struct {
 	Db *sql.DB
 	tx *sql.Tx
@@ -398,6 +407,8 @@ func (self *TUniEngine) SelectF(i interface{}, f GetMapUnique, query string, arg
 
 func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
+	var eror error
+
 	cTableName := ""
 	if len(args) > 0 {
 		cTableName = args[0].(string)
@@ -431,7 +442,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		cQuery = x.GetSqlUpdate()
 	}
 	if x, ok := v.Interface().(HasGetSqlValues); ok {
-		cValue = x.GetSqlValues()
+		cValue = x.GetSqlValues(EtUpdate)
 	}
 
 	if cQuery == "" && len(cValue) == 0 {
@@ -457,8 +468,9 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
 	}
+	fmt.Println("cQuery:", cQuery)
+	fmt.Println("cValue:", cValue)
 
-	var eror error
 	eror = self.prepare(cQuery)
 	if eror != nil {
 		return eror
@@ -504,7 +516,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 		cQuery = x.GetSqlInsert()
 	}
 	if x, ok := v.Interface().(HasGetSqlValues); ok {
-		cValue = x.GetSqlValues()
+		cValue = x.GetSqlValues(EtInsert)
 	}
 
 	if cQuery == "" && len(cValue) == 0 {
