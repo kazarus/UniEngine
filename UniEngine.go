@@ -117,8 +117,9 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 		if isList {
 			u := reflect.New(t)
 
-			if x, ok := u.Interface().(HasSetSqlResult); ok {
-				fmt.Println("HasSetSqlResult")
+			fmt.Println("kazarus:u.type", u.Type())
+			if x, ok := u.Interface().(HasGetSqlResult); ok {
+				fmt.Println("HasGetSqlResult")
 				for i := 0; i < len(cols); i++ {
 					values[i] = &fields[i]
 				}
@@ -131,8 +132,25 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 				fmt.Println(values)
 				fmt.Println(fields)
 				fmt.Println(x)
-				x.SetSqlResult(u, fields, cols)
-				fmt.Println("u.Elem().Interface()", u.Elem().Interface())
+				v := x.GetSqlResult(fields, cols)
+				fmt.Println(v)
+				//@x.SetSqlResult(u.Elem().Interface(), fields, cols)
+
+				sValue.Set(reflect.Append(sValue, reflect.ValueOf(v)))
+				//@sValue.Set(reflect.Append(sValue, u.Elem()))
+			} else {
+				for indx, item := range cols {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					values[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
 
 				sValue.Set(reflect.Append(sValue, u.Elem()))
 			}
@@ -142,8 +160,8 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	}
 
 	return nil
-	/*
-		cols, _ := rows.Columns()
+
+	/*	cols, _ := rows.Columns()
 
 		dest := make([]interface{}, len(cols))
 
@@ -187,6 +205,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 		}
 		return nil
 	*/
+
 }
 
 //return int64;

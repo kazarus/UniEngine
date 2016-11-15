@@ -1,8 +1,6 @@
 // DbaEngine
 package UniEngine
 
-import "reflect"
-
 type HasGetMapUnique interface {
 	GetMapUnique() string
 }
@@ -62,5 +60,10 @@ type HasSetSqlValues interface {
 }
 
 type HasSetSqlResult interface {
-	SetSqlResult(reflect.Value, []interface{}, []string)
+	//#SetSqlResult(reflect.Value, []interface{}, []string)
+	SetSqlResult(interface{}, []interface{}, []string)
+}
+
+type HasGetSqlResult interface {
+	GetSqlResult([]interface{}, []string) interface{}
 }
