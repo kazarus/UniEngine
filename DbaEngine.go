@@ -1,6 +1,10 @@
 // DbaEngine
 package UniEngine
 
+import "reflect"
+
+var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
+
 type HasGetMapUnique interface {
 	GetMapUnique() string
 }

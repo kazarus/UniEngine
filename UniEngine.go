@@ -70,215 +70,6 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 	return &cTable
 }
 
-//return struct;
-func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
-
-	var eror error
-	fmt.Println("i:", i)
-
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-
-	if t.Kind() != reflect.Struct {
-		fmt.Println("no struct")
-		//TO DO:
-		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
-	}
-
-	cName := t.String()
-	cTable, Valid := self.ListTabl[cName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
-	}
-	fmt.Println(cTable)
-
-	//-<
-	eror = self.prepare(query)
-	if eror != nil {
-		return eror
-	}
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-	//->
-
-	column, _ := rows.Columns()
-	cCount := len(column)
-	fields := make([]interface{}, cCount)
-	values := make([]interface{}, cCount)
-	fmt.Println("column", column)
-	fmt.Println("fields", fields)
-	fmt.Println("values", values)
-
-	var Result = reflect.Indirect(reflect.ValueOf(i))
-	fmt.Println("result", &Result)
-	if x, ok := Result.Interface().(HasSetSqlResult); ok {
-		fmt.Println("HasSetSqlResult")
-		fmt.Println(x)
-
-		for rows.Next() {
-			for i := 0; i < cCount; i++ {
-				values[i] = &fields[i]
-			}
-			eror = rows.Scan(values...)
-			if eror != nil {
-				return eror
-			}
-			x.SetSqlResult(i, fields, column)
-			//v := x.GetSqlResult(fields, column)
-			//#x.SetSqlResult(), fields, column)
-			//			fmt.Println("v:", v)
-			//		Result = reflect.ValueOf(&v)
-		}
-	} else {
-		for rows.Next() {
-			for indx, item := range column {
-				cField, Valid := cTable.ListField[item]
-				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-				}
-				values[indx] = Result.FieldByName(cField.AttriName).Addr().Interface()
-			}
-
-			eror = rows.Scan(values...)
-			if eror != nil {
-				return eror
-			}
-		}
-	}
-	return nil
-
-	//var sValue = reflect.Indirect(reflect.ValueOf(i))
-	//u := reflect.New(t)
-
-	/*
-		for rows.Next() {
-			if isList {
-				fmt.Println("kazarus:u.type", u.Type())
-				if x, ok := u.Interface().(HasGetSqlResult); ok {
-					fmt.Println("HasGetSqlResult")
-					for i := 0; i < len(cols); i++ {
-						values[i] = &fields[i]
-					}
-					fmt.Println(values)
-					fmt.Println(fields)
-					eror = rows.Scan(values...)
-					if eror != nil {
-						return eror
-					}
-					fmt.Println(values)
-					fmt.Println(fields)
-					fmt.Println(x)
-					v := x.GetSqlResult(fields, cols)
-					fmt.Println(v)
-					//@x.SetSqlResult(u.Elem().Interface(), fields, cols)
-
-					sValue.Set(reflect.Append(sValue, reflect.ValueOf(v)))
-					//@sValue.Set(reflect.Append(sValue, u.Elem()))
-				} else {
-					for indx, item := range cols {
-						cField, Valid := cTable.ListField[item]
-						if !Valid {
-							return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-						}
-						values[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
-					}
-
-					eror = rows.Scan(values...)
-					if eror != nil {
-						return eror
-					}
-
-					sValue.Set(reflect.Append(sValue, u.Elem()))
-				}
-			} else {
-				if x, ok := u.Interface().(HasGetSqlResult); ok {
-					fmt.Println("HasGetSqlResult")
-					for i := 0; i < len(cols); i++ {
-						values[i] = &fields[i]
-					}
-					fmt.Println(values)
-					fmt.Println(fields)
-					eror = rows.Scan(values...)
-					if eror != nil {
-						return eror
-					}
-					fmt.Println(values)
-					fmt.Println(fields)
-					fmt.Println(x)
-					v := x.GetSqlResult(fields, cols)
-					fmt.Println(v)
-					sValue = reflect.ValueOf(v)
-				} else {
-					for indx, item := range cols {
-						cField, Valid := cTable.ListField[item]
-						if !Valid {
-							return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-						}
-						values[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
-					}
-
-					eror = rows.Scan(values...)
-					if eror != nil {
-						return eror
-					}
-				}
-			}
-		}
-	*/
-
-	/*	cols, _ := rows.Columns()
-
-		dest := make([]interface{}, len(cols))
-
-		var sValue = reflect.Indirect(reflect.ValueOf(i))
-
-		for rows.Next() {
-
-			if isList {
-				u := reflect.New(t)
-				for indx, item := range cols {
-					cField, Valid := cTable.ListField[item]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-					}
-					dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(dest...)
-				if eror != nil {
-					return eror
-				}
-
-				sValue.Set(reflect.Append(sValue, u.Elem()))
-
-			} else {
-
-				for indx, item := range cols {
-					cField, Valid := cTable.ListField[item]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-					}
-					dest[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(dest...)
-				if eror != nil {
-					return eror
-				}
-			}
-
-		}
-		return nil
-	*/
-
-}
-
 //return int64;
 func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
 
@@ -338,6 +129,7 @@ func (self *TUniEngine) SelectF(query string, args ...interface{}) (float64, err
 		rows.Scan(&size)
 		return size, nil
 	*/
+
 	for rows.Next() {
 		eror = rows.Scan(&size)
 		if eror != nil {
@@ -383,15 +175,28 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 
 }
 
-func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}) error {
-	return nil
-}
-
-//return map;use HasMapIndex;
-func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
+//return struct;
+func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
 
 	var eror error
 
+	t := reflect.TypeOf(i)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	if t.Kind() != reflect.Struct {
+		//TO DO:
+		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+	}
+
+	cName := t.String()
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
+
+	//-<
 	eror = self.prepare(query)
 	if eror != nil {
 		return eror
@@ -402,6 +207,186 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		return eror
 	}
 	defer rows.Close()
+	//->
+
+	column, eror := rows.Columns()
+	if eror != nil {
+		return eror
+	}
+	cCount := len(column)
+	fields := make([]interface{}, cCount)
+	values := make([]interface{}, cCount)
+
+	for rows.Next() {
+		if x, ok := i.(HasSetSqlResult); ok {
+
+			for i := 0; i < cCount; i++ {
+				values[i] = &fields[i]
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			x.SetSqlResult(i, fields, column)
+
+		} else {
+
+			var Result = reflect.Indirect(reflect.ValueOf(i))
+
+			for cIndx, cItem := range column {
+				cField, Valid := cTable.ListField[cItem]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+				}
+				values[cIndx] = Result.FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+		}
+
+	}
+	/*
+		if x, ok := i.(HasSetSqlResult); ok {
+
+
+
+				for i := 0; i < cCount; i++ {
+					values[i] = &fields[i]
+				}
+
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+
+				x.SetSqlResult(i, fields, column)
+
+			}
+		} else {
+
+			var Result = reflect.Indirect(reflect.ValueOf(i))
+
+			for rows.Next() {
+
+				for indx, item := range column {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					values[indx] = Result.FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+			}
+		}
+	*/
+	return nil
+}
+
+//return slice of struct;
+func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}) error {
+
+	var eror error
+
+	t := reflect.TypeOf(i)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	if t.Kind() != reflect.Slice {
+		//TO DO:
+		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+	}
+
+	if t.Kind() == reflect.Slice {
+		t = t.Elem()
+	}
+	fmt.Println(t.Kind())
+
+	cName := t.String()
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
+	fmt.Println(cTable)
+
+	//-<
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+	//->
+
+	column, eror := rows.Columns()
+	if eror != nil {
+		return eror
+	}
+	cCount := len(column)
+	fields := make([]interface{}, cCount)
+	values := make([]interface{}, cCount)
+
+	var Result = reflect.Indirect(reflect.ValueOf(i))
+
+	for rows.Next() {
+
+		u := reflect.New(t)
+
+		if t.Implements(THasSetSqlResult) {
+
+			for i := 0; i < cCount; i++ {
+				values[i] = &fields[i]
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			x := u.Interface().(HasSetSqlResult)
+			x.SetSqlResult(u.Interface(), fields, column)
+
+			Result.Set(reflect.Append(Result, u.Elem()))
+
+		} else {
+
+			for cIndx, cItem := range column {
+				cField, Valid := cTable.ListField[cItem]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+				}
+				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			Result.Set(reflect.Append(Result, u.Elem()))
+		}
+	}
+
+	return nil
+}
+
+//return map;use HasMapIndex;
+func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
+
+	var eror error
 
 	t := reflect.TypeOf(i)
 
@@ -421,6 +406,18 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
 	}
 
+	//-<
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+	//->
 	cols, _ := rows.Columns()
 
 	dest := make([]interface{}, len(cols))
@@ -838,3 +835,127 @@ func (self *TUniEngine) Initialize() error {
 	self.canClose = true
 	return nil
 }
+
+//var sValue = reflect.Indirect(reflect.ValueOf(i))
+//u := reflect.New(t)
+
+/*
+	for rows.Next() {
+		if isList {
+			fmt.Println("kazarus:u.type", u.Type())
+			if x, ok := u.Interface().(HasGetSqlResult); ok {
+				fmt.Println("HasGetSqlResult")
+				for i := 0; i < len(cols); i++ {
+					values[i] = &fields[i]
+				}
+				fmt.Println(values)
+				fmt.Println(fields)
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+				fmt.Println(values)
+				fmt.Println(fields)
+				fmt.Println(x)
+				v := x.GetSqlResult(fields, cols)
+				fmt.Println(v)
+				//@x.SetSqlResult(u.Elem().Interface(), fields, cols)
+
+				sValue.Set(reflect.Append(sValue, reflect.ValueOf(v)))
+				//@sValue.Set(reflect.Append(sValue, u.Elem()))
+			} else {
+				for indx, item := range cols {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					values[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+
+				sValue.Set(reflect.Append(sValue, u.Elem()))
+			}
+		} else {
+			if x, ok := u.Interface().(HasGetSqlResult); ok {
+				fmt.Println("HasGetSqlResult")
+				for i := 0; i < len(cols); i++ {
+					values[i] = &fields[i]
+				}
+				fmt.Println(values)
+				fmt.Println(fields)
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+				fmt.Println(values)
+				fmt.Println(fields)
+				fmt.Println(x)
+				v := x.GetSqlResult(fields, cols)
+				fmt.Println(v)
+				sValue = reflect.ValueOf(v)
+			} else {
+				for indx, item := range cols {
+					cField, Valid := cTable.ListField[item]
+					if !Valid {
+						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+					}
+					values[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
+				}
+
+				eror = rows.Scan(values...)
+				if eror != nil {
+					return eror
+				}
+			}
+		}
+	}
+*/
+
+/*	cols, _ := rows.Columns()
+
+	dest := make([]interface{}, len(cols))
+
+	var sValue = reflect.Indirect(reflect.ValueOf(i))
+
+	for rows.Next() {
+
+		if isList {
+			u := reflect.New(t)
+			for indx, item := range cols {
+				cField, Valid := cTable.ListField[item]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+				}
+				dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(dest...)
+			if eror != nil {
+				return eror
+			}
+
+			sValue.Set(reflect.Append(sValue, u.Elem()))
+
+		} else {
+
+			for indx, item := range cols {
+				cField, Valid := cTable.ListField[item]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+				}
+				dest[indx] = sValue.FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(dest...)
+			if eror != nil {
+				return eror
+			}
+		}
+
+	}
+	return nil
+*/
