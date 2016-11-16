@@ -5,14 +5,10 @@ import "errors"
 import "reflect"
 import "database/sql"
 
-type TExeccuteType int
-
-const (
-	EtSelect TExeccuteType = 1 + iota //0
-	EtInsert                          //1
-	EtUpdate                          //2
-	EtDelele                          //3
-)
+/*
+  when write data to struct, should be ptr;
+  when read data from struct, whoever, ptr or struct;
+*/
 
 type TUniEngine struct {
 	Db *sql.DB
@@ -27,23 +23,11 @@ type TUniEngine struct {
 
 func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TUniTable {
 
-	//pass:when &tuser{}
-	/*
-		s := reflect.ValueOf(aClass).Elem()
-		typeOfT := s.Type()
-		for i := 0; i < s.NumField(); i++ {
-			f := s.Field(i)
-			fmt.Printf("%d %s %s = %v\n", i, typeOfT.Field(i).Name, f.Type(), f.Interface())
-		}
-	*/
-
 	if self.ListTabl == nil {
 		self.ListTabl = make(map[string]TUniTable, 0)
 	}
 
 	t := reflect.TypeOf(aClass)
-	//#fmt.Println("aClass:", t)
-	//#fmt.Println("aClass.Name", t.String())
 	n := t.NumField()
 
 	var cTable = TUniTable{}
@@ -62,10 +46,8 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 
 		cTable.ListField[cField.FieldName] = cField
 	}
-	//#fmt.Println(cTable)
 
 	self.ListTabl[t.String()] = cTable
-	//#fmt.Println(self.ListTabl)
 
 	return &cTable
 }
@@ -218,8 +200,8 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	values := make([]interface{}, cCount)
 
 	for rows.Next() {
-		if x, ok := i.(HasSetSqlResult); ok {
 
+		if x, ok := i.(HasSetSqlResult); ok {
 			for i := 0; i < cCount; i++ {
 				values[i] = &fields[i]
 			}
@@ -229,7 +211,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 				return eror
 			}
 
-			x.SetSqlResult(i, fields, column)
+			x.SetSqlResult(i, column, fields)
 
 		} else {
 
@@ -248,46 +230,8 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 				return eror
 			}
 		}
-
 	}
-	/*
-		if x, ok := i.(HasSetSqlResult); ok {
 
-
-
-				for i := 0; i < cCount; i++ {
-					values[i] = &fields[i]
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				x.SetSqlResult(i, fields, column)
-
-			}
-		} else {
-
-			var Result = reflect.Indirect(reflect.ValueOf(i))
-
-			for rows.Next() {
-
-				for indx, item := range column {
-					cField, Valid := cTable.ListField[item]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
-					}
-					values[indx] = Result.FieldByName(cField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-			}
-		}
-	*/
 	return nil
 }
 
@@ -357,7 +301,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 			}
 
 			x := u.Interface().(HasSetSqlResult)
-			x.SetSqlResult(u.Interface(), fields, column)
+			x.SetSqlResult(u.Interface(), column, fields)
 
 			Result.Set(reflect.Append(Result, u.Elem()))
 
@@ -383,24 +327,128 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 	return nil
 }
 
-//return map;use HasMapIndex;
+//return map of struct;user;GetMapUnique;
 func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
 
 	var eror error
 
 	t := reflect.TypeOf(i)
-
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if t.Kind() == reflect.Slice {
-		t = t.Elem()
-	} else if t.Kind() == reflect.Map {
+
+	if t.Kind() != reflect.Map {
+		//TO DO:
+		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+	}
+
+	if t.Kind() == reflect.Map {
 		t = t.Elem()
 	}
 
 	cName := t.String()
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
 
+	if !t.Implements(THasGetMapUnique) {
+		return errors.New(fmt.Sprintf("UniEngine:the class registered:[%s] does not Implemented [HasGetMapUnique] ", cName))
+	}
+
+	//-<
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+	//->
+
+	column, eror := rows.Columns()
+	if eror != nil {
+		return eror
+	}
+	cCount := len(column)
+	fields := make([]interface{}, cCount)
+	values := make([]interface{}, cCount)
+
+	var Result = reflect.Indirect(reflect.ValueOf(i))
+
+	for rows.Next() {
+
+		u := reflect.New(t)
+
+		if t.Implements(THasSetSqlResult) {
+
+			for i := 0; i < cCount; i++ {
+				values[i] = &fields[i]
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			x := u.Interface().(HasSetSqlResult)
+			x.SetSqlResult(u.Interface(), column, fields)
+
+			var MapUnique string
+			if x, ok := u.Interface().(HasGetMapUnique); ok {
+				MapUnique = x.GetMapUnique()
+			}
+			Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
+
+		} else {
+
+			for cIndx, cItem := range column {
+				cField, Valid := cTable.ListField[cItem]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+				}
+				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			var MapUnique string
+			if x, ok := u.Interface().(HasGetMapUnique); ok {
+				MapUnique = x.GetMapUnique()
+			}
+			Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
+		}
+	}
+
+	return nil
+}
+
+//return map;use custom function;
+func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, args ...interface{}) error {
+
+	var eror error
+
+	t := reflect.TypeOf(i)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	if t.Kind() != reflect.Map {
+		//TO DO:
+		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+	}
+
+	if t.Kind() == reflect.Map {
+		t = t.Elem()
+	}
+
+	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
 		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
@@ -418,119 +466,62 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 	}
 	defer rows.Close()
 	//->
-	cols, _ := rows.Columns()
 
-	dest := make([]interface{}, len(cols))
+	column, eror := rows.Columns()
+	if eror != nil {
+		return eror
+	}
+	cCount := len(column)
+	fields := make([]interface{}, cCount)
+	values := make([]interface{}, cCount)
 
-	var sValue = reflect.Indirect(reflect.ValueOf(i))
+	var Result = reflect.Indirect(reflect.ValueOf(i))
 
 	for rows.Next() {
 
 		u := reflect.New(t)
 
-		for indx, item := range cols {
-			cField, Valid := cTable.ListField[item]
-			if !Valid {
-				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+		if t.Implements(THasSetSqlResult) {
+
+			for i := 0; i < cCount; i++ {
+				values[i] = &fields[i]
 			}
-			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
-		}
 
-		eror = rows.Scan(dest...)
-		if eror != nil {
-			return eror
-		}
-
-		var MapUnique string
-		if x, ok := u.Interface().(HasGetMapUnique); ok {
-			MapUnique = x.GetMapUnique()
-		}
-		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-	}
-
-	return nil
-}
-
-//return map;use custom function;
-func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, args ...interface{}) error {
-
-	var eror error
-
-	eror = self.prepare(query)
-	if eror != nil {
-		return eror
-	}
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-
-	//#fmt.Println(rows)
-
-	t := reflect.TypeOf(i)
-	//#fmt.Println("t.kjnd", t.Kind())
-
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-		//#fmt.Println("true")
-	}
-	if t.Kind() == reflect.Slice {
-		t = t.Elem()
-	} else if t.Kind() == reflect.Map {
-		t = t.Elem()
-	}
-	//#fmt.Println("t.elem", t, "-", t.Name(), "-", t.Kind())
-
-	cName := t.String()
-
-	//#fmt.Println(t.Kind())
-
-	cTable, Valid := self.ListTabl[cName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
-	}
-
-	//#fmt.Println(cTable)
-
-	cols, _ := rows.Columns()
-
-	dest := make([]interface{}, len(cols))
-
-	var sValue = reflect.Indirect(reflect.ValueOf(i))
-
-	//#fmt.Println("s.value.type", sValue.Type())
-	//#fmt.Println("s.value.kjnd", sValue.Kind())
-
-	for rows.Next() {
-
-		u := reflect.New(t)
-		//#fmt.Println("kz", u)
-
-		for indx, item := range cols {
-			//#dest[indx] = &userindx
-			//#fmt.Println(indx, item)
-			cField, Valid := cTable.ListField[item]
-			if !Valid {
-				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
 			}
-			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+
+			x := u.Interface().(HasSetSqlResult)
+			x.SetSqlResult(u.Interface(), column, fields)
+
+			var MapUnique string
+			if f != nil {
+				MapUnique = f(u.Elem().Interface())
+			}
+			Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
+
+		} else {
+
+			for cIndx, cItem := range column {
+				cField, Valid := cTable.ListField[cItem]
+				if !Valid {
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+				}
+				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+			}
+
+			eror = rows.Scan(values...)
+			if eror != nil {
+				return eror
+			}
+
+			var MapUnique string
+			if f != nil {
+				MapUnique = f(u.Elem().Interface())
+			}
+			Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
 		}
-
-		eror = rows.Scan(dest...)
-		if eror != nil {
-			//#fmt.Println(eror)
-		}
-
-		//#fmt.Println("u.value", u)
-
-		var MapUnique string
-		if f != nil {
-			MapUnique = f(u.Elem().Interface())
-		}
-		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-
 	}
 
 	return nil
@@ -725,22 +716,17 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	cWhere := ""
 	cValue := make([]interface{}, 0)
 
-	for _, item := range cTable.ListPkeys {
-		//#fmt.Println("kazarus:item.fieldname", item.FieldName)
+	for _, cItem := range cTable.ListPkeys {
 
-		cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+		cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
 		cIndex = cIndex + 1
 
-		cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
+		cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
 	}
 
-	//#fmt.Println("cValue:", cValue)
 	cWhere = string(cWhere[4:])
-	//#fmt.Println(cWhere)
 
 	cQuery := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
-	//#fmt.Println(cSQL)
-	//@ _, eror := self.DB.Exec(cSQL, cValue...)
 	var eror error
 	eror = self.prepare(cQuery)
 	if eror != nil {
@@ -958,4 +944,156 @@ func (self *TUniEngine) Initialize() error {
 
 	}
 	return nil
+*/
+
+/*
+t := reflect.TypeOf(i)
+
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() == reflect.Slice {
+		t = t.Elem()
+	} else if t.Kind() == reflect.Map {
+		t = t.Elem()
+	}
+
+	cName := t.String()
+
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
+
+	//-<
+	eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+	//->
+	cols, _ := rows.Columns()
+
+	dest := make([]interface{}, len(cols))
+
+	var sValue = reflect.Indirect(reflect.ValueOf(i))
+
+	for rows.Next() {
+
+		u := reflect.New(t)
+
+		for indx, item := range cols {
+			cField, Valid := cTable.ListField[item]
+			if !Valid {
+				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+			}
+			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+		}
+
+		eror = rows.Scan(dest...)
+		if eror != nil {
+			return eror
+		}
+
+		var MapUnique string
+		if x, ok := u.Interface().(HasGetMapUnique); ok {
+			MapUnique = x.GetMapUnique()
+		}
+		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
+	}
+
+*/
+
+/*
+eror = self.prepare(query)
+	if eror != nil {
+		return eror
+	}
+
+	rows, eror := self.st.Query(args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+
+	//#fmt.Println(rows)
+
+	t := reflect.TypeOf(i)
+	//#fmt.Println("t.kjnd", t.Kind())
+
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+		//#fmt.Println("true")
+	}
+	if t.Kind() == reflect.Slice {
+		t = t.Elem()
+	} else if t.Kind() == reflect.Map {
+		t = t.Elem()
+	}
+	//#fmt.Println("t.elem", t, "-", t.Name(), "-", t.Kind())
+
+	cName := t.String()
+
+	//#fmt.Println(t.Kind())
+
+	cTable, Valid := self.ListTabl[cName]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
+	}
+
+	//#fmt.Println(cTable)
+
+	cols, _ := rows.Columns()
+
+	dest := make([]interface{}, len(cols))
+
+	var sValue = reflect.Indirect(reflect.ValueOf(i))
+
+	//#fmt.Println("s.value.type", sValue.Type())
+	//#fmt.Println("s.value.kjnd", sValue.Kind())
+
+	for rows.Next() {
+
+		u := reflect.New(t)
+		//#fmt.Println("kz", u)
+
+		for indx, item := range cols {
+			//#dest[indx] = &userindx
+			//#fmt.Println(indx, item)
+			cField, Valid := cTable.ListField[item]
+			if !Valid {
+				return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", item, t.String()))
+			}
+			dest[indx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
+		}
+
+		eror = rows.Scan(dest...)
+		if eror != nil {
+			//#fmt.Println(eror)
+		}
+
+		//#fmt.Println("u.value", u)
+
+		var MapUnique string
+		if f != nil {
+			MapUnique = f(u.Elem().Interface())
+		}
+		sValue.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
+
+	}
+*/
+
+//pass:when &tuser{}
+/*
+	s := reflect.ValueOf(aClass).Elem()
+	typeOfT := s.Type()
+	for i := 0; i < s.NumField(); i++ {
+		f := s.Field(i)
+		fmt.Printf("%d %s %s = %v\n", i, typeOfT.Field(i).Name, f.Type(), f.Interface())
+	}
 */

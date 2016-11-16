@@ -3,13 +3,23 @@ package UniEngine
 
 import "reflect"
 
+type TExeccuteType int
+
+const (
+	EtSelect TExeccuteType = 1 + iota
+	EtInsert
+	EtUpdate
+	EtDelele
+)
+
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
+var THasGetMapUnique = reflect.TypeOf(new(HasGetMapUnique)).Elem()
+
+type GetMapUnique func(u interface{}) string
 
 type HasGetMapUnique interface {
 	GetMapUnique() string
 }
-
-type GetMapUnique func(u interface{}) string
 
 type HasStartSelect interface {
 	StartSelect(TUniEngine) error
@@ -55,20 +65,10 @@ type HasGetSqlDelete interface {
 	GetSqlDelete() string
 }
 
-/*
-type HasGetSqlValues interface {
-	GetSqlValues(TExeccuteType) []interface{}
-}
-*/
-
 type HasSetSqlValues interface {
 	SetSqlValues(TExeccuteType, *[]interface{})
 }
 
 type HasSetSqlResult interface {
-	SetSqlResult(interface{}, []interface{}, []string)
-}
-
-type HasGetSqlResult interface {
-	GetSqlResult([]interface{}, []string) interface{}
+	SetSqlResult(interface{}, []string, []interface{})
 }
