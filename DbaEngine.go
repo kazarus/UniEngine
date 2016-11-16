@@ -51,16 +51,17 @@ type HasGetSqlDelete interface {
 	GetSqlDelete() string
 }
 
+/*
 type HasGetSqlValues interface {
 	GetSqlValues(TExeccuteType) []interface{}
 }
+*/
 
 type HasSetSqlValues interface {
 	SetSqlValues(TExeccuteType, *[]interface{})
 }
 
 type HasSetSqlResult interface {
-	//#SetSqlResult(reflect.Value, []interface{}, []string)
 	SetSqlResult(interface{}, []interface{}, []string)
 }
 
