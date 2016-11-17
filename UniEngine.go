@@ -761,6 +761,54 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 	return nil
 }
 
+func (self *TUniEngine) ExistTable(cTableName string) (bool, error) {
+
+	var eror error
+
+	cSQL := ""
+	Size, eror := self.SelectD(cSQL)
+	if eror != nil {
+		return false, eror
+	}
+	if Size == 0 {
+		return false, nil
+	}
+
+	return true, eror
+
+}
+
+func (self *TUniEngine) ExistField(cTableName, aFieldName string) (bool, error) {
+
+	var eror error
+
+	cSQL := ""
+	Size, eror := self.SelectD(cSQL)
+	if eror != nil {
+		return false, eror
+	}
+	if Size == 0 {
+		return false, nil
+	}
+
+	return true, eror
+}
+
+func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
+	var eror error
+
+	cSQL := ""
+	Size, eror := self.SelectD(cSQL)
+	if eror != nil {
+		return false, eror
+	}
+	if Size == 0 {
+		return false, nil
+	}
+
+	return true, eror
+}
+
 func (self *TUniEngine) prepare(sqlQuery string) error {
 	var eror error
 

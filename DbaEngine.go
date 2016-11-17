@@ -3,13 +3,22 @@ package UniEngine
 
 import "reflect"
 
-type TExeccuteType int
+type TQueryType int
 
 const (
-	EtSelect TExeccuteType = 1 + iota
+	EtSelect TQueryType = 1 + iota
 	EtInsert
 	EtUpdate
 	EtDelele
+)
+
+type TConstType int
+
+const (
+	CtPK TConstType = 1 + iota
+	CtFK
+	CtUK
+	CtDF
 )
 
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
@@ -66,9 +75,21 @@ type HasGetSqlDelete interface {
 }
 
 type HasSetSqlValues interface {
-	SetSqlValues(TExeccuteType, *[]interface{})
+	SetSqlValues(TQueryType, *[]interface{})
 }
 
 type HasSetSqlResult interface {
 	SetSqlResult(interface{}, []string, []interface{})
+}
+
+type HasGetSqlExistTable interface {
+	GetSqlExistTable() string
+}
+
+type HasGetSqlExistField interface {
+	GetSqlExistField() string
+}
+
+type HasGetSqlExistConst interface {
+	GetSqlExistConst() string
 }
