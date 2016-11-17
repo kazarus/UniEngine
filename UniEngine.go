@@ -652,7 +652,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	}
 
 	if cQuery == "" && len(cValue) == 0 {
-		fmt.Println("no")
+
 		for _, cItem := range cTable.ListField {
 
 			if cItem.ReadOnly {
