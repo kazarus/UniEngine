@@ -1,17 +1,17 @@
 // UniField
 package UniEngine
 
-import "fmt"
+//@import "fmt"
 import "strings"
-import "reflect"
+
+//@import "reflect"
 
 type TUniField struct {
-	AttriName string //attribute:field in class
-	FieldName string //field in database
-	FieldType reflect.Type
+	AttriName string `db:"attri_name"` //attribute:field in class
+	FieldName string `db:"field_name"` //field in database
+	//@FieldType reflect.Type
 
 	ReadOnly bool
-	//@AutoIncr bool
 }
 
 func (self *TUniField) initialize(aValue string) {
@@ -23,7 +23,7 @@ func (self *TUniField) initialize(aValue string) {
 
 	for _, item := range cArguments[1:] {
 		item := strings.TrimSpace(item)
-		fmt.Println("UniField:Initialzie:", item)
+		//@fmt.Println("UniField:Initialzie:", item)
 		switch item {
 		case "readonly":
 			self.ReadOnly = true

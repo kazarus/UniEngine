@@ -40,7 +40,7 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 
 		var cField = TUniField{}
 		cField.AttriName = f.Name
-		cField.FieldType = f.Type
+		//@		cField.FieldType = f.Type
 
 		cField.initialize(f.Tag.Get(self.ColLabel))
 
@@ -253,14 +253,12 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 	if t.Kind() == reflect.Slice {
 		t = t.Elem()
 	}
-	fmt.Println(t.Kind())
 
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
 		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", cName))
 	}
-	fmt.Println(cTable)
 
 	//-<
 	eror = self.prepare(query)
@@ -866,6 +864,9 @@ func (self *TUniEngine) Print() error {
 }
 
 func (self *TUniEngine) Initialize() error {
+
+	self.RegisterClass(TUniField{}, "github.com/kazarus/uniengine")
+
 	self.canClose = true
 	return nil
 }
