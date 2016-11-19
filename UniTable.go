@@ -1,7 +1,7 @@
 // UniTable
 package UniEngine
 
-//#import "fmt"
+import "fmt"
 import "strings"
 
 type TUniTable struct {
@@ -36,10 +36,16 @@ func (self *TUniTable) AutoKeys(this TUniEngine) error {
 	if eror != nil {
 		panic(eror)
 	}
+
+	var cTMP string
 	for _, cItem := range listData {
 		if dItem, valid := self.ListField[cItem.FieldName]; valid {
 			self.ListPkeys[cItem.FieldName] = dItem
+			cTMP = cTMP + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
 		}
 	}
+	cTMP = fmt.Sprintf(".SetKeys( %s )", cTMP[1:])
+	fmt.Println("recommend this line instead of [.AutoKeys]:", cTMP)
+
 	return nil
 }
