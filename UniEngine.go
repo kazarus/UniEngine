@@ -593,8 +593,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
 	}
-	fmt.Println("cQuery:", cQuery)
-	fmt.Println("cValue:", cValue)
 
 	eror = self.prepare(cQuery)
 	if eror != nil {
