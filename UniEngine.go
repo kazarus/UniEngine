@@ -525,6 +525,84 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 	return nil
 }
 
+func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
+
+	var eror error
+
+	cTableName := ""
+	if len(args) > 0 {
+		cTableName = args[0].(string)
+	}
+
+	t := reflect.TypeOf(i)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	cTable, Valid := self.ListTabl[t.String()]
+	if !Valid {
+		return errors.New(fmt.Sprintf("UniEngine:no such class registered:", t.String()))
+	}
+	if len(cTable.ListPkeys) == 0 {
+		return errors.New(fmt.Sprintf("UniEngine:no pkeys column in class registered:", t.String()))
+	}
+	if cTableName == "" {
+		cTableName = cTable.TableName
+	}
+
+	v := reflect.Indirect(reflect.ValueOf(i))
+
+	cIndex := 1
+	//#cField := ""
+	cWhere := ""
+
+	cQuery := ""
+	cValue := make([]interface{}, 0)
+
+	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+		cQuery = x.GetSqlUpdate()
+	}
+	/*
+		if x, ok := v.Interface().(HasGetSqlValues); ok {
+			cValue = x.GetSqlValues(EtUpdate)
+		}
+	*/
+	if x, ok := v.Interface().(HasSetSqlValues); ok {
+		x.SetSqlValues(EtUpdate, &cValue)
+	}
+
+	if cQuery == "" && len(cValue) == 0 {
+		for _, item := range cTable.ListField {
+
+			if item.ReadOnly {
+				continue
+			}
+
+			if _, valid := cTable.ListPkeys[item.FieldName]; valid {
+				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+				cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
+				cIndex = cIndex + 1
+			}
+		}
+
+		//#cField = string(cField[1:])
+		cWhere = string(cWhere[4:])
+
+		cQuery = fmt.Sprintf("select count(1) from %s where %s", cTableName, cWhere)
+	}
+
+	cCount, eror := self.SelectD(cQuery, cValue...)
+	if eror != nil {
+		return eror
+	}
+	if cCount == 1 {
+		self.Update(i, args...)
+	} else {
+		self.Insert(i, args...)
+	}
+
+	return nil
+}
+
 func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	var eror error
