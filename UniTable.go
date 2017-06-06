@@ -36,6 +36,11 @@ func (self *TUniTable) AutoKeys(this TUniEngine) error {
 		panic(eror)
 	}
 
+	if len(listData) == 0 {
+		fmt.Println("no pkeys in the table:", self.TableName)
+		return nil
+	}
+
 	var cTMP string
 	for _, cItem := range listData {
 		dItem, valid := self.ListField[cItem.FieldName]
