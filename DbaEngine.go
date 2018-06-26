@@ -1,6 +1,8 @@
 // DbaEngine
 package UniEngine
 
+import "fmt"
+import "strings"
 import "reflect"
 
 type TQueryType int
@@ -92,4 +94,33 @@ type HasGetSqlExistField interface {
 
 type HasGetSqlExistConst interface {
 	GetSqlExistConst() string
+}
+
+//#for tuniengine get primary keys
+type HasGetSqlAutoKeys interface {
+	GetSqlAutoKeys(string) string
+}
+
+type TAutoKeys4POSTGR struct{}
+
+func (self TAutoKeys4POSTGR) GetSqlAutoKeys(TableName string) string {
+	result := "select attname as field_name from pg_attribute" +
+		"    left join pg_class on  pg_attribute.attrelid = pg_class.oid " +
+		"    where pg_class.relname = '%s'  and attstattarget=-1 " +
+		"    and exists (select * from pg_constraint where  pg_constraint.conrelid = pg_class.oid  and pg_constraint.contype='p' and attnum=any(conkey))"
+	return fmt.Sprintf(result, strings.ToLower(TableName))
+}
+
+type TAutoKeys4SQLSRV struct{}
+
+func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(TableName string) string {
+	result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id = object_id('%s')"
+	return fmt.Sprintf(result, TableName)
+}
+
+type TAutoKeys4ORACLE struct{}
+
+func (self TAutoKeys4ORACLE) GetSqlAutoKeys(TableName string) string {
+	result := "wait to do %s"
+	return fmt.Sprintf(result, TableName)
 }

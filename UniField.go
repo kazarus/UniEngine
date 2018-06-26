@@ -1,10 +1,7 @@
 // UniField
 package UniEngine
 
-//@import "fmt"
 import "strings"
-
-//@import "reflect"
 
 type TUniField struct {
 	AttriName string `db:"attri_name"` //attribute:field in class
@@ -15,6 +12,7 @@ type TUniField struct {
 }
 
 func (self *TUniField) initialize(aValue string) {
+
 	cArguments := strings.Split(aValue, ",")
 	self.FieldName = cArguments[0]
 	if self.FieldName == "-" {
