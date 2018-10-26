@@ -46,6 +46,10 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		panic(errors.New(fmt.Sprintf("table:%s,%s", self.TableName, eror.Error())))
 	}
 
+	if len(listData) == 0 {
+		panic(errors.New(fmt.Sprintf("table:%s may be not exist", self.TableName)))
+	}
+
 	var cTXT string
 	for _, cItem := range listData {
 		dItem, valid := self.ListField[cItem.FieldName]
