@@ -2,6 +2,7 @@
 package UniEngine
 
 import "fmt"
+import "errors"
 
 type TUniTable struct {
 	TableName string
@@ -35,14 +36,14 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 
 		var AutoKeys4POSTGR = TAutoKeys4POSTGR{}
 		cSQL = AutoKeys4POSTGR.GetSqlAutoKeys(self.TableName)
-		fmt.Println(cSQL)
 
 	}
 
+	fmt.Println(cSQL)
 	var listData = make([]TUniField, 0)
 	eror = this.SelectL(&listData, cSQL)
 	if eror != nil {
-		panic(eror)
+		panic(errors.New(fmt.Sprintf("table:%s,%s", self.TableName, eror.Error())))
 	}
 
 	var cTXT string
