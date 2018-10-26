@@ -52,11 +52,11 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 			self.ListPkeys[cItem.FieldName] = dItem
 			cTXT = cTXT + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
 		} else {
-			panic(fmt.Sprintf("UniEngine: database have field[%s], but class not.", cItem.FieldName))
+			panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, cItem.FieldName))
 		}
 	}
 	cTXT = fmt.Sprintf(".SetKeys( %s )", cTXT[1:])
-	fmt.Println("recommend this line instead of [.AutoKeys]:", cTXT)
+	fmt.Println(fmt.Sprintf("recommend this line instead of [%s.AutoKeys]:%s", self.TableName, cTXT))
 
 	return nil
 }
