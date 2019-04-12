@@ -121,6 +121,6 @@ func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(TableName string) string {
 type TAutoKeys4ORACLE struct{}
 
 func (self TAutoKeys4ORACLE) GetSqlAutoKeys(TableName string) string {
-	result := "wait to do %s"
+	result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name = au.constraint_name and au.constraint_type = upper('p') and au.table_name =upper('%s')"
 	return fmt.Sprintf(result, TableName)
 }

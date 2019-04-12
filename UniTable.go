@@ -3,11 +3,12 @@ package UniEngine
 
 import "fmt"
 import "errors"
+import "strings"
 
 type TUniTable struct {
 	TableName string
-	ListField map[string]TUniField
-	ListPkeys map[string]TUniField
+	ListField map[string]TUniField //ToLower
+	ListPkeys map[string]TUniField //ToLower
 }
 
 func (self *TUniTable) SetKeys(cFields ...interface{}) error {
@@ -52,9 +53,9 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 
 	var cTXT string
 	for _, cItem := range listData {
-		dItem, valid := self.ListField[cItem.FieldName]
+		dItem, valid := self.ListField[strings.ToLower(cItem.FieldName)]
 		if valid {
-			self.ListPkeys[cItem.FieldName] = dItem
+			self.ListPkeys[strings.ToLower(cItem.FieldName)] = dItem
 			cTXT = cTXT + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
 		} else {
 			panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, cItem.FieldName))

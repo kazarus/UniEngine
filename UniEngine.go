@@ -2,6 +2,7 @@ package UniEngine
 
 import "fmt"
 import "errors"
+import "strings"
 import "reflect"
 import "database/sql"
 
@@ -17,7 +18,7 @@ type TUniEngine struct {
 
 	ListTabl map[string]TUniTable
 	ColLabel string
-
+	ColParam string
 	canClose bool //default is true;if is transaction,canClose = false
 }
 
@@ -44,7 +45,7 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 
 		cField.initialize(f.Tag.Get(self.ColLabel))
 
-		cTable.ListField[cField.FieldName] = cField
+		cTable.ListField[strings.ToLower(cField.FieldName)] = cField
 	}
 
 	self.ListTabl[t.String()] = cTable
@@ -306,7 +307,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 		} else {
 
 			for cIndx, cItem := range column {
-				cField, Valid := cTable.ListField[cItem]
+				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
 					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
 				}
@@ -627,6 +628,8 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		cTableName = cTable.TableName
 	}
 
+	fmt.Println(cTable)
+
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	cIndex := 1
@@ -655,10 +658,12 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 				continue
 			}
 
-			if _, valid := cTable.ListPkeys[item.FieldName]; valid {
-				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+			if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
+				fmt.Println("here")
+				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf(":%d", cIndex)
 			} else {
-				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+				fmt.Println("here")
+				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf(":%d", cIndex)
 			}
 
 			cIndex = cIndex + 1
@@ -666,12 +671,14 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 			cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
 		}
 
+		fmt.Println(cField)
+		fmt.Println(cWhere)
 		cField = string(cField[1:])
 		cWhere = string(cWhere[4:])
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
 	}
-
+	fmt.Println(cQuery)
 	eror = self.prepare(cQuery)
 	if eror != nil {
 		return eror
@@ -734,7 +741,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 			}
 
 			cField = cField + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
-			cParam = cParam + "," + fmt.Sprintf("$%d", cIndex)
+			cParam = cParam + "," + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 			cIndex = cIndex + 1
 
 			cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
@@ -748,6 +755,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	var eror error
 
+	fmt.Println(cQuery)
 	eror = self.prepare(cQuery)
 	if eror != nil {
 		return eror
@@ -798,6 +806,7 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 		cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
 	}
 
+	fmt.Println(cWhere)
 	cWhere = string(cWhere[4:])
 
 	cQuery := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
