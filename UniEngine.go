@@ -660,10 +660,10 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 			if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
 				fmt.Println("here")
-				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf(":%d", cIndex)
+				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 			} else {
 				fmt.Println("here")
-				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf(":%d", cIndex)
+				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 			}
 
 			cIndex = cIndex + 1
@@ -800,7 +800,7 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
 	for _, cItem := range cTable.ListPkeys {
 
-		cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+		cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 		cIndex = cIndex + 1
 
 		cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
