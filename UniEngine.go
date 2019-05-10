@@ -659,10 +659,8 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 			}
 
 			if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
-				fmt.Println("here")
 				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 			} else {
-				fmt.Println("here")
 				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
 			}
 
@@ -671,8 +669,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 			cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
 		}
 
-		fmt.Println(cField)
-		fmt.Println(cWhere)
 		cField = string(cField[1:])
 		cWhere = string(cWhere[4:])
 
