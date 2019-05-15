@@ -104,7 +104,7 @@ type TExistTable4POSTGR struct{}
 
 func (self TExistTable4POSTGR) GetSqlExistTable(TableName string) string {
 
-	result := "select count(*) as value from pg_class where relname =%s"
+	result := "select count(relname) as value from pg_class where relname = '%s'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
@@ -118,8 +118,10 @@ type TExistField4POSTGR struct{}
 
 func (self TExistField4POSTGR) GetSqlExistField(TableName string, FieldName string) string {
 
-	result := ""
-	return result
+	result := "select count(a.attname) as value from pg_attribute a" +
+		"    left join pg_class b on a.attrelid=b.oid where b.relname='%s' and a.attname='%s' and attnum>0"
+
+	return fmt.Sprintf(result, strings.ToLower(TableName), strings.ToLower(FieldName))
 }
 
 //#for tuniengine get exist const
@@ -135,23 +137,29 @@ type HasGetSqlAutoKeys interface {
 type TAutoKeys4POSTGR struct{}
 
 func (self TAutoKeys4POSTGR) GetSqlAutoKeys(TableName string) string {
+
 	result := "select attname as field_name from pg_attribute" +
-		"    left join pg_class on  pg_attribute.attrelid = pg_class.oid " +
-		"    where pg_class.relname = '%s'  and attstattarget=-1 " +
+		"    left join pg_class on  pg_attribute.attrelid = pg_class.oid" +
+		"    where pg_class.relname = '%s'  and attstattarget=-1 and attnum>0" +
 		"    and exists (select * from pg_constraint where  pg_constraint.conrelid = pg_class.oid  and pg_constraint.contype='p' and attnum=any(conkey))"
+
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
 
 type TAutoKeys4SQLSRV struct{}
 
 func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(TableName string) string {
+
 	result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id = object_id('%s')"
+
 	return fmt.Sprintf(result, TableName)
 }
 
 type TAutoKeys4ORACLE struct{}
 
 func (self TAutoKeys4ORACLE) GetSqlAutoKeys(TableName string) string {
+
 	result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name = au.constraint_name and au.constraint_type = upper('p') and au.table_name =upper('%s')"
+
 	return fmt.Sprintf(result, TableName)
 }

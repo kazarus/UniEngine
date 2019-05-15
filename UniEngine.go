@@ -821,6 +821,7 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 }
 
 func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
+
 	var eror error
 
 	if self.canClose {
@@ -858,6 +859,10 @@ func (self *TUniEngine) ExistTable(aTableName string, GetSqlExistTable ...interf
 
 	}
 
+	if cSQL == "" {
+		return false, errors.New("UniEngine:no sql for existtable")
+	}
+
 	Size, eror := self.SelectD(cSQL)
 	if eror != nil {
 		return false, eror
@@ -886,6 +891,10 @@ func (self *TUniEngine) ExistField(aTableName, aFieldName string, GetSqlExistFie
 		var ExistField4POSTGR = TExistField4POSTGR{}
 		cSQL = ExistField4POSTGR.GetSqlExistField(aTableName, aFieldName)
 
+	}
+
+	if cSQL == "" {
+		return false, errors.New("UniEngine:no sql for existfield")
 	}
 
 	Size, eror := self.SelectD(cSQL)
@@ -938,7 +947,7 @@ func (self *TUniEngine) Begin() error {
 func (self *TUniEngine) Cancel() error {
 	var eror error
 	if self.canClose {
-		return errors.New("uniegine:no transaction")
+		return errors.New("UniEngine:no transaction")
 	}
 
 	eror = self.tx.Rollback()
@@ -953,7 +962,7 @@ func (self *TUniEngine) Cancel() error {
 func (self *TUniEngine) Commit() error {
 	var eror error
 	if self.canClose {
-		return errors.New("uniegine:no transaction")
+		return errors.New("UniEngine:no transaction")
 	}
 
 	eror = self.tx.Commit()
