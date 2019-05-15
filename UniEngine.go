@@ -840,11 +840,24 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 	return nil
 }
 
-func (self *TUniEngine) ExistTable(cTableName string) (bool, error) {
+func (self *TUniEngine) ExistTable(aTableName string, GetSqlExistTable ...interface{}) (bool, error) {
 
 	var eror error
-
 	cSQL := ""
+
+	if len(GetSqlExistTable) > 0 {
+
+		if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
+			cSQL = x.GetSqlExistTable(aTableName)
+		}
+
+	} else {
+
+		var ExistTable4POSTGR = TExistTable4POSTGR{}
+		cSQL = ExistTable4POSTGR.GetSqlExistTable(aTableName)
+
+	}
+
 	Size, eror := self.SelectD(cSQL)
 	if eror != nil {
 		return false, eror
@@ -857,11 +870,24 @@ func (self *TUniEngine) ExistTable(cTableName string) (bool, error) {
 
 }
 
-func (self *TUniEngine) ExistField(cTableName, aFieldName string) (bool, error) {
+func (self *TUniEngine) ExistField(aTableName, aFieldName string, GetSqlExistField ...interface{}) (bool, error) {
 
 	var eror error
-
 	cSQL := ""
+
+	if len(GetSqlExistField) > 0 {
+
+		if x, ok := GetSqlExistField[0].(HasGetSqlExistField); ok {
+			cSQL = x.GetSqlExistField(aTableName, aFieldName)
+		}
+
+	} else {
+
+		var ExistField4POSTGR = TExistField4POSTGR{}
+		cSQL = ExistField4POSTGR.GetSqlExistField(aTableName, aFieldName)
+
+	}
+
 	Size, eror := self.SelectD(cSQL)
 	if eror != nil {
 		return false, eror

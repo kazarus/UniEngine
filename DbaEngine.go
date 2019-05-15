@@ -23,6 +23,17 @@ const (
 	CtDF
 )
 
+type TDriveType int
+
+const (
+	DtPOSTGR TDriveType = 1 + iota
+	DtSQLSRV
+	DtORACLE
+	DtACCESS
+	DtSQLITE
+	DtMYSQLN
+)
+
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
 var THasGetMapUnique = reflect.TypeOf(new(HasGetMapUnique)).Elem()
 
@@ -84,14 +95,34 @@ type HasSetSqlResult interface {
 	SetSqlResult(interface{}, []string, []interface{})
 }
 
+//#for tuniengine get exist table
 type HasGetSqlExistTable interface {
-	GetSqlExistTable() string
+	GetSqlExistTable(string) string
 }
 
+type TExistTable4POSTGR struct{}
+
+func (self TExistTable4POSTGR) GetSqlExistTable(TableName string) string {
+
+	result := "select count(*) as value from pg_class where relname =%s"
+
+	return fmt.Sprintf(result, strings.ToLower(TableName))
+}
+
+//#for tuniengine get exist field
 type HasGetSqlExistField interface {
-	GetSqlExistField() string
+	GetSqlExistField(string, string) string
 }
 
+type TExistField4POSTGR struct{}
+
+func (self TExistField4POSTGR) GetSqlExistField(TableName string, FieldName string) string {
+
+	result := ""
+	return result
+}
+
+//#for tuniengine get exist const
 type HasGetSqlExistConst interface {
 	GetSqlExistConst() string
 }

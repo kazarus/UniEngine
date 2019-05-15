@@ -62,7 +62,7 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		}
 	}
 	cTXT = fmt.Sprintf(".SetKeys( %s )", cTXT[1:])
-	fmt.Println(fmt.Sprintf("recommend this line instead of [%s.AutoKeys]:%s", self.TableName, cTXT))
+	fmt.Println(fmt.Sprintf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s", self.TableName, cTXT))
 
 	return nil
 }
