@@ -278,6 +278,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 	if eror != nil {
 		return eror
 	}
+
 	cCount := len(column)
 	fields := make([]interface{}, cCount)
 	values := make([]interface{}, cCount)
