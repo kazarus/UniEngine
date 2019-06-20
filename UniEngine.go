@@ -596,10 +596,11 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	if eror != nil {
 		return eror
 	}
+
 	if cCount == 1 {
-		self.Update(i, args...)
+		return self.Update(i, args...)
 	} else {
-		self.Insert(i, args...)
+		return self.Insert(i, args...)
 	}
 
 	return nil
