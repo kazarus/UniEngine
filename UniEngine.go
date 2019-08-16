@@ -19,6 +19,7 @@ type TUniEngine struct {
 	ListTabl map[string]TUniTable
 	ColLabel string
 	ColParam string
+	Provider TDriveType
 	canClose bool //default is true;if is transaction,canClose = false
 }
 
@@ -219,7 +220,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 			var Result = reflect.Indirect(reflect.ValueOf(i))
 
 			for cIndx, cItem := range column {
-				cField, Valid := cTable.ListField[cItem]
+				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
 					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
 				}
@@ -406,7 +407,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		} else {
 
 			for cIndx, cItem := range column {
-				cField, Valid := cTable.ListField[cItem]
+				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
 					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
 				}
@@ -504,7 +505,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 		} else {
 
 			for cIndx, cItem := range column {
-				cField, Valid := cTable.ListField[cItem]
+				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
 					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
 				}
