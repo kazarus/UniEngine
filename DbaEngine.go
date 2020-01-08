@@ -150,7 +150,18 @@ type TAutoKeys4SQLSRV struct{}
 
 func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(TableName string) string {
 
-	result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id = object_id('%s')"
+	//@result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id = object_id('%s')"
+
+	result := "select syscolumns.name as field_name" +
+		"    from syscolumns,sysobjects,sysindexes,sysindexkeys" +
+		"    where syscolumns.id = object_id('%s')" +
+		"    and sysobjects.xtype = 'pk'" +
+		"    and sysobjects.parent_obj = syscolumns.id" +
+		"    and sysindexes.id = syscolumns.id" +
+		"    and sysobjects.name = sysindexes.name" +
+		"    and sysindexkeys.id = syscolumns.id" +
+		"    and sysindexkeys.indid = sysindexes.indid" +
+		"    and syscolumns.colid = sysindexkeys.colid;"
 
 	return fmt.Sprintf(result, TableName)
 }
