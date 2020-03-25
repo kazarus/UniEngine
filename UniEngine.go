@@ -562,7 +562,7 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	cValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		cQuery = x.GetSqlUpdate()
+		cQuery = x.GetSqlUpdate(cTableName)
 	}
 	/*
 		if x, ok := v.Interface().(HasGetSqlValues); ok {
@@ -643,7 +643,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	cValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		cQuery = x.GetSqlUpdate()
+		cQuery = x.GetSqlUpdate(cTableName)
 	}
 	/*
 		if x, ok := v.Interface().(HasGetSqlValues); ok {
@@ -720,7 +720,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	cValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlInsert); ok {
-		cQuery = x.GetSqlInsert()
+		cQuery = x.GetSqlInsert(cTableName)
 	}
 	/*
 		if x, ok := v.Interface().(HasGetSqlValues); ok {

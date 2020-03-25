@@ -76,11 +76,11 @@ type HasEndedInsert interface {
 }
 
 type HasGetSqlUpdate interface {
-	GetSqlUpdate() string
+	GetSqlUpdate(string) string
 }
 
 type HasGetSqlInsert interface {
-	GetSqlInsert() string
+	GetSqlInsert(string) string
 }
 
 type HasGetSqlDelete interface {
