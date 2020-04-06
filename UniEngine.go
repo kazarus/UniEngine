@@ -548,6 +548,7 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	if len(cTable.ListPkeys) == 0 {
 		return errors.New(fmt.Sprintf("UniEngine:no pkeys column in class registered:", t.String()))
 	}
+
 	if cTableName == "" {
 		cTableName = cTable.TableName
 	}
@@ -555,23 +556,21 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	cIndex := 1
-	//#cField := ""
+	//@cField := ""
 	cWhere := ""
 
 	cQuery := ""
 	cValue := make([]interface{}, 0)
 
-	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		cQuery = x.GetSqlUpdate(cTableName)
-	}
-	/*
-		if x, ok := v.Interface().(HasGetSqlValues); ok {
-			cValue = x.GetSqlValues(EtUpdate)
+	/*SaveIt方法不需要这一组
+		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+			cQuery = x.GetSqlUpdate(cTableName)
+		}
+
+		if x, ok := v.Interface().(HasSetSqlValues); ok {
+			x.SetSqlValues(EtUpdate, &cValue)
 		}
 	*/
-	if x, ok := v.Interface().(HasSetSqlValues); ok {
-		x.SetSqlValues(EtUpdate, &cValue)
-	}
 
 	if cQuery == "" && len(cValue) == 0 {
 		for _, item := range cTable.ListField {
@@ -587,11 +586,13 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 			}
 		}
 
-		//#cField = string(cField[1:])
+		//@cField = string(cField[1:])
 		cWhere = string(cWhere[4:])
 
 		cQuery = fmt.Sprintf("select count(1) from %s where %s", cTableName, cWhere)
 	}
+
+	//#fmt.Println("query", cQuery)
 
 	cCount, eror := self.SelectD(cQuery, cValue...)
 	if eror != nil {
