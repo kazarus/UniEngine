@@ -1,10 +1,12 @@
 package UniEngine
 
-import "fmt"
-import "errors"
-import "strings"
-import "reflect"
-import "database/sql"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+)
 
 /*
   when write data to struct, should be ptr;
@@ -171,7 +173,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 
 	if t.Kind() != reflect.Struct {
 		//TO DO:
-		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine:method [Select] only retun a struct; may be you should try [SelectL]")
 	}
 
 	cName := t.String()
@@ -222,7 +224,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 			for cIndx, cItem := range column {
 				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s], but not in class[%s]", cItem, t.String()))
 				}
 				values[cIndx] = Result.FieldByName(cField.AttriName).Addr().Interface()
 			}
@@ -249,7 +251,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 
 	if t.Kind() != reflect.Slice {
 		//TO DO:
-		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine:method [Select] only retun a struct; may be you should try [SelectL]")
 	}
 
 	if t.Kind() == reflect.Slice {
@@ -311,7 +313,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 			for cIndx, cItem := range column {
 				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s], but not in class[%s]", cItem, t.String()))
 				}
 				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 			}
@@ -340,7 +342,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 
 	if t.Kind() != reflect.Map {
 		//TO DO:
-		return errors.New("UniEngine:method [select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine:method [Select] only retun a struct; may be you should try [SelectL]")
 	}
 
 	if t.Kind() == reflect.Map {
@@ -409,7 +411,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 			for cIndx, cItem := range column {
 				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s], but not in class[%s]", cItem, t.String()))
 				}
 				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 			}
@@ -507,7 +509,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 			for cIndx, cItem := range column {
 				cField, Valid := cTable.ListField[strings.ToLower(cItem)]
 				if !Valid {
-					return errors.New(fmt.Sprintf("UniEngine:database have field[%s],but not in class[%s]", cItem, t.String()))
+					return errors.New(fmt.Sprintf("UniEngine:database have field[%s], but not in class[%s]", cItem, t.String()))
 				}
 				values[cIndx] = u.Elem().FieldByName(cField.AttriName).Addr().Interface()
 			}
@@ -563,13 +565,13 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	cValue := make([]interface{}, 0)
 
 	/*SaveIt方法不需要这一组
-		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-			cQuery = x.GetSqlUpdate(cTableName)
-		}
+	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+		cQuery = x.GetSqlUpdate(cTableName)
+	}
 
-		if x, ok := v.Interface().(HasSetSqlValues); ok {
-			x.SetSqlValues(EtUpdate, &cValue)
-		}
+	if x, ok := v.Interface().(HasSetSqlValues); ok {
+		x.SetSqlValues(EtUpdate, &cValue)
+	}
 	*/
 
 	if cQuery == "" && len(cValue) == 0 {
