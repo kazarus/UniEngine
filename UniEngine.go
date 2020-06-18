@@ -847,6 +847,37 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 	return nil
 }
 
+func (self *TUniEngine) ExecuteMust(sqlQuery string, args ...interface{}) error {
+
+	var eror error
+
+	if self.canClose {
+		self.st, eror = self.Db.Prepare(sqlQuery)
+	} else {
+		self.st, eror = self.tx.Prepare(sqlQuery)
+	}
+
+	if eror != nil {
+		return eror
+	}
+
+	result, eror := self.st.Exec(args...)
+	if eror != nil {
+		return eror
+	}
+
+	size, eror := result.RowsAffected()
+	if eror != nil {
+		return eror
+	}
+
+	if size == 0 {
+		return errors.New("UniEngine:the row count of affected is zero")
+	}
+
+	return nil
+}
+
 func (self *TUniEngine) ExistTable(aTableName string, GetSqlExistTable ...interface{}) (bool, error) {
 
 	var eror error
