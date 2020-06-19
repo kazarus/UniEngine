@@ -23,6 +23,7 @@ type TUniEngine struct {
 	ColParam string
 	Provider TDriveType
 	canClose bool //default is true;if is transaction,canClose = false
+	runDebug bool //default is false;print some sql;
 }
 
 func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TUniTable {
@@ -594,7 +595,10 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 		cQuery = fmt.Sprintf("select count(1) from %s where %s", cTableName, cWhere)
 	}
 
-	//#fmt.Println("query", cQuery)
+	//#打印语句
+	if self.runDebug {
+		fmt.Println("query", cQuery)
+	}
 
 	cCount, eror := self.SelectD(cQuery, cValue...)
 	if eror != nil {
@@ -634,7 +638,10 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		cTableName = cTable.TableName
 	}
 
-	fmt.Println(cTable)
+	//#打印语句
+	if self.runDebug {
+		fmt.Println(fmt.Sprintf("UniEngine:try update table:%s", cTable))
+	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
 
@@ -680,7 +687,12 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
 	}
-	fmt.Println(cQuery)
+
+	//#打印语句
+	if self.runDebug {
+		fmt.Println(cQuery)
+	}
+
 	eror = self.prepare(cQuery)
 	if eror != nil {
 		return eror
@@ -757,7 +769,11 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	var eror error
 
-	fmt.Println(cQuery)
+	//#打印语句
+	if self.runDebug {
+		fmt.Println(cQuery)
+	}
+
 	eror = self.prepare(cQuery)
 	if eror != nil {
 		return eror
@@ -1011,8 +1027,13 @@ func (self *TUniEngine) Commit() error {
 	return nil
 }
 
-func (self *TUniEngine) Print() error {
+func (self *TUniEngine) CanClose() error {
 	fmt.Println("canclose:", self.canClose)
+	return nil
+}
+
+func (self *TUniEngine) RunDebug(Value bool) error {
+	self.runDebug = Value
 	return nil
 }
 
@@ -1021,5 +1042,6 @@ func (self *TUniEngine) Initialize() error {
 	self.RegisterClass(TUniField{}, "github.com/kazarus/uniengine")
 
 	self.canClose = true
+	self.runDebug = false
 	return nil
 }
