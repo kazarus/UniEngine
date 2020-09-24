@@ -651,6 +651,8 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	cQuery := ""
 	cValue := make([]interface{}, 0)
+	xValue := make([]interface{}, 0)
+	zValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
 		cQuery = x.GetSqlUpdate(cTableName)
@@ -671,15 +673,38 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 				continue
 			}
 
+			/*
+				if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
+					cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				} else {
+					cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				}
+			*/
+
+			/*
+				if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
+					cWhere = cWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+					zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
+				} else {
+					cField = cField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+					xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
+				}
+			*/
+
 			if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
-				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
-			} else {
-				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				continue
 			}
 
-			cIndex = cIndex + 1
+			cField = cField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+			xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
 
-			cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
+			cIndex = cIndex + 1
+		}
+
+		for _, item := range cTable.ListPkeys {
+			cWhere = cWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+			zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
+			cIndex = cIndex + 1
 		}
 
 		cField = string(cField[1:])
@@ -688,9 +713,12 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
 	}
 
+	cValue = append(xValue, zValue...)
+
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(cQuery)
+		fmt.Println("update.sql:", cQuery)
+		fmt.Println("update.val:", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -704,6 +732,24 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	}
 
 	return nil
+}
+
+func (self *TUniEngine) getValParam(aIndex int) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", self.ColParam)
+	}
+
+	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
+}
+
+func (self *TUniEngine) getColParam(aFieldName string) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	return fmt.Sprintf(`"` + aFieldName + `"`)
 }
 
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
@@ -754,8 +800,13 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 				continue
 			}
 
-			cField = cField + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
-			cParam = cParam + "," + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+			/*
+				cField = cField + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
+				cParam = cParam + "," + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+			*/
+
+			cField = cField + "," + self.getColParam(cItem.FieldName)
+			cParam = cParam + "," + self.getValParam(cIndex)
 			cIndex = cIndex + 1
 
 			cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
@@ -771,7 +822,8 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(cQuery)
+		fmt.Println("insert.sql", cQuery)
+		fmt.Println("insert.val", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -818,16 +870,22 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
 	for _, cItem := range cTable.ListPkeys {
 
-		cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+		//cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+		cWhere = cWhere + " and " + self.getColParam(cItem.FieldName) + "=" + self.getValParam(cIndex)
 		cIndex = cIndex + 1
 
 		cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
 	}
 
-	fmt.Println(cWhere)
 	cWhere = string(cWhere[4:])
 
 	cQuery := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
+
+	if self.runDebug {
+		fmt.Println("delete.sql:", cQuery)
+		fmt.Println("delete.val:", cValue)
+	}
+
 	var eror error
 	eror = self.prepare(cQuery)
 	if eror != nil {
@@ -962,6 +1020,7 @@ func (self *TUniEngine) ExistField(aTableName, aFieldName string, GetSqlExistFie
 }
 
 func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
+
 	var eror error
 
 	cSQL := ""
@@ -977,6 +1036,7 @@ func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bo
 }
 
 func (self *TUniEngine) prepare(sqlQuery string) error {
+
 	var eror error
 
 	if self.canClose {
@@ -988,6 +1048,7 @@ func (self *TUniEngine) prepare(sqlQuery string) error {
 }
 
 func (self *TUniEngine) Begin() error {
+
 	var eror error
 	self.tx, eror = self.Db.Begin()
 	if eror != nil {
@@ -998,6 +1059,7 @@ func (self *TUniEngine) Begin() error {
 }
 
 func (self *TUniEngine) Cancel() error {
+
 	var eror error
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
@@ -1013,6 +1075,7 @@ func (self *TUniEngine) Cancel() error {
 }
 
 func (self *TUniEngine) Commit() error {
+
 	var eror error
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
