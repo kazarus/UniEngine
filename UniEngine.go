@@ -565,14 +565,15 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	cQuery := ""
 	cValue := make([]interface{}, 0)
 
-	/*SaveIt方法不需要这一组
-	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		cQuery = x.GetSqlUpdate(cTableName)
-	}
+	//@SaveIt方法不需要这一组
+	/*
+		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+			cQuery = x.GetSqlUpdate(cTableName)
+		}
 
-	if x, ok := v.Interface().(HasSetSqlValues); ok {
-		x.SetSqlValues(EtUpdate, &cValue)
-	}
+		if x, ok := v.Interface().(HasSetSqlValues); ok {
+			x.SetSqlValues(EtUpdate, &cValue)
+		}
 	*/
 
 	if cQuery == "" && len(cValue) == 0 {
@@ -597,12 +598,17 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println("query", cQuery)
+		fmt.Println("select.sql", cQuery)
+		fmt.Println("select.val", cValue)
 	}
 
 	cCount, eror := self.SelectD(cQuery, cValue...)
 	if eror != nil {
 		return eror
+	}
+
+	if self.runDebug {
+		fmt.Println("select.cnt", cCount)
 	}
 
 	if cCount == 1 {
@@ -711,9 +717,9 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		cWhere = string(cWhere[4:])
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
-	}
 
-	cValue = append(xValue, zValue...)
+		cValue = append(xValue, zValue...)
+	}
 
 	//#打印语句
 	if self.runDebug {
