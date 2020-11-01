@@ -788,6 +788,24 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	return nil
 }
 
+func (self *TUniEngine) getValParam(aIndex int) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", self.ColParam)
+	}
+
+	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
+}
+
+func (self *TUniEngine) getColParam(aFieldName string) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	return fmt.Sprintf(`"` + aFieldName + `"`)
+}
+
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	cTableName := ""
