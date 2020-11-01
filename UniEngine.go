@@ -26,6 +26,42 @@ type TUniEngine struct {
 	runDebug bool //default is false;print some sql;
 }
 
+func (self *TUniEngine) getValParam(aIndex int) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", self.ColParam)
+	}
+
+	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
+}
+
+func (self *TUniEngine) getColParam(aFieldName string) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	if self.Provider == DtORACLE {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	return fmt.Sprintf(`"` + aFieldName + `"`)
+}
+
+func (self *TUniEngine) getSqlQuery(aSqlQuery string, args ...interface{}) string {
+
+	//#kazarus:2020_10_31_<
+	if self.Provider == DtORACLE && len(args) > 0 {
+		if self.runDebug {
+			fmt.Println(`UniEngine: Oracle驱动时,替换"$"给":"`)
+		}
+		aSqlQuery = strings.ReplaceAll(aSqlQuery, "$", self.ColParam)
+	}
+	//#kazarus:2020_10_31_>
+
+	return aSqlQuery
+}
+
 func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TUniTable {
 
 	if self.ListTabl == nil {
@@ -58,13 +94,14 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 }
 
 //return int64;
-func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
+func (self *TUniEngine) SelectD(sqlQuery string, args ...interface{}) (int64, error) {
 
 	var eror error
-
 	var size sql.NullInt64
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return 0, eror
 	}
@@ -92,12 +129,14 @@ func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error
 }
 
 //return float64;
-func (self *TUniEngine) SelectF(query string, args ...interface{}) (float64, error) {
+func (self *TUniEngine) SelectF(sqlQuery string, args ...interface{}) (float64, error) {
 
 	var eror error
 	var size sql.NullFloat64
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return 0, eror
 	}
@@ -127,13 +166,14 @@ func (self *TUniEngine) SelectF(query string, args ...interface{}) (float64, err
 }
 
 //return string;
-func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, error) {
+func (self *TUniEngine) SelectS(sqlQuery string, args ...interface{}) (string, error) {
 
 	var eror error
-
 	var text sql.NullString
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return "", eror
 	}
@@ -163,7 +203,7 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 }
 
 //return struct;
-func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) Select(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -177,6 +217,8 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 		return errors.New("UniEngine:method [Select] only retun a struct; may be you should try [SelectL]")
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -184,7 +226,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -241,7 +283,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 }
 
 //return slice of struct;
-func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectL(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -259,6 +301,8 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -266,7 +310,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -332,7 +376,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 }
 
 //return map of struct;user;GetMapUnique;
-func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectM(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -350,6 +394,8 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -361,7 +407,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -434,7 +480,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 }
 
 //return map;use custom function;
-func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -452,6 +498,8 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -459,7 +507,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -565,14 +613,15 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	cQuery := ""
 	cValue := make([]interface{}, 0)
 
-	/*SaveIt方法不需要这一组
-	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		cQuery = x.GetSqlUpdate(cTableName)
-	}
+	//@SaveIt方法不需要这一组
+	/*
+		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+			cQuery = x.GetSqlUpdate(cTableName)
+		}
 
-	if x, ok := v.Interface().(HasSetSqlValues); ok {
-		x.SetSqlValues(EtUpdate, &cValue)
-	}
+		if x, ok := v.Interface().(HasSetSqlValues); ok {
+			x.SetSqlValues(EtUpdate, &cValue)
+		}
 	*/
 
 	if cQuery == "" && len(cValue) == 0 {
@@ -597,12 +646,17 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println("query", cQuery)
+		fmt.Println("select.sql", cQuery)
+		fmt.Println("select.val", cValue)
 	}
 
 	cCount, eror := self.SelectD(cQuery, cValue...)
 	if eror != nil {
 		return eror
+	}
+
+	if self.runDebug {
+		fmt.Println("select.cnt", cCount)
 	}
 
 	if cCount == 1 {
@@ -651,6 +705,8 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	cQuery := ""
 	cValue := make([]interface{}, 0)
+	xValue := make([]interface{}, 0)
+	zValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
 		cQuery = x.GetSqlUpdate(cTableName)
@@ -671,26 +727,52 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 				continue
 			}
 
+			/*
+				if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
+					cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				} else {
+					cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				}
+			*/
+
+			/*
+				if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
+					cWhere = cWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+					zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
+				} else {
+					cField = cField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+					xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
+				}
+			*/
+
 			if _, valid := cTable.ListPkeys[strings.ToLower(item.FieldName)]; valid {
-				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
-			} else {
-				cField = cField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+				continue
 			}
 
-			cIndex = cIndex + 1
+			cField = cField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+			xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
 
-			cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
+			cIndex = cIndex + 1
+		}
+
+		for _, item := range cTable.ListPkeys {
+			cWhere = cWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
+			zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
+			cIndex = cIndex + 1
 		}
 
 		cField = string(cField[1:])
 		cWhere = string(cWhere[4:])
 
 		cQuery = fmt.Sprintf("update %s set %s where %s", cTableName, cField, cWhere)
+
+		cValue = append(xValue, zValue...)
 	}
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(cQuery)
+		fmt.Println("update.sql:", cQuery)
+		fmt.Println("update.val:", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -754,8 +836,13 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 				continue
 			}
 
-			cField = cField + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
-			cParam = cParam + "," + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+			/*
+				cField = cField + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
+				cParam = cParam + "," + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+			*/
+
+			cField = cField + "," + self.getColParam(cItem.FieldName)
+			cParam = cParam + "," + self.getValParam(cIndex)
 			cIndex = cIndex + 1
 
 			cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
@@ -771,7 +858,8 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(cQuery)
+		fmt.Println("insert.sql", cQuery)
+		fmt.Println("insert.val", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -818,16 +906,22 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
 	for _, cItem := range cTable.ListPkeys {
 
-		cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+		//cWhere = cWhere + " and " + fmt.Sprintf(`"`+cItem.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, cIndex)
+		cWhere = cWhere + " and " + self.getColParam(cItem.FieldName) + "=" + self.getValParam(cIndex)
 		cIndex = cIndex + 1
 
 		cValue = append(cValue, v.FieldByName(cItem.AttriName).Interface())
 	}
 
-	fmt.Println(cWhere)
 	cWhere = string(cWhere[4:])
 
 	cQuery := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
+
+	if self.runDebug {
+		fmt.Println("delete.sql:", cQuery)
+		fmt.Println("delete.val:", cValue)
+	}
+
 	var eror error
 	eror = self.prepare(cQuery)
 	if eror != nil {
@@ -845,6 +939,8 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 
 	var eror error
+
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
 
 	if self.canClose {
 		self.st, eror = self.Db.Prepare(sqlQuery)
@@ -866,6 +962,8 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 func (self *TUniEngine) ExecuteMust(sqlQuery string, args ...interface{}) error {
 
 	var eror error
+
+	sqlQuery = self.getSqlQuery(sqlQuery,args)
 
 	if self.canClose {
 		self.st, eror = self.Db.Prepare(sqlQuery)
@@ -962,6 +1060,7 @@ func (self *TUniEngine) ExistField(aTableName, aFieldName string, GetSqlExistFie
 }
 
 func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
+
 	var eror error
 
 	cSQL := ""
@@ -977,6 +1076,7 @@ func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bo
 }
 
 func (self *TUniEngine) prepare(sqlQuery string) error {
+
 	var eror error
 
 	if self.canClose {
@@ -988,17 +1088,22 @@ func (self *TUniEngine) prepare(sqlQuery string) error {
 }
 
 func (self *TUniEngine) Begin() error {
+
 	var eror error
+
 	self.tx, eror = self.Db.Begin()
 	if eror != nil {
 		return eror
 	}
 	self.canClose = false
+
 	return nil
 }
 
 func (self *TUniEngine) Cancel() error {
+
 	var eror error
+
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
 	}
@@ -1009,11 +1114,14 @@ func (self *TUniEngine) Cancel() error {
 	}
 
 	self.canClose = true
+
 	return nil
 }
 
 func (self *TUniEngine) Commit() error {
+
 	var eror error
+
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
 	}
@@ -1024,16 +1132,21 @@ func (self *TUniEngine) Commit() error {
 	}
 
 	self.canClose = true
+
 	return nil
 }
 
 func (self *TUniEngine) CanClose() error {
+
 	fmt.Println("canclose:", self.canClose)
+
 	return nil
 }
 
 func (self *TUniEngine) RunDebug(Value bool) error {
+
 	self.runDebug = Value
+
 	return nil
 }
 
@@ -1043,5 +1156,6 @@ func (self *TUniEngine) Initialize() error {
 
 	self.canClose = true
 	self.runDebug = false
+
 	return nil
 }

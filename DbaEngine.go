@@ -174,3 +174,17 @@ func (self TAutoKeys4ORACLE) GetSqlAutoKeys(TableName string) string {
 
 	return fmt.Sprintf(result, TableName)
 }
+
+type TAutoKeys4MYSQLN struct {
+	DataBase string
+}
+
+func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(TableName string) string {
+
+	if self.DataBase == "" {
+		panic("UniEngine: you shoule be specify attribute [database] when using mysql.")
+	}
+	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema = '%s' and table_name = '%s' and column_key = 'PRI'"
+
+	return fmt.Sprintf(result, self.DataBase, TableName)
+}
