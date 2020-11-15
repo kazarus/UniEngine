@@ -480,6 +480,15 @@ func (self *TUniEngine) SelectM(i interface{}, sqlQuery string, args ...interfac
 }
 
 //return map;use custom function;
+
+/*
+	cSQL = "SELECT * FROM ANTV_DATA WHERE 1=1 AND WHO_BUILD=$1 AND USER_INDX=$2 AND SOURCE_ND=$3 AND SOURCE_QJ=$4"
+	eror = UniEngineEx.SelectH(&listData, func(u interface{}) string {
+		cDATA := u.(TDATA)
+		return fmt.Sprintf("%d-%d-%d-%d", cDATA.ANTVMAIN, cDATA.UNITINDX, cDATA.SOURCEND, cDATA.SOURCEQJ)
+	}, cSQL, whobuild, userindx, sourcend, sourceqj)
+*/
+
 func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, sqlQuery string, args ...interface{}) error {
 
 	var eror error
@@ -786,24 +795,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	}
 
 	return nil
-}
-
-func (self *TUniEngine) getValParam(aIndex int) string {
-
-	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", self.ColParam)
-	}
-
-	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
-}
-
-func (self *TUniEngine) getColParam(aFieldName string) string {
-
-	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", aFieldName)
-	}
-
-	return fmt.Sprintf(`"` + aFieldName + `"`)
 }
 
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
