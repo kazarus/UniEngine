@@ -14,8 +14,8 @@ type TUniTable struct {
 func (self *TUniTable) SetKeys(cFields ...interface{}) error {
 
 	for _, cItem := range cFields {
-		if dItem, valid := self.ListField[cItem.(string)]; valid {
-			self.ListPkeys[cItem.(string)] = dItem
+		if dItem, valid := self.ListField[strings.ToLower(cItem.(string))]; valid {
+			self.ListPkeys[strings.ToLower(cItem.(string))] = dItem
 		}
 	}
 

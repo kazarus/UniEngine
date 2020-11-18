@@ -26,6 +26,42 @@ type TUniEngine struct {
 	runDebug bool //default is false;print some sql;
 }
 
+func (self *TUniEngine) getValParam(aIndex int) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", self.ColParam)
+	}
+
+	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
+}
+
+func (self *TUniEngine) getColParam(aFieldName string) string {
+
+	if self.Provider == DtMYSQLN {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	if self.Provider == DtORACLE {
+		return fmt.Sprintf("%s", aFieldName)
+	}
+
+	return fmt.Sprintf(`"` + aFieldName + `"`)
+}
+
+func (self *TUniEngine) getSqlQuery(aSqlQuery string, args ...interface{}) string {
+
+	//#kazarus:2020_10_31_<
+	if self.Provider == DtORACLE && len(args) > 0 {
+		if self.runDebug {
+			fmt.Println(`UniEngine: Oracle驱动时,替换"$"给":"`)
+		}
+		aSqlQuery = strings.ReplaceAll(aSqlQuery, "$", self.ColParam)
+	}
+	//#kazarus:2020_10_31_>
+
+	return aSqlQuery
+}
+
 func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TUniTable {
 
 	if self.ListTabl == nil {
@@ -58,13 +94,14 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, aTableName string) *TU
 }
 
 //return int64;
-func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error) {
+func (self *TUniEngine) SelectD(sqlQuery string, args ...interface{}) (int64, error) {
 
 	var eror error
-
 	var size sql.NullInt64
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return 0, eror
 	}
@@ -92,12 +129,14 @@ func (self *TUniEngine) SelectD(query string, args ...interface{}) (int64, error
 }
 
 //return float64;
-func (self *TUniEngine) SelectF(query string, args ...interface{}) (float64, error) {
+func (self *TUniEngine) SelectF(sqlQuery string, args ...interface{}) (float64, error) {
 
 	var eror error
 	var size sql.NullFloat64
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return 0, eror
 	}
@@ -127,13 +166,14 @@ func (self *TUniEngine) SelectF(query string, args ...interface{}) (float64, err
 }
 
 //return string;
-func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, error) {
+func (self *TUniEngine) SelectS(sqlQuery string, args ...interface{}) (string, error) {
 
 	var eror error
-
 	var text sql.NullString
 
-	eror = self.prepare(query)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return "", eror
 	}
@@ -163,7 +203,7 @@ func (self *TUniEngine) SelectS(query string, args ...interface{}) (string, erro
 }
 
 //return struct;
-func (self *TUniEngine) Select(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) Select(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -177,6 +217,8 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 		return errors.New("UniEngine:method [Select] only retun a struct; may be you should try [SelectL]")
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -184,7 +226,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -241,7 +283,7 @@ func (self *TUniEngine) Select(i interface{}, query string, args ...interface{})
 }
 
 //return slice of struct;
-func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectL(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -259,6 +301,8 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -266,7 +310,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -332,7 +376,7 @@ func (self *TUniEngine) SelectL(i interface{}, query string, args ...interface{}
 }
 
 //return map of struct;user;GetMapUnique;
-func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}) error {
+func (self *TUniEngine) SelectM(i interface{}, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -350,6 +394,8 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -361,7 +407,7 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -434,7 +480,16 @@ func (self *TUniEngine) SelectM(i interface{}, query string, args ...interface{}
 }
 
 //return map;use custom function;
-func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, args ...interface{}) error {
+
+/*
+	cSQL = "SELECT * FROM ANTV_DATA WHERE 1=1 AND WHO_BUILD=$1 AND USER_INDX=$2 AND SOURCE_ND=$3 AND SOURCE_QJ=$4"
+	eror = UniEngineEx.SelectH(&listData, func(u interface{}) string {
+		cDATA := u.(TDATA)
+		return fmt.Sprintf("%d-%d-%d-%d", cDATA.ANTVMAIN, cDATA.UNITINDX, cDATA.SOURCEND, cDATA.SOURCEQJ)
+	}, cSQL, whobuild, userindx, sourcend, sourceqj)
+*/
+
+func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
@@ -452,6 +507,8 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 		t = t.Elem()
 	}
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	cName := t.String()
 	cTable, Valid := self.ListTabl[cName]
 	if !Valid {
@@ -459,7 +516,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, query string, arg
 	}
 
 	//-<
-	eror = self.prepare(query)
+	eror = self.prepare(sqlQuery)
 	if eror != nil {
 		return eror
 	}
@@ -584,7 +641,8 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 			}
 
 			if _, valid := cTable.ListPkeys[item.FieldName]; valid {
-				cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+				//@cWhere = cWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", cIndex)
+				cWhere = cWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(cIndex)
 				cValue = append(cValue, v.FieldByName(item.AttriName).Interface())
 				cIndex = cIndex + 1
 			}
@@ -740,24 +798,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	return nil
 }
 
-func (self *TUniEngine) getValParam(aIndex int) string {
-
-	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", self.ColParam)
-	}
-
-	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
-}
-
-func (self *TUniEngine) getColParam(aFieldName string) string {
-
-	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", aFieldName)
-	}
-
-	return fmt.Sprintf(`"` + aFieldName + `"`)
-}
-
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	cTableName := ""
@@ -910,6 +950,8 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 
 	var eror error
 
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
+
 	if self.canClose {
 		self.st, eror = self.Db.Prepare(sqlQuery)
 	} else {
@@ -930,6 +972,8 @@ func (self *TUniEngine) Execute(sqlQuery string, args ...interface{}) error {
 func (self *TUniEngine) ExecuteMust(sqlQuery string, args ...interface{}) error {
 
 	var eror error
+
+	sqlQuery = self.getSqlQuery(sqlQuery,args)
 
 	if self.canClose {
 		self.st, eror = self.Db.Prepare(sqlQuery)
@@ -1056,17 +1100,20 @@ func (self *TUniEngine) prepare(sqlQuery string) error {
 func (self *TUniEngine) Begin() error {
 
 	var eror error
+
 	self.tx, eror = self.Db.Begin()
 	if eror != nil {
 		return eror
 	}
 	self.canClose = false
+
 	return nil
 }
 
 func (self *TUniEngine) Cancel() error {
 
 	var eror error
+
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
 	}
@@ -1077,12 +1124,14 @@ func (self *TUniEngine) Cancel() error {
 	}
 
 	self.canClose = true
+
 	return nil
 }
 
 func (self *TUniEngine) Commit() error {
 
 	var eror error
+
 	if self.canClose {
 		return errors.New("UniEngine:no transaction")
 	}
@@ -1093,16 +1142,21 @@ func (self *TUniEngine) Commit() error {
 	}
 
 	self.canClose = true
+
 	return nil
 }
 
 func (self *TUniEngine) CanClose() error {
+
 	fmt.Println("canclose:", self.canClose)
+
 	return nil
 }
 
 func (self *TUniEngine) RunDebug(Value bool) error {
+
 	self.runDebug = Value
+
 	return nil
 }
 
@@ -1112,5 +1166,6 @@ func (self *TUniEngine) Initialize() error {
 
 	self.canClose = true
 	self.runDebug = false
+
 	return nil
 }
