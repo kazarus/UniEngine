@@ -21,6 +21,7 @@ type TUniEngine struct {
 	ListTabl map[string]TUniTable
 	ColLabel string
 	ColParam string
+	DataBase string
 	Provider TDriveType
 	canClose bool //default is true;if is transaction,canClose = false
 	runDebug bool //default is false;print some sql;
@@ -656,8 +657,8 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println("select.sql", cQuery)
-		fmt.Println("select.val", cValue)
+		fmt.Println("UniEngine:select.sql", cQuery)
+		fmt.Println("UniEngine:select.val", cValue)
 	}
 
 	cCount, eror := self.SelectD(cQuery, cValue...)
@@ -666,7 +667,7 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	}
 
 	if self.runDebug {
-		fmt.Println("select.cnt", cCount)
+		fmt.Println("UniEngine:select.cnt", cCount)
 	}
 
 	if cCount == 1 {
@@ -781,8 +782,8 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println("update.sql:", cQuery)
-		fmt.Println("update.val:", cValue)
+		fmt.Println("UniEngine:update.sql:", cQuery)
+		fmt.Println("UniEngine:update.val:", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -868,8 +869,8 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println("insert.sql", cQuery)
-		fmt.Println("insert.val", cValue)
+		fmt.Println("UniEngine:insert.sql", cQuery)
+		fmt.Println("UniEngine:insert.val", cValue)
 	}
 
 	eror = self.prepare(cQuery)
@@ -928,8 +929,8 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	cQuery := fmt.Sprintf("delete from %s where %s", cTableName, cWhere)
 
 	if self.runDebug {
-		fmt.Println("delete.sql:", cQuery)
-		fmt.Println("delete.val:", cValue)
+		fmt.Println("UniEngine:delete.sql:", cQuery)
+		fmt.Println("UniEngine:delete.val:", cValue)
 	}
 
 	var eror error
@@ -973,7 +974,7 @@ func (self *TUniEngine) ExecuteMust(sqlQuery string, args ...interface{}) error 
 
 	var eror error
 
-	sqlQuery = self.getSqlQuery(sqlQuery,args)
+	sqlQuery = self.getSqlQuery(sqlQuery, args)
 
 	if self.canClose {
 		self.st, eror = self.Db.Prepare(sqlQuery)
@@ -1002,22 +1003,54 @@ func (self *TUniEngine) ExecuteMust(sqlQuery string, args ...interface{}) error 
 	return nil
 }
 
-func (self *TUniEngine) ExistTable(aTableName string, GetSqlExistTable ...interface{}) (bool, error) {
+func (self *TUniEngine) ExistTable(aTableName string) (bool, error) {
 
 	var eror error
 	cSQL := ""
 
-	if len(GetSqlExistTable) > 0 {
+	/*
+		if len(GetSqlExistTable) > 0 {
 
-		if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
-			cSQL = x.GetSqlExistTable(aTableName)
+			if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
+				cSQL = x.GetSqlExistTable(aTableName)
+			}
+
+		} else {
+
+			var ExistTable4POSTGR = TExistTable4POSTGR{}
+			cSQL = ExistTable4POSTGR.GetSqlExistTable(aTableName)
+
 		}
+	*/
 
-	} else {
+	switch self.Provider {
+	case DtPOSTGR:
+		{
+			var ExistTable4POSTGR = TExistTable4POSTGR{}
+			cSQL = ExistTable4POSTGR.GetSqlExistTable(aTableName)
+		}
+	case DtSQLSRV:
+		{
+			var ExistTable4SQLSRV = TExistTable4SQLSRV{}
+			cSQL = ExistTable4SQLSRV.GetSqlExistTable(aTableName)
+		}
+	case DtORACLE:
+		{
+			var ExistTable4ORACLE = TExistTable4ORACLE{}
+			cSQL = ExistTable4ORACLE.GetSqlExistTable(aTableName)
+		}
+	case DtMYSQLN:
+		{
+			if self.DataBase == "" {
+				return false, errors.New("UniEngine:DataBase is not specified")
+			}
+			var ExistTable4MYSQLN = TExistTable4MYSQLN{}
+			cSQL = ExistTable4MYSQLN.GetSqlExistTable(aTableName, self.DataBase)
+		}
+	}
 
-		var ExistTable4POSTGR = TExistTable4POSTGR{}
-		cSQL = ExistTable4POSTGR.GetSqlExistTable(aTableName)
-
+	if self.runDebug {
+		fmt.Println(fmt.Sprintf("UniEngine:existtable.sql:%s", cSQL))
 	}
 
 	if cSQL == "" {
@@ -1036,22 +1069,50 @@ func (self *TUniEngine) ExistTable(aTableName string, GetSqlExistTable ...interf
 
 }
 
-func (self *TUniEngine) ExistField(aTableName, aFieldName string, GetSqlExistField ...interface{}) (bool, error) {
+func (self *TUniEngine) ExistField(aTableName, aFieldName string) (bool, error) {
 
 	var eror error
 	cSQL := ""
 
-	if len(GetSqlExistField) > 0 {
+	/*
+		if len(GetSqlExistField) > 0 {
 
-		if x, ok := GetSqlExistField[0].(HasGetSqlExistField); ok {
-			cSQL = x.GetSqlExistField(aTableName, aFieldName)
+			if x, ok := GetSqlExistField[0].(HasGetSqlExistField); ok {
+				cSQL = x.GetSqlExistField(aTableName, aFieldName)
+			}
+
+		} else {
+
+			var ExistField4POSTGR = TExistField4POSTGR{}
+			cSQL = ExistField4POSTGR.GetSqlExistField(aTableName, aFieldName)
+
 		}
+	*/
 
-	} else {
-
-		var ExistField4POSTGR = TExistField4POSTGR{}
-		cSQL = ExistField4POSTGR.GetSqlExistField(aTableName, aFieldName)
-
+	switch self.Provider {
+	case DtPOSTGR:
+		{
+			var ExistField4POSTGR = TExistField4POSTGR{}
+			cSQL = ExistField4POSTGR.GetSqlExistField(aTableName, aFieldName)
+		}
+	case DtSQLSRV:
+		{
+			var ExistField4SQLSRV = TExistField4SQLSRV{}
+			cSQL = ExistField4SQLSRV.GetSqlExistField(aTableName, aFieldName)
+		}
+	case DtORACLE:
+		{
+			var ExistField4ORACLE = TExistField4ORACLE{}
+			cSQL = ExistField4ORACLE.GetSqlExistField(aTableName, aFieldName)
+		}
+	case DtMYSQLN:
+		{
+			if self.DataBase == "" {
+				return false, errors.New("UniEngine:DataBase is not specified")
+			}
+			var ExistField4MYSQLN = TExistField4MYSQLN{}
+			cSQL = ExistField4MYSQLN.GetSqlExistField(aTableName, aFieldName, self.DataBase)
+		}
 	}
 
 	if cSQL == "" {

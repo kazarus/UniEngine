@@ -109,6 +109,33 @@ func (self TExistTable4POSTGR) GetSqlExistTable(TableName string) string {
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
 
+type TExistTable4SQLSRV struct{}
+
+func (self TExistTable4SQLSRV) GetSqlExistTable(TableName string) string {
+
+	result := "select count(*) from sysobjects where 1=1 and name = '%s'"
+
+	return fmt.Sprintf(result, strings.ToLower(TableName))
+}
+
+type TExistTable4ORACLE struct{}
+
+func (self TExistTable4ORACLE) GetSqlExistTable(TableName string) string {
+
+	result := "select * from all_tables where table_name = upper('%s')"
+
+	return fmt.Sprintf(result, TableName)
+}
+
+type TExistTable4MYSQLN struct{}
+
+func (self TExistTable4MYSQLN) GetSqlExistTable(TableName string, DataBase string) string {
+
+	result := "select * from information_schema.tables t where table_name  = '%s' and table_schema = '%s'"
+
+	return fmt.Sprintf(result, TableName, DataBase)
+}
+
 //#for tuniengine get exist field
 type HasGetSqlExistField interface {
 	GetSqlExistField(string, string) string
@@ -122,6 +149,33 @@ func (self TExistField4POSTGR) GetSqlExistField(TableName string, FieldName stri
 		"    left join pg_class b on a.attrelid=b.oid where b.relname='%s' and a.attname='%s' and attnum>0"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName), strings.ToLower(FieldName))
+}
+
+type TExistField4SQLSRV struct{}
+
+func (self TExistField4SQLSRV) GetSqlExistField(TableName string, FieldName string) string {
+
+	result := "select * from syscolumns where 1=1 and id=object_id('%s') and  name = '%s'"
+
+	return fmt.Sprintf(result, strings.ToLower(TableName), strings.ToLower(FieldName))
+}
+
+type TExistField4ORACLE struct{}
+
+func (self TExistField4ORACLE) GetSqlExistField(TableName string, FieldName string) string {
+
+	result := "select * from all_tab_columns where table_name=upper('%s') and column_name=upper('%s')"
+
+	return fmt.Sprintf(result, TableName, FieldName)
+}
+
+type TExistField4MYSQLN struct{}
+
+func (self TExistField4MYSQLN) GetSqlExistField(TableName string, FieldName string, DataBase string) string {
+
+	result := "select * from information_schema.columns  where and table_schema = %s and table_name  = %s  and column_name =%s"
+
+	return fmt.Sprintf(result, DataBase, TableName, FieldName)
 }
 
 //#for tuniengine get exist const
