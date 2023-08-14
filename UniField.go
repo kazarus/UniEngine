@@ -4,11 +4,14 @@ package UniEngine
 import "strings"
 
 type TUniField struct {
-	AttriName string `db:"attri_name"` //attribute:field in class
-	FieldName string `db:"field_name"` //field in database
+	TableName string `db:"table_name" json:"tableName"` //table in database
+	FieldName string `db:"field_name" json:"fieldName"` //field in database
+	AttriName string `db:"attri_name" json:"attriName"` //field in class(attribute)
+
 	//@FieldType reflect.Type
 
-	ReadOnly bool
+	ReadOnly bool //#是否只读
+	PkeyOnly bool //#是否主键#数据同步时用到,其他地方不要用,未初始化;
 }
 
 func (self *TUniField) initialize(aValue string) {

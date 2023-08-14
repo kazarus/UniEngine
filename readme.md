@@ -19,12 +19,12 @@ cp /Users/kazarus/ORACLE/instantclient_11_2/{libclntsh.dylib.11.1,libnnz11.dylib
 
 #### 2.使用方法
 
-##### 1.mysql下使用
+##### 1.mysql 下使用
 
 ```go
 import _ "github.com/go-sql-driver/mysql"
 
-DbSource := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s", "root", "nbyt666", "www.0574soft.com", "kz2020_gcgl_demo")
+DbSource := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s", "<user>", "<pswd>", "<server>", "<database>")
 
 db, eror := sql.Open("mysql", DbSource)
 if eror != nil {
@@ -47,4 +47,3 @@ AutoKeys.DataBase = "kz2020_gcgl_demo"
 UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(UniEngineEx, AutoKeys)
 UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(UniEngineEx, AutoKeys)
 ```
-
