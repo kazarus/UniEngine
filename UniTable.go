@@ -31,29 +31,22 @@ func (self *TUniTable) HasField(FieldName string) (bool, error) {
 	return false, nil
 }
 
-func (self *TUniTable) SetKeys(cFields ...interface{}) error {
-
-	/*
-		for _, cItem := range cFields {
-			if dItem, Valid := self.HashField[strings.ToLower(cItem.(string))]; Valid {
-				self.HashPkeys[strings.ToLower(cItem.(string))] = dItem
-			}
-		}
-	*/
+func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 
 	var Valid bool
 	var Field TUniField
 
-	for _, cItem := range cFields {
-		Field, Valid = self.HashField[strings.ToLower(cItem.(string))]
+	for _, ItemPara := range Fields {
+
+		Field, Valid = self.HashField[strings.ToLower(ItemPara.(string))]
 		switch Valid {
 		case true:
 			{
-				self.HashPkeys[strings.ToLower(cItem.(string))] = Field
+				self.HashPkeys[strings.ToLower(ItemPara.(string))] = Field
 			}
 		default:
 			{
-				panic(fmt.Sprintf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(cItem.(string))))
+				panic(fmt.Sprintf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string))))
 			}
 		}
 	}
@@ -86,31 +79,31 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 	var ListData = make([]TUniField, 0)
 	eror = this.SelectL(&ListData, cSQL)
 	if eror != nil {
-		panic(errors.New(fmt.Sprintf("table:%s,%s", self.TableName, eror.Error())))
+		panic(errors.New(fmt.Sprintf("UniEngine: table:%s,%s", self.TableName, eror.Error())))
 	}
 
 	if len(ListData) == 0 {
-		panic(errors.New(fmt.Sprintf("table:%s may be not exist", self.TableName)))
+		panic(errors.New(fmt.Sprintf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)))
 	}
 
-	var sTxt string
-	for _, cItem := range ListData {
-		dItem, Valid := self.HashField[strings.ToLower(cItem.FieldName)]
+	var CodeText string
+	for _, ItemPara := range ListData {
+		ItemCopy, Valid := self.HashField[strings.ToLower(ItemPara.FieldName)]
 
 		switch Valid {
 		case true:
 			{
-				self.HashPkeys[strings.ToLower(cItem.FieldName)] = dItem
-				sTxt = sTxt + "," + fmt.Sprintf(`"`+cItem.FieldName+`"`)
+				self.HashPkeys[strings.ToLower(ItemPara.FieldName)] = ItemCopy
+				CodeText = CodeText + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
 			}
 		default:
 			{
-				panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, cItem.FieldName))
+				panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, ItemPara.FieldName))
 			}
 		}
 	}
-	sTxt = fmt.Sprintf(".SetKeys( %s )", sTxt[1:])
-	fmt.Println(fmt.Sprintf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s", self.TableName, sTxt))
+	CodeText = fmt.Sprintf(".SetKeys( %s )", CodeText[1:])
+	fmt.Println(fmt.Sprintf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s", self.TableName, CodeText))
 
 	return nil
 }
