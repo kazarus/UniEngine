@@ -89,10 +89,11 @@ const (
 	DtACCESS
 	DtSQLITE
 	DtMYSQLN
-	DtKINGES //#金仓
-	DtDAMENG //#达梦
-	DtOPENGS //#高斯
-	DtPOLODB //#高斯
+	DtKINGES //#金仓(og)
+	DtDAMENG //#达梦(ora)
+	DtOPENGS //#高斯(pg)
+	DtPOLODB //#阿里(pg)
+	DtTAURUS //#华为(mysql)
 )
 
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
@@ -243,15 +244,17 @@ type TExistTable4MYSQLN struct{}
 
 func (self TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.tables t where table_name='%s' and table_schema='%s'"
+	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
+	//#全部换成小写
 	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
 }
 
 func (self TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.tables t where table_name='%s' and table_schema='%s'"
+	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
+	//#全部换成小写
 	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
 }
 

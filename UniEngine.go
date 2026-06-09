@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/lib/pq"
@@ -1188,10 +1189,14 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [SaveIt] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1279,10 +1284,14 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [SaveItWhenNotExist] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1367,10 +1376,14 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [Update] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1489,10 +1502,14 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [Insert] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1583,10 +1600,14 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [InsertL] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1723,10 +1744,14 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [SpecialInsertL] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
@@ -1957,10 +1982,14 @@ func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...in
 func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
 	var eror error
+	var mrok bool
 	var TablName string
 
 	if len(args) > 0 {
-		TablName = args[0].(string)
+		TablName, mrok = args[0].(string)
+		if !mrok {
+			return errors.New("UniEngine: method [Delete] the second paramter need a string value.")
+		}
 	}
 
 	t := reflect.TypeOf(i)
