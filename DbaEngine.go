@@ -1,55 +1,31 @@
 package UniEngine
 
-import "fmt"
-import "strings"
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+	"strings"
+)
 
-/*
-//#单独写入
-func (self TDATA) GetSqlInsert(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
+const CONST_PROVIDER_NAME_TO_POSTGR = "PostgreSQL"
+const CONST_PROVIDER_NAME_TO_SQLSRV = "SQL Server"
+const CONST_PROVIDER_NAME_TO_ORACLE = "Oracle"
+const CONST_PROVIDER_NAME_TO_ACCESS = "Access"
+const CONST_PROVIDER_NAME_TO_SQLITE = "SQLite"
+const CONST_PROVIDER_NAME_TO_MYSQLN = "MySQL"
+const CONST_PROVIDER_NAME_TO_KINGES = "kb"
+const CONST_PROVIDER_NAME_TO_DAMENG = "dm"
+const CONST_PROVIDER_NAME_TO_OPENGS = "opengauss"
+const CONST_PROVIDER_NAME_TO_POLODB = "PolorDB"
 
-func (self TDATA) GetSqlUpdate(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
-
-func (self TDATA) GetSqlDelete(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
-
-func (self TDATA) SetSqlValues(UniEngineEx UniEngine.TUniEngine, e UniEngine.TQueryType, i *[]interface{}) {
-}
-
-//#批量写入
-func (self TDATA) GetSqlInsertL(UniEngineEx UniEngine.TUniEngine, TableName string, DataSize int64) string {
-}
-
-func (this TDATA) SetSqlValuesL(UniEngineEx UniEngine.TUniEngine, E UniEngine.TQueryType, Value reflect.Value, i *[]interface{}) {
-}
-
-//#数据取值
-func (self TDATA) SetSqlResult(UniEngineEx UniEngine.TUniEngine, result interface{}, column []string, fields []interface{}) {
-}
-*/
-
-const CONST_PRIVIDER_NAME_TO_POSTGR = "PostgreSQL"
-const CONST_PRIVIDER_NAME_TO_SQLSRV = "SQL Server"
-const CONST_PRIVIDER_NAME_TO_ORACLE = "Oracle"
-const CONST_PRIVIDER_NAME_TO_ACCESS = "Access"
-const CONST_PRIVIDER_NAME_TO_SQLITE = "SQLite"
-const CONST_PRIVIDER_NAME_TO_MYSQLN = "MySQL"
-const CONST_PRIVIDER_NAME_TO_KINGES = "kb"
-const CONST_PRIVIDER_NAME_TO_DAMENG = "dm"
-const CONST_PRIVIDER_NAME_TO_OPENGS = "opengauss"
-const CONST_PRIVIDER_NAME_TO_POLODB = "PolorDB"
-
-const CONST_PRIVIDER_CODE_TO_POSTGR = "postgres"
-const CONST_PRIVIDER_CODE_TO_SQLSRV = "mssql"
-const CONST_PRIVIDER_CODE_TO_ORACLE = "godror"
-const CONST_PRIVIDER_CODE_TO_ACCESS = "Access"
-const CONST_PRIVIDER_CODE_TO_SQLITE = "SQLite"
-const CONST_PRIVIDER_CODE_TO_MYSQLN = "mysql"
-const CONST_PRIVIDER_CODE_TO_KINGES = "kb"
-const CONST_PRIVIDER_CODE_TO_DAMENG = "dm"
-const CONST_PRIVIDER_CODE_TO_OPENGS = "opengauss"
+const CONST_PROVIDER_CODE_TO_POSTGR = "postgres"
+const CONST_PROVIDER_CODE_TO_SQLSRV = "mssql"
+const CONST_PROVIDER_CODE_TO_ORACLE = "godror"
+const CONST_PROVIDER_CODE_TO_ACCESS = "Access"
+const CONST_PROVIDER_CODE_TO_SQLITE = "SQLite"
+const CONST_PROVIDER_CODE_TO_MYSQLN = "mysql"
+const CONST_PROVIDER_CODE_TO_KINGES = "kb"
+const CONST_PROVIDER_CODE_TO_DAMENG = "dm"
+const CONST_PROVIDER_CODE_TO_OPENGS = "opengauss"
 
 type TFieldType int
 
@@ -68,7 +44,7 @@ const (
 	EtSelect TQueryType = 1 + iota
 	EtInsert
 	EtUpdate
-	EtDelele
+	EtDelete
 )
 
 type TConstType int
@@ -307,26 +283,24 @@ type HasGetSqlExistConst interface {
 
 // #for tuniengine get primary keys
 type HasGetSqlAutoKeys interface {
-	GetSqlAutoKeys(TUniEngine, string) string
+	GetSqlAutoKeys(TUniEngine, string) (string, error)
 }
 
 type TAutoKeys4POSTGR struct{}
 
-func (self TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
+func (self TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) (string, error) {
 
 	result := "select attname as field_name from pg_attribute" +
 		"    left join pg_class on pg_attribute.attrelid=pg_class.oid" +
 		"    where pg_class.relname='%s' and attnum>0" + // and attstattarget=-1
 		"    and exists (select * from pg_constraint where pg_constraint.conrelid=pg_class.oid and pg_constraint.contype='p' and attnum=any(conkey))"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName))
+	return fmt.Sprintf(result, strings.ToLower(TableName)), nil
 }
 
 type TAutoKeys4SQLSRV struct{}
 
-func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
-
-	//@result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id=object_id('%s')"
+func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) (string, error) {
 
 	result := "select syscolumns.name as field_name" +
 		"    from syscolumns,sysobjects,sysindexes,sysindexkeys" +
@@ -339,28 +313,28 @@ func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName st
 		"    and sysindexkeys.indid=sysindexes.indid" +
 		"    and syscolumns.colid=sysindexkeys.colid;"
 
-	return fmt.Sprintf(result, TableName)
+	return fmt.Sprintf(result, TableName), nil
 }
 
 type TAutoKeys4ORACLE struct{}
 
-func (self TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
+func (self TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) (string, error) {
 
 	result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s')"
 
-	return fmt.Sprintf(result, TableName)
+	return fmt.Sprintf(result, TableName), nil
 }
 
 type TAutoKeys4MYSQLN struct {
 	DataBase string
 }
 
-func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
+func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) (string, error) {
 
 	if self.DataBase == "" {
-		panic("UniEngine: you shoule be specify attribute [database] when using mysql.")
+		return "", fmt.Errorf("UniEngine: you should specify attribute [database] when using mysql.")
 	}
 	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 
-	return fmt.Sprintf(result, self.DataBase, TableName)
+	return fmt.Sprintf(result, self.DataBase, TableName), nil
 }

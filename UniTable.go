@@ -1,9 +1,10 @@
 // UniTable
 package UniEngine
 
-import "fmt"
-import "errors"
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type TUniTable struct {
 	IPriority int64  `db:"i_priority" json:"iPriority"`
@@ -46,7 +47,7 @@ func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 			}
 		default:
 			{
-				panic(fmt.Sprintf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string))))
+				return fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string)))
 			}
 		}
 	}
@@ -62,13 +63,19 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 	if len(GetSqlAutoKeys) > 0 {
 
 		if x, ok := GetSqlAutoKeys[0].(HasGetSqlAutoKeys); ok {
-			cSQL = x.GetSqlAutoKeys(this, self.TableName)
+			cSQL, eror = x.GetSqlAutoKeys(this, self.TableName)
+			if eror != nil {
+				return eror
+			}
 		}
 
 	} else {
 
 		var AutoKeys4POSTGR = TAutoKeys4POSTGR{}
-		cSQL = AutoKeys4POSTGR.GetSqlAutoKeys(this, self.TableName)
+		cSQL, eror = AutoKeys4POSTGR.GetSqlAutoKeys(this, self.TableName)
+		if eror != nil {
+			return eror
+		}
 
 	}
 
@@ -79,11 +86,11 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 	var ListData = make([]TUniField, 0)
 	eror = this.SelectL(&ListData, cSQL)
 	if eror != nil {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s,%s", self.TableName, eror.Error())))
+		return fmt.Errorf("UniEngine: table:%s,%s", self.TableName, eror.Error())
 	}
 
 	if len(ListData) == 0 {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)))
+		return fmt.Errorf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)
 	}
 
 	var CodeText string
@@ -98,12 +105,12 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 			}
 		default:
 			{
-				panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, ItemPara.FieldName))
+				return fmt.Errorf("UniEngine: database have field[%s.%s], but class not.", self.TableName, ItemPara.FieldName)
 			}
 		}
 	}
 	CodeText = fmt.Sprintf(".SetKeys( %s )", CodeText[1:])
-	fmt.Println(fmt.Sprintf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s", self.TableName, CodeText))
+	fmt.Printf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s\n", self.TableName, CodeText)
 
 	return nil
 }

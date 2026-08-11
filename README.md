@@ -1,8 +1,12 @@
 #### 0.项目简介
 
+UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
+
+> 注意:`TUniEngine` 持有预备语句、事务等可变状态,**非并发安全**。请每 goroutine 独立实例,或串行调用。底层 `*sql.DB` 本身并发安全。
+
 ##### 0.0.驱动安装
 
-```json
+```sh
 cp /Users/kazarus/ORACLE/instantclient_11_2/{libclntsh.dylib.11.1,libnnz11.dylib,libociei.dylib}   /usr/local/lib
 ```
 
@@ -16,6 +20,10 @@ cp /Users/kazarus/ORACLE/instantclient_11_2/{libclntsh.dylib.11.1,libnnz11.dylib
 | UniEngine.DtORACLE | Oracle     | :      | :1         |
 
 #### 1.安装方式
+
+```sh
+go get github.com/kazarus/UniEngine
+```
 
 #### 2.使用方法
 
@@ -43,7 +51,22 @@ UniEngineEx.Initialize()
 var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
 AutoKeys.DataBase = "kz2020_gcgl_demo"
 
-//#注册数据库操作类
-UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(UniEngineEx, AutoKeys)
-UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(UniEngineEx, AutoKeys)
+//#注册数据库操作类(AutoKeys 返回 error,需处理)
+if eror := UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(UniEngineEx, AutoKeys); eror != nil {
+  panic(eror)
+}
+if eror := UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(UniEngineEx, AutoKeys); eror != nil {
+  panic(eror)
+}
+```
+
+##### 2.context.Context 支持
+
+每个查询/写入方法都有对应的 `*Ctx` 变体(如 `SelectCtx` / `InsertCtx` / `ExecuteCtx` / `BeginCtx`),接受 `context.Context` 作为首参,可用于超时/取消。原方法(`Select` / `Insert` / ...)等价于以 `context.Background()` 调用对应 `*Ctx` 方法。
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+eror = UniEngineEx.InsertCtx(ctx, &row)
 ```

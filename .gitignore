@@ -1,0 +1,23 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+UniEngine
+UniEngine.test
+
+# Test/coverage
+*.out
+coverage.out
+coverage.html
+
+# Local databases / scratch
+*.db
+*.sqlite
+
+# Editor/OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
