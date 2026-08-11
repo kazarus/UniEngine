@@ -158,6 +158,10 @@ func (self *TUniEngine) DefaultPageSize() int64 {
 		{
 			PageSize = 99
 		}
+	default:
+		{
+			PageSize = 99
+		}
 	}
 
 	return PageSize
