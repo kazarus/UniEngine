@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/lib/pq"
 )
@@ -16,14 +17,18 @@ import (
   when read data from struct, whoever, ptr or struct;
 */
 
+// TUniEngine 引擎实例。注意：单实例非并发安全——st/tx 为共享可变状态，
+// 多 goroutine 请各自创建实例（底层 *sql.DB 连接池仍复用）；
+// mu 仅保护 HashTabl 的懒初始化与注册阶段，注册完成后应进入只读使用期。
 type TUniEngine struct {
 	Db *sql.DB
 	tx *sql.Tx
 	st *sql.Stmt
 
-	ColLabel string //#字段字号
-	ColParam string //#参数符号
-	HashTabl map[string]TUniTable
+	mu       *sync.Mutex //#保护 HashTabl 初始化/注册（指针：按值传递引擎时共享同一把锁）
+	ColLabel string      //#字段字号
+	ColParam string      //#参数符号
+	HashTabl map[string]*TUniTable
 
 	SecretOn int64  //#开启敏感信息加密
 	SecretBy string //#敏感信息加密密钥
@@ -38,10 +43,45 @@ type TUniEngine struct {
 	runDebug bool //default is false;print some sql;
 }
 
-func (self *TUniEngine) getValParam(aIndex int) string {
+// lockTables 保证锁可用并加锁（指针锁懒初始化）
+func (self *TUniEngine) lockTables() {
 
+	if self.mu == nil {
+		self.mu = &sync.Mutex{}
+	}
+	self.mu.Lock()
+}
+
+// ensureTables 保证 HashTabl 已初始化（加锁，供只读方法调用）
+func (self *TUniEngine) ensureTables() {
+
+	self.lockTables()
+	defer self.mu.Unlock()
+
+	if self.HashTabl == nil {
+		self.HashTabl = make(map[string]*TUniTable, 0)
+	}
+}
+
+// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
+func validIdent(name string) bool {
+
+	if name == "" {
+		return false
+	}
+
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.') {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (self *TUniEngine) getValParam(aIndex int) string {
 	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", self.ColParam)
+		return self.ColParam
 	}
 
 	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
@@ -57,37 +97,35 @@ func (self *TUniEngine) getColParam(FieldName string) string {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	return fmt.Sprintf(`"` + FieldName + `"`)
+	return "\"" + FieldName + "\""
 }
+
+// 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
+var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
 func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
 
-	//#kazarus:2020_10_31_<
 	if self.Provider == DtORACLE && len(args) > 0 {
 
 		if self.runDebug {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
 		}
 
-		SqlQuery = strings.ReplaceAll(SqlQuery, "$", self.ColParam)
+		// 仅替换参数占位符（$1 -> :1），避免误改 SQL 文本中其它 $ 字符
+		SqlQuery = reParamPlaceholder.ReplaceAllStringFunc(SqlQuery, func(m string) string {
+			return ":" + m[1:]
+		})
 	}
-	//#kazarus:2020_10_31_>
 
-	//#kazarus:2025_10_17_<
 	if self.Provider == DtMYSQLN && len(args) > 0 {
 
 		if self.runDebug {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
 		}
 
-		re, eror := regexp.Compile(`\$\d+`)
-		if eror != nil {
-			return ""
-		}
-
-		SqlQuery = re.ReplaceAllString(SqlQuery, "?")
+		// 包级预编译正则，消除每次调用 Compile 的开销与静默失败返回空串的路径
+		SqlQuery = reParamPlaceholder.ReplaceAllString(SqlQuery, "?")
 	}
-	//#kazarus:2025_10_17_>
 
 	return SqlQuery
 }
@@ -112,6 +150,38 @@ func (self *TUniEngine) ProviderName() string {
 	case DtMYSQLN:
 		{
 			result = "mysql"
+		}
+	case DtACCESS:
+		{
+			result = "access"
+		}
+	case DtSQLITE:
+		{
+			result = "sqlite"
+		}
+	case DtKINGES:
+		{
+			result = "kingbase"
+		}
+	case DtDAMENG:
+		{
+			result = "dameng"
+		}
+	case DtOPENGS:
+		{
+			result = "opengauss"
+		}
+	case DtPOLODB:
+		{
+			result = "polardb"
+		}
+	case DtTAURUS:
+		{
+			result = "taurus"
+		}
+	default:
+		{
+			result = "unknown"
 		}
 	}
 
@@ -169,14 +239,17 @@ func (self *TUniEngine) DefaultPageSize() int64 {
 
 func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
 	t := reflect.TypeOf(aClass)
 	n := t.NumField()
 
-	var UniTable = TUniTable{}
+	var UniTable = &TUniTable{}
 	UniTable.HashField = make(map[string]TUniField, 0)
 	UniTable.HashPkeys = make(map[string]TUniField, 0)
 	UniTable.TableName = TableName
@@ -192,17 +265,25 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 		UniField.initialize(f.Tag.Get(self.ColLabel))
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
+		// 保留 struct 声明顺序，供 INSERT/UPDATE 列序生成
+		UniTable.ListField = append(UniTable.ListField, UniField)
 	}
 
+	// 同时以小写表名（PrepareTables/PrepareRunSQL 路径）与类全名（SaveIt/Insert/Delete/Select* 路径）注册，
+	// 统一两套 key 的可见性；两者指向同一表（map 值拷贝共享 HashField/HashPkeys 引用）
+	self.HashTabl[strings.ToLower(TableName)] = UniTable
 	self.HashTabl[t.String()] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
 func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
 	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
@@ -214,6 +295,7 @@ func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 		}
 	default:
 		{
+			UniTable = &TUniTable{}
 			UniTable.HashField = make(map[string]TUniField, 0)
 			UniTable.HashPkeys = make(map[string]TUniField, 0)
 			UniTable.TableName = strings.ToLower(TableName)
@@ -223,13 +305,16 @@ func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 
 	self.HashTabl[strings.ToLower(TableName)] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
 func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
 	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
@@ -240,6 +325,7 @@ func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 		}
 	default:
 		{
+			UniTable = &TUniTable{}
 			UniTable.HashField = make(map[string]TUniField, 0)
 			UniTable.HashPkeys = make(map[string]TUniField, 0)
 			UniTable.TableName = strings.ToLower(TableName)
@@ -255,13 +341,16 @@ func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 
 	self.HashTabl[strings.ToLower(TableName)] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
 func (self *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
 	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
@@ -281,31 +370,40 @@ func (self *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 		}
 	default:
 		{
-			//UniTable.HashField = make(map[string]TUniField, 0)
-			//UniTable.HashPkeys = make(map[string]TUniField, 0)
-			//UniTable.TableName = strings.ToLower(TableName)
+			UniTable = &TUniTable{}
+			UniTable.HashField = make(map[string]TUniField, 0)
+			UniTable.HashPkeys = make(map[string]TUniField, 0)
+			UniTable.TableName = strings.ToLower(TableName)
+
+			var UniField = TUniField{}
+			UniField.AttriName = ""
+			UniField.FieldName = strings.ToLower(FieldName)
+			UniField.TableName = strings.ToLower(TableName)
+
+			UniTable.HashPkeys[strings.ToLower(UniField.FieldName)] = UniField
+
+			self.HashTabl[strings.ToLower(TableName)] = UniTable
 		}
 	}
 
-	return &UniTable
+	return UniTable
 }
 
 func (self *TUniEngine) GetTable(TableName string) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
-	}
+	self.ensureTables()
 
 	UniTable, _ := self.HashTabl[strings.ToLower(TableName)]
+	if UniTable == nil {
+		return &TUniTable{}
+	}
 
-	return &UniTable
+	return UniTable
 }
 
 func (self *TUniEngine) PrepareTables(TableName string) error {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
-	}
+	self.ensureTables()
 
 	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
 	switch Valid {
@@ -314,14 +412,8 @@ func (self *TUniEngine) PrepareTables(TableName string) error {
 			if UniTable.ListField == nil {
 				UniTable.ListField = make([]TUniField, 0)
 			}
-			UniTable.ListField = UniTable.ListField[0:0]
-
-			if UniTable.ListPkeys == nil {
-				UniTable.ListPkeys = make([]TUniField, 0)
-			}
-			UniTable.ListPkeys = UniTable.ListPkeys[0:0]
-
-			if len(UniTable.HashField) > 0 {
+			// 保留 RegisterClass 按声明顺序 / SetKeys 按注册顺序维护的有序列表，仅在为空时从 map 重建
+			if len(UniTable.ListField) == 0 && len(UniTable.HashField) > 0 {
 
 				for _, ItemPara := range UniTable.HashField {
 
@@ -333,7 +425,10 @@ func (self *TUniEngine) PrepareTables(TableName string) error {
 				}
 			}
 
-			if len(UniTable.HashPkeys) > 0 {
+			if UniTable.ListPkeys == nil {
+				UniTable.ListPkeys = make([]TUniField, 0)
+			}
+			if len(UniTable.ListPkeys) == 0 && len(UniTable.HashPkeys) > 0 {
 
 				for _, ItemPara := range UniTable.HashPkeys {
 
@@ -357,9 +452,7 @@ func (self *TUniEngine) PrepareTables(TableName string) error {
 
 func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (string, []TUniField, []TUniField, error) {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
-	}
+	self.ensureTables()
 
 	var SqlResult string
 	var ListField = make([]TUniField, 0)
@@ -373,31 +466,27 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 			case EtSelect:
 				{
 					var ColIndex int = 1
-					var SqlField string = ""
-					var SqlParam string = ""
 					var SqlWhere string = ""
 
 					if len(UniTable.HashPkeys) > 0 {
 
-						for _, ItemPara := range UniTable.ListPkeys {
+						pkeys := UniTable.ListPkeys
+						if len(pkeys) == 0 {
+							// 兼容 RegisterPkeys 等仅写 HashPkeys 的注册路径
+							for _, v := range UniTable.HashPkeys {
+								pkeys = append(pkeys, v)
+							}
+						}
+
+						for _, ItemPara := range pkeys {
 
 							if ItemPara.ReadOnly {
 								continue
 							}
 
-							/*
-									UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-								    SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-							*/
-
-							SqlField = self.getColParam(ItemPara.FieldName)
-							SqlParam = self.getValParam(ColIndex)
-							SqlWhere = SqlWhere + fmt.Sprintf("    and %s=%s", SqlField, SqlParam)
+							SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
 							ColIndex = ColIndex + 1
 						}
-
-						SqlField = string(SqlField[1:])
-						SqlParam = string(SqlParam[1:])
 
 						SqlResult = fmt.Sprintf("where 1=1 %s", SqlWhere)
 						UniTable.SqlSelect = SqlResult
@@ -417,16 +506,15 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 								continue
 							}
 
-							/*
-									UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-								    SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-							*/
-
 							SqlField = SqlField + "," + self.getColParam(ItemPara.FieldName)
 							SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 							ColIndex = ColIndex + 1
 
 							ListField = append(ListField, ItemPara)
+						}
+
+						if SqlField == "" || SqlParam == "" {
+							return "", ListField, UniTable.ListPkeys, errors.New("UniEngine: no writable column in table:" + UniTable.TableName)
 						}
 
 						SqlField = string(SqlField[1:])
@@ -440,10 +528,7 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 				{
 					var ColIndex int = 1
 					var SqlField string = ""
-					var SqlParam string = ""
 					var SqlWhere string = ""
-
-					fmt.Println(SqlParam)
 
 					if len(UniTable.HashField) > 0 {
 
@@ -452,24 +537,6 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 							if ItemPara.ReadOnly {
 								continue
 							}
-
-							/*
-								if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-									SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-								} else {
-									UniField = UniField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-								}
-							*/
-
-							/*
-								if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-									SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-									zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
-								} else {
-									UniField = UniField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-									xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
-								}
-							*/
 
 							if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
 								ItemPara.PkeyOnly = true
@@ -487,15 +554,29 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 
 					if len(UniTable.HashPkeys) > 0 {
 
-						for _, item := range UniTable.ListPkeys {
+						pkeys := UniTable.ListPkeys
+						if len(pkeys) == 0 {
+							// 兼容 RegisterPkeys 等仅写 HashPkeys 的注册路径
+							for _, v := range UniTable.HashPkeys {
+								pkeys = append(pkeys, v)
+							}
+						}
+
+						for _, item := range pkeys {
 
 							SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
 							ColIndex = ColIndex + 1
 						}
 					}
 
+					if SqlField == "" {
+						return "", ListField, UniTable.ListPkeys, errors.New("UniEngine: no writable column in table:" + UniTable.TableName)
+					}
+
 					SqlField = string(SqlField[1:])
-					SqlWhere = string(SqlWhere[1:])
+					if SqlWhere != "" {
+						SqlWhere = string(SqlWhere[1:])
+					}
 
 					SqlResult = fmt.Sprintf("update %s set %s where 1=1 %s", UniTable.TableName, SqlField, SqlWhere)
 					UniTable.SqlUpdate = SqlResult
@@ -518,7 +599,7 @@ func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 // return int64;
 func (self *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, error) {
 
-	var eror error
+	var err error
 	var size sql.NullInt64
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
@@ -529,29 +610,22 @@ func (self *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, er
 		fmt.Println("UniEngine: select.val", args)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return 0, eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return 0, err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return 0, eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return 0, err
 	}
 	defer rows.Close()
 
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
 	for rows.Next() {
-		eror = rows.Scan(&size)
-		if eror != nil {
-			return 0, eror
+		err = rows.Scan(&size)
+		if err != nil {
+			return 0, err
 		}
 	}
 
@@ -561,7 +635,7 @@ func (self *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, er
 // return float64;
 func (self *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, error) {
 
-	var eror error
+	var err error
 	var size sql.NullFloat64
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
@@ -572,31 +646,23 @@ func (self *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, 
 		fmt.Println("UniEngine: select.val", args)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return 0, eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return 0, err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
+	rows, err := self.st.Query(args...)
 
-	if eror != nil {
-		return 0, eror
+	if err != nil {
+		return 0, err
 	}
 	defer rows.Close()
 
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
-
 	for rows.Next() {
-		eror = rows.Scan(&size)
-		if eror != nil {
-			return 0, eror
+		err = rows.Scan(&size)
+		if err != nil {
+			return 0, err
 		}
 	}
 	return size.Float64, nil
@@ -605,7 +671,7 @@ func (self *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, 
 // return string;
 func (self *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, error) {
 
-	var eror error
+	var err error
 	var text sql.NullString
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
@@ -616,30 +682,22 @@ func (self *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, e
 		fmt.Println("UniEngine: select.val", args)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return "", eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return "", err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return "", eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return "", err
 	}
 	defer rows.Close()
 
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
-
 	for rows.Next() {
-		eror = rows.Scan(&text)
-		if eror != nil {
-			return "", eror
+		err = rows.Scan(&text)
+		if err != nil {
+			return "", err
 		}
 	}
 
@@ -649,7 +707,7 @@ func (self *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, e
 // return struct;
 func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -666,7 +724,7 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -676,22 +734,22 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 	}
 
 	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 	//->
 
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
+	column, err := rows.Columns()
+	if err != nil {
+		return err
 	}
 	cCount := len(column)
 	fields := make([]interface{}, cCount)
@@ -707,9 +765,9 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 					values[i] = &fields[i]
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				x.SetSqlResult(*self, i, column, fields)
@@ -721,14 +779,14 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 				for ItemIndx, ItemPara := range column {
 					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
+						return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String())
 					}
 					values[ItemIndx] = Result.FieldByName(UniField.AttriName).Addr().Interface()
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 			}
 		}
@@ -738,9 +796,9 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 		//		values[i] = &fields[i]
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//
 		//	x.SetSqlResult(*self, i, column, fields)
@@ -757,9 +815,9 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 		//		values[ColIndex] = Result.FieldByName(UniField.AttriName).Addr().Interface()
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//}
 	}
@@ -770,7 +828,7 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 // return slice of struct;
 func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -791,7 +849,7 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -801,25 +859,25 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 	}
 
 	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 	//->
 
-	//columnstype,eror := rows.ColumnTypes()
+	//columnstype,err := rows.ColumnTypes()
 	//fmt.Println(columnstype)
 
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
+	column, err := rows.Columns()
+	if err != nil {
+		return err
 	}
 
 	cCount := len(column)
@@ -838,9 +896,9 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 					values[i] = &fields[i]
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				x := u.Interface().(HasSetSqlResult)
@@ -853,14 +911,14 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 				for ColIndex, ItemPara := range column {
 					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
+						return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String())
 					}
 					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				Result.Set(reflect.Append(Result, u.Elem()))
@@ -873,9 +931,9 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 		//		values[i] = &fields[i]
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//
 		//	x := u.Interface().(HasSetSqlResult)
@@ -893,9 +951,9 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 		//		values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//
 		//	Result.Set(reflect.Append(Result, u.Elem()))
@@ -908,7 +966,7 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 // return map of struct;user;GetMapUnique;
 func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -929,11 +987,11 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	if !t.Implements(THasGetMapUnique) {
-		return errors.New(fmt.Sprintf("UniEngine: the class registered:[%s] does not Implemented [HasGetMapUnique]", TablName))
+		return fmt.Errorf("UniEngine: the class registered:[%s] does not Implemented [HasGetMapUnique]", TablName)
 	}
 
 	//#打印语句
@@ -943,22 +1001,22 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 	}
 
 	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 	//->
 
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
+	column, err := rows.Columns()
+	if err != nil {
+		return err
 	}
 	cCount := len(column)
 	fields := make([]interface{}, cCount)
@@ -977,9 +1035,9 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 					values[i] = &fields[i]
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				x := u.Interface().(HasSetSqlResult)
@@ -996,14 +1054,14 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 				for ColIndex, ItemPara := range column {
 					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
+						return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String())
 					}
 					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				var MapUnique string
@@ -1019,9 +1077,9 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 		//		values[i] = &fields[i]
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//
 		//	x := u.Interface().(HasSetSqlResult)
@@ -1043,9 +1101,9 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 		//		values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
 		//	}
 		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
+		//	err = rows.Scan(values...)
+		//	if err != nil {
+		//		return err
 		//	}
 		//
 		//	var MapUnique string
@@ -1061,29 +1119,9 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 
 //return map;use custom function;
 
-/*
-    var HashData = make(map[string]TDATA, 0)
-
-	cSQL = "SELECT * FROM ANTV_DATA WHERE 1=1 AND WHO_BUILD=$1 AND USER_INDX=$2 AND SOURCE_ND=$3 AND SOURCE_QJ=$4"
-	eror = UniEngineEx.SelectH(&HashData, func(u interface{}) string {
-		DataPara := u.(TDATA)
-		return fmt.Sprintf("%d-%d-%d-%d", DataPara.ANTVMAIN, DataPara.UNITINDX, DataPara.SOURCEND, DataPara.SOURCEQJ)
-	}, cSQL, whobuild, userindx, sourcend, sourceqj)
-
-    ExistVal, Valid := HashData[fmt.Sprintf("%d-%d-%d-%d", ItemPara.ANTVMAIN, ItemPara.UNITINDX, ItemPara.SOURCEND, ItemPara.SOURCEQJ)]
-    if Valid {
-        ItemPara.DataIndx = ExistVal.DataIndx
-
-        continue
-    }
-
-   ExistVal,
-   Imok,Mrok,
-*/
-
 func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -1104,7 +1142,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -1114,22 +1152,22 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 	}
 
 	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
+	rows, err := self.st.Query(args...)
+	if err != nil {
+		return err
 	}
 	defer rows.Close()
 	//->
 
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
+	column, err := rows.Columns()
+	if err != nil {
+		return err
 	}
 	cCount := len(column)
 	fields := make([]interface{}, cCount)
@@ -1148,9 +1186,9 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 					values[i] = &fields[i]
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				x := u.Interface().(HasSetSqlResult)
@@ -1167,14 +1205,14 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 				for ColIndex, ItemPara := range column {
 					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
+						return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String())
 					}
 					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
 				}
 
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
+				err = rows.Scan(values...)
+				if err != nil {
+					return err
 				}
 
 				var MapUnique string
@@ -1191,7 +1229,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 
 func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1208,14 +1246,18 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1228,33 +1270,32 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	SqlValue := make([]interface{}, 0)
 
 	//@SaveIt方法不需要这一组
-	/*
-		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-			cQuery = x.GetSqlUpdate(UniTableName)
-		}
-
-		if x, ok := v.Interface().(HasSetSqlValues); ok {
-			x.SetSqlValues(EtUpdate, &SqlValue)
-		}
-	*/
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		for _, ItemPara := range UniTable.HashField {
+		pkeys := UniTable.ListPkeys
+		if len(pkeys) == 0 {
+			// 兼容未维护 ListPkeys 的注册路径
+			for _, v := range UniTable.HashPkeys {
+				pkeys = append(pkeys, v)
+			}
+		}
+
+		for _, ItemPara := range pkeys {
 
 			if ItemPara.ReadOnly {
 				continue
 			}
 
-			if _, valid := UniTable.HashPkeys[ItemPara.FieldName]; valid {
-				//@SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", ColIndex)
-				SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
-				SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
-				ColIndex = ColIndex + 1
-			}
+			SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
+			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
+			ColIndex = ColIndex + 1
 		}
 
 		//@UniField = string(UniField[1:])
+		if SqlWhere == "" {
+			return errors.New("UniEngine: no writable pkey column in class: " + t.String())
+		}
 		SqlWhere = string(SqlWhere[4:])
 
 		SqlQuery = fmt.Sprintf("select count(1) from %s where %s", TablName, SqlWhere)
@@ -1266,9 +1307,9 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 		fmt.Println("UniEngine: select.val", SqlValue)
 	}
 
-	cCount, eror := self.SelectD(SqlQuery, SqlValue...)
-	if eror != nil {
-		return eror
+	cCount, err := self.SelectD(SqlQuery, SqlValue...)
+	if err != nil {
+		return err
 	}
 
 	if self.runDebug {
@@ -1280,13 +1321,11 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	} else {
 		return self.Insert(i, args...)
 	}
-
-	return nil
 }
 
 func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1303,14 +1342,18 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1323,32 +1366,32 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 	SqlValue := make([]interface{}, 0)
 
 	//@SaveIt方法不需要这一组
-	/*
-		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-			cQuery = x.GetSqlUpdate(UniTableName)
-		}
-
-		if x, ok := v.Interface().(HasSetSqlValues); ok {
-			x.SetSqlValues(EtUpdate, &SqlValue)
-		}
-	*/
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
-		for _, item := range UniTable.HashField {
+
+		pkeys := UniTable.ListPkeys
+		if len(pkeys) == 0 {
+			// 兼容未维护 ListPkeys 的注册路径
+			for _, v := range UniTable.HashPkeys {
+				pkeys = append(pkeys, v)
+			}
+		}
+
+		for _, item := range pkeys {
 
 			if item.ReadOnly {
 				continue
 			}
 
-			if _, valid := UniTable.HashPkeys[item.FieldName]; valid {
-				//@SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", ColIndex)
-				SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-				SqlValue = append(SqlValue, v.FieldByName(item.AttriName).Interface())
-				ColIndex = ColIndex + 1
-			}
+			SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
+			SqlValue = append(SqlValue, v.FieldByName(item.AttriName).Interface())
+			ColIndex = ColIndex + 1
 		}
 
 		//@UniField = string(UniField[1:])
+		if SqlWhere == "" {
+			return errors.New("UniEngine: no writable pkey column in class: " + t.String())
+		}
 		SqlWhere = string(SqlWhere[4:])
 
 		SqlQuery = fmt.Sprintf("select count(1) from %s where %s", TablName, SqlWhere)
@@ -1360,9 +1403,9 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 		fmt.Println("UniEngine: select.val", SqlValue)
 	}
 
-	cCount, eror := self.SelectD(SqlQuery, SqlValue...)
-	if eror != nil {
-		return eror
+	cCount, err := self.SelectD(SqlQuery, SqlValue...)
+	if err != nil {
+		return err
 	}
 
 	if self.runDebug {
@@ -1378,7 +1421,7 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 
 func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1395,18 +1438,22 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: try update table:%s", UniTable))
+		fmt.Println("UniEngine: try update table:" + UniTable.TableName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1423,11 +1470,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
 		SqlQuery = x.GetSqlUpdate(*self, TablName)
 	}
-	/*
-		if x, ok := v.Interface().(HasGetSqlValues); ok {
-			SqlValue = x.GetSqlValues(EtUpdate)
-		}
-	*/
 	if x, ok := v.Interface().(HasSetSqlValues); ok {
 		x.SetSqlValues(*self, EtUpdate, &SqlValue)
 	}
@@ -1439,24 +1481,6 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 				continue
 			}
 
-			/*
-				if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-					SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-				} else {
-					UniField = UniField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-				}
-			*/
-
-			/*
-				if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-					SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-					zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
-				} else {
-					UniField = UniField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-					xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
-				}
-			*/
-
 			if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
 				continue
 			}
@@ -1467,15 +1491,28 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 			ColIndex = ColIndex + 1
 		}
 
-		for _, ItemPara := range UniTable.HashPkeys {
+		pkeys := UniTable.ListPkeys
+		if len(pkeys) == 0 {
+			// 兼容未维护 ListPkeys 的注册路径
+			for _, v := range UniTable.HashPkeys {
+				pkeys = append(pkeys, v)
+			}
+		}
+
+		for _, ItemPara := range pkeys {
 
 			SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
 			zValue = append(zValue, v.FieldByName(ItemPara.AttriName).Interface())
 			ColIndex = ColIndex + 1
 		}
 
+		if UniField == "" {
+			return errors.New("UniEngine: no writable column in class: " + t.String())
+		}
 		UniField = string(UniField[1:])
-		SqlWhere = string(SqlWhere[1:])
+		if SqlWhere != "" {
+			SqlWhere = string(SqlWhere[1:])
+		}
 
 		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 %s", TablName, UniField, SqlWhere)
 
@@ -1488,15 +1525,15 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 		fmt.Println("UniEngine: update.val:", SqlValue)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	_, err = self.st.Exec(SqlValue...)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -1504,7 +1541,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1527,10 +1564,14 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1545,11 +1586,6 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	if x, ok := v.Interface().(HasGetSqlInsert); ok {
 		SqlQuery = x.GetSqlInsert(*self, TablName)
 	}
-	/*
-		if x, ok := v.Interface().(HasGetSqlValues); ok {
-			SqlValue = x.GetSqlValues(EtInsert)
-		}
-	*/
 	if x, ok := v.Interface().(HasSetSqlValues); ok {
 		x.SetSqlValues(*self, EtInsert, &SqlValue)
 	}
@@ -1562,11 +1598,6 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 				continue
 			}
 
-			/*
-				UniField = UniField + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
-				SqlParam = SqlParam + "," + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-			*/
-
 			UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
 			SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 			ColIndex = ColIndex + 1
@@ -1574,6 +1605,9 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
+		if UniField == "" || SqlParam == "" {
+			return errors.New("UniEngine: no writable column in class: " + t.String())
+		}
 		UniField = string(UniField[1:])
 		SqlParam = string(SqlParam[1:])
 
@@ -1586,15 +1620,15 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 		fmt.Println("UniEngine: insert.val", SqlValue)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	_, err = self.st.Exec(SqlValue...)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -1602,7 +1636,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1628,10 +1662,14 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1673,6 +1711,9 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 		for _, ItemPara := range HashField {
 			UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
+		}
+		if UniField == "" {
+			return errors.New("UniEngine: no writable column in class: " + t.String())
 		}
 		UniField = UniField[1:]
 
@@ -1730,15 +1771,15 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 		fmt.Println("UniEngine: insert.val:", SqlValue)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [InsertP(PageSize)] method;", eror.Error()))
+	_, err = self.st.Exec(SqlValue...)
+	if err != nil {
+		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [InsertP(PageSize)] method;", err.Error())
 	}
 
 	return nil
@@ -1746,7 +1787,7 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -1772,10 +1813,14 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1844,28 +1889,29 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 		fmt.Println("UniEngine: insert.val:", SqlValue)
 	}
 
-	//#PolarDB
-	Sql4Text := strings.ToLower(pq.CopyIn(TablName, SqlQuery...))
+	//#PolarDB / PostgreSQL COPY 协议（pq.CopyIn 仅支持 PostgreSQL 系驱动）
+	Sql4Text := pq.CopyIn(TablName, SqlQuery...)
 	//#fmt.Println(Sql4Text)
 
-	self.st, eror = self.tx.Prepare(Sql4Text)
-	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+	// 走统一 prepare 入口：无事务时使用 Db.Prepare（避免 self.tx 为 nil 的 panic）
+	err = self.prepare(Sql4Text)
+	if err != nil {
+		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", err.Error())
 	}
-	defer self.st.Close()
+	defer self.release()
 
 	// 执行所有行
 	for _, row := range SqlValue {
-		_, eror = self.st.Exec(row...)
-		if eror != nil {
-			return eror
+		_, err = self.st.Exec(row...)
+		if err != nil {
+			return err
 		}
 	}
 
 	// 完成 COPY
-	_, eror = self.st.Exec()
-	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+	_, err = self.st.Exec()
+	if err != nil {
+		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", err.Error())
 	}
 
 	return nil
@@ -1873,7 +1919,7 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 
 func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -1904,16 +1950,16 @@ func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface
 			switch self.Supplier {
 			case DtPOLODB:
 				{
-					eror = self.SpecialInsertL(ListData.Interface(), args...)
+					err = self.SpecialInsertL(ListData.Interface(), args...)
 				}
 			default:
 				{
-					eror = self.InsertL(ListData.Interface(), args...)
+					err = self.InsertL(ListData.Interface(), args...)
 				}
 			}
 
-			if eror != nil {
-				return eror
+			if err != nil {
+				return err
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
@@ -1922,16 +1968,16 @@ func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface
 	switch self.Supplier {
 	case DtPOLODB:
 		{
-			eror = self.SpecialInsertL(ListData.Interface(), args...)
+			err = self.SpecialInsertL(ListData.Interface(), args...)
 		}
 	default:
 		{
-			eror = self.InsertL(ListData.Interface(), args...)
+			err = self.InsertL(ListData.Interface(), args...)
 		}
 	}
 
-	if eror != nil {
-		return eror
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -1939,7 +1985,7 @@ func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface
 
 func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -1966,17 +2012,17 @@ func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...in
 		ListData = reflect.Append(ListData, Value)
 
 		if ListData.Len() == int(PageSize) {
-			eror = self.SpecialInsertL(ListData.Interface(), args...)
-			if eror != nil {
-				return eror
+			err = self.SpecialInsertL(ListData.Interface(), args...)
+			if err != nil {
+				return err
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
 	}
 
-	eror = self.SpecialInsertL(ListData.Interface(), args...)
-	if eror != nil {
-		return eror
+	err = self.SpecialInsertL(ListData.Interface(), args...)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -1984,7 +2030,7 @@ func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...in
 
 func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
-	var eror error
+	var err error
 	var mrok bool
 	var TablName string
 
@@ -2001,14 +2047,18 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -2017,7 +2067,15 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	SqlWhere := ""
 	SqlValue := make([]interface{}, 0)
 
-	for _, ItemPara := range UniTable.HashPkeys {
+	pkeys := UniTable.ListPkeys
+	if len(pkeys) == 0 {
+		// 兼容未维护 ListPkeys 的注册路径
+		for _, v := range UniTable.HashPkeys {
+			pkeys = append(pkeys, v)
+		}
+	}
+
+	for _, ItemPara := range pkeys {
 
 		//SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+ItemPara.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
 		SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
@@ -2026,6 +2084,9 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 		SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 	}
 
+	if SqlWhere == "" {
+		return errors.New("UniEngine: no pkey value to delete in class: " + t.String())
+	}
 	SqlWhere = string(SqlWhere[4:])
 
 	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, SqlWhere)
@@ -2035,15 +2096,15 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 		fmt.Println("UniEngine: delete.val:", SqlValue)
 	}
 
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
 	defer self.release()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	_, err = self.st.Exec(SqlValue...)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -2051,7 +2112,7 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 
 func (self *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
 
@@ -2059,18 +2120,15 @@ func (self *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
 		fmt.Println(fmt.Sprintf("UniEngine: execute.sql:%s", SqlQuery))
 	}
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
 	}
+	defer self.release()
 
-	if eror != nil {
-		return eror
-	}
-	_, eror = self.st.Exec(args...)
-	if eror != nil {
-		return eror
+	_, err = self.st.Exec(args...)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -2078,28 +2136,24 @@ func (self *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
 
 func (self *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error {
 
-	var eror error
+	var err error
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
+	err = self.prepare(SqlQuery)
+	if err != nil {
+		return err
+	}
+	defer self.release()
+
+	result, err := self.st.Exec(args...)
+	if err != nil {
+		return err
 	}
 
-	if eror != nil {
-		return eror
-	}
-
-	result, eror := self.st.Exec(args...)
-	if eror != nil {
-		return eror
-	}
-
-	size, eror := result.RowsAffected()
-	if eror != nil {
-		return eror
+	size, err := result.RowsAffected()
+	if err != nil {
+		return err
 	}
 
 	if size == 0 {
@@ -2111,50 +2165,43 @@ func (self *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error 
 
 func (self *TUniEngine) IfDropView(TableName string) (bool, error) {
 
-	var eror error
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
+
+	var err error
 	var cSQL string
 
-	mrok, eror := self.ExistViews(TableName)
-	if eror != nil {
-		return false, eror
+	mrok, err := self.ExistViews(TableName)
+	if err != nil {
+		return false, err
 	}
 
 	switch mrok {
 	case true:
 		{
 			cSQL = fmt.Sprintf("DROP VIEW %s", TableName)
-			eror = self.Execute(cSQL)
-			if eror != nil {
-				return false, eror
+			err = self.Execute(cSQL)
+			if err != nil {
+				return false, err
 			}
+			return true, nil
 		}
 	default:
 		{
+			return false, nil
 		}
 	}
-
-	return true, nil
 }
 
 func (self *TUniEngine) ExistTable(TableName string) (bool, error) {
 
-	var eror error
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
+
+	var err error
 	cSQL := ""
-
-	/*
-		if len(GetSqlExistTable) > 0 {
-
-			if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
-				cSQL = x.GetSqlExistTable(TableName)
-			}
-
-		} else {
-
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistTable(TableName)
-
-		}
-	*/
 
 	switch self.Provider {
 	case DtPOSTGR:
@@ -2190,36 +2237,25 @@ func (self *TUniEngine) ExistTable(TableName string) (bool, error) {
 		return false, errors.New("UniEngine: no sql for existtable")
 	}
 
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
+	Size, err := self.SelectD(cSQL)
+	if err != nil {
+		return false, err
 	}
 	if Size == 0 {
 		return false, nil
 	}
 
-	return true, eror
+	return true, err
 }
 
 func (self *TUniEngine) ExistViews(TableName string) (bool, error) {
 
-	var eror error
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
+
+	var err error
 	cSQL := ""
-
-	/*
-		if len(GetSqlExistTable) > 0 {
-
-			if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
-				cSQL = x.GetSqlExistTable(TableName)
-			}
-
-		} else {
-
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistTable(TableName)
-
-		}
-	*/
 
 	switch self.Provider {
 	case DtPOSTGR:
@@ -2255,36 +2291,25 @@ func (self *TUniEngine) ExistViews(TableName string) (bool, error) {
 		return false, errors.New("UniEngine: no sql for existtable")
 	}
 
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
+	Size, err := self.SelectD(cSQL)
+	if err != nil {
+		return false, err
 	}
 	if Size == 0 {
 		return false, nil
 	}
 
-	return true, eror
+	return true, err
 }
 
 func (self *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 
-	var eror error
+	if !validIdent(TableName) || !validIdent(FieldName) {
+		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
+	}
+
+	var err error
 	cSQL := ""
-
-	/*
-		if len(GetSqlExistField) > 0 {
-
-			if x, ok := GetSqlExistField[0].(HasGetSqlExistField); ok {
-				cSQL = x.GetSqlExistField(TableName, FieldName)
-			}
-
-		} else {
-
-			var ExistField4POSTGR = TExistField4POSTGR{}
-			cSQL = ExistField4POSTGR.GetSqlExistField(TableName, FieldName)
-
-		}
-	*/
 
 	switch self.Provider {
 	case DtPOSTGR:
@@ -2316,71 +2341,66 @@ func (self *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 		return false, errors.New("UniEngine: no sql for existfield")
 	}
 
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
+	Size, err := self.SelectD(cSQL)
+	if err != nil {
+		return false, err
 	}
 	if Size == 0 {
 		return false, nil
 	}
 
-	return true, eror
+	return true, err
 }
 
 func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
 
-	var eror error
-
-	cSQL := ""
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
-	}
-	if Size == 0 {
-		return false, nil
-	}
-
-	return true, eror
+	var err error = errors.New("UniEngine: ExistConst is not implemented yet")
+	return false, err
 }
 
 func (self *TUniEngine) prepare(SqlQuery string) error {
 
-	var eror error
+	var err error
+
+	// 复用前关闭旧 stmt，避免 prepared statement / 连接资源泄漏
+	if self.st != nil {
+		_ = self.st.Close()
+		self.st = nil
+	}
 
 	switch self.canClose {
 	case true:
 		{
-			self.st, eror = self.Db.Prepare(SqlQuery)
+			self.st, err = self.Db.Prepare(SqlQuery)
 		}
 	default:
 		{
-			self.st, eror = self.tx.Prepare(SqlQuery)
+			self.st, err = self.tx.Prepare(SqlQuery)
 		}
 	}
-	//if self.canClose {
-	//	self.st, eror = self.Db.Prepare(SqlQuery)
-	//} else {
-	//	self.st, eror = self.tx.Prepare(SqlQuery)
-	//}
-	return eror
+
+	return err
 }
 
 func (self *TUniEngine) release() error {
 
-	var eror error
+	if self.st == nil {
+		return nil
+	}
 
-	eror = self.st.Close()
+	err := self.st.Close()
+	self.st = nil
 
-	return eror
+	return err
 }
 
 func (self *TUniEngine) Begin() error {
 
-	var eror error
+	var err error
 
-	self.tx, eror = self.Db.Begin()
-	if eror != nil {
-		return eror
+	self.tx, err = self.Db.Begin()
+	if err != nil {
+		return err
 	}
 	self.canClose = false
 
@@ -2389,15 +2409,15 @@ func (self *TUniEngine) Begin() error {
 
 func (self *TUniEngine) Cancel() error {
 
-	var eror error
+	var err error
 
 	if self.canClose {
 		return errors.New("UniEngine: no transaction")
 	}
 
-	eror = self.tx.Rollback()
-	if eror != nil {
-		return eror
+	err = self.tx.Rollback()
+	if err != nil {
+		return err
 	}
 
 	self.canClose = true
@@ -2407,15 +2427,15 @@ func (self *TUniEngine) Cancel() error {
 
 func (self *TUniEngine) Commit() error {
 
-	var eror error
+	var err error
 
 	if self.canClose {
 		return errors.New("UniEngine: no transaction")
 	}
 
-	eror = self.tx.Commit()
-	if eror != nil {
-		return eror
+	err = self.tx.Commit()
+	if err != nil {
+		return err
 	}
 
 	self.canClose = true
@@ -2439,8 +2459,9 @@ func (self *TUniEngine) RunDebug(Value bool) error {
 
 func (self *TUniEngine) Initialize() error {
 
-	self.RegisterClass(TUniTable{}, "github.com/kazarus/uniengine/unitable")
-	self.RegisterClass(TUniField{}, "github.com/kazarus/uniengine/unifield")
+	// 注册 TUniField 供 AutoKeys 内部查询使用（SelectL 按类名查找）；
+	// 使用内名避免污染业务表命名空间（TableName 仅作注册键，不用于 SQL）
+	self.RegisterClass(TUniField{}, "__uniengine_unifield__")
 
 	self.canClose = true
 	self.runDebug = false

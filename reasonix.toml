@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=pwd && git branch --show-current && git status --short | head -20"]

@@ -2,7 +2,6 @@
 package UniEngine
 
 import "fmt"
-import "errors"
 import "strings"
 
 type TUniTable struct {
@@ -38,16 +37,20 @@ func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 
 	for _, ItemPara := range Fields {
 
-		Field, Valid = self.HashField[strings.ToLower(ItemPara.(string))]
-		switch Valid {
-		case true:
-			{
-				self.HashPkeys[strings.ToLower(ItemPara.(string))] = Field
+		fieldName, ok := ItemPara.(string)
+		if !ok {
+			return fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
+		}
+
+		Field, Valid = self.HashField[strings.ToLower(fieldName)]
+		if Valid {
+			lowerName := strings.ToLower(fieldName)
+			if _, exists := self.HashPkeys[lowerName]; !exists {
+				self.HashPkeys[lowerName] = Field
+				self.ListPkeys = append(self.ListPkeys, Field)
 			}
-		default:
-			{
-				panic(fmt.Sprintf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string))))
-			}
+		} else {
+			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered", self.TableName, strings.ToLower(fieldName))
 		}
 	}
 
@@ -56,7 +59,7 @@ func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 
 func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) error {
 
-	var eror error
+	var err error
 	var cSQL string = ""
 
 	if len(GetSqlAutoKeys) > 0 {
@@ -76,14 +79,18 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		fmt.Println(cSQL)
 	}
 
+	if cSQL == "" {
+		return fmt.Errorf("UniEngine: can not build autokeys sql for table:%s", self.TableName)
+	}
+
 	var ListData = make([]TUniField, 0)
-	eror = this.SelectL(&ListData, cSQL)
-	if eror != nil {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s,%s", self.TableName, eror.Error())))
+	err = this.SelectL(&ListData, cSQL)
+	if err != nil {
+		return fmt.Errorf("UniEngine: table:%s, %w", self.TableName, err)
 	}
 
 	if len(ListData) == 0 {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)))
+		return fmt.Errorf("UniEngine: table:%s or its primary key may be not exist.", self.TableName)
 	}
 
 	var CodeText string
@@ -93,12 +100,16 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		switch Valid {
 		case true:
 			{
-				self.HashPkeys[strings.ToLower(ItemPara.FieldName)] = ItemCopy
-				CodeText = CodeText + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
+				lowerName := strings.ToLower(ItemPara.FieldName)
+				if _, exists := self.HashPkeys[lowerName]; !exists {
+					self.HashPkeys[lowerName] = ItemCopy
+					self.ListPkeys = append(self.ListPkeys, ItemCopy)
+				}
+				CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
 			}
 		default:
 			{
-				panic(fmt.Sprintf("UniEngine: database have field[%s.%s], but class not.", self.TableName, ItemPara.FieldName))
+				return fmt.Errorf("UniEngine: database have field[%s.%s], but class not.", self.TableName, ItemPara.FieldName)
 			}
 		}
 	}

@@ -4,32 +4,6 @@ import "fmt"
 import "strings"
 import "reflect"
 
-/*
-//#单独写入
-func (self TDATA) GetSqlInsert(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
-
-func (self TDATA) GetSqlUpdate(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
-
-func (self TDATA) GetSqlDelete(UniEngineEx UniEngine.TUniEngine, TableName string) string {
-}
-
-func (self TDATA) SetSqlValues(UniEngineEx UniEngine.TUniEngine, e UniEngine.TQueryType, i *[]interface{}) {
-}
-
-//#批量写入
-func (self TDATA) GetSqlInsertL(UniEngineEx UniEngine.TUniEngine, TableName string, DataSize int64) string {
-}
-
-func (this TDATA) SetSqlValuesL(UniEngineEx UniEngine.TUniEngine, E UniEngine.TQueryType, Value reflect.Value, i *[]interface{}) {
-}
-
-//#数据取值
-func (self TDATA) SetSqlResult(UniEngineEx UniEngine.TUniEngine, result interface{}, column []string, fields []interface{}) {
-}
-*/
-
 const CONST_PRIVIDER_NAME_TO_POSTGR = "PostgreSQL"
 const CONST_PRIVIDER_NAME_TO_SQLSRV = "SQL Server"
 const CONST_PRIVIDER_NAME_TO_ORACLE = "Oracle"
@@ -68,7 +42,7 @@ const (
 	EtSelect TQueryType = 1 + iota
 	EtInsert
 	EtUpdate
-	EtDelele
+	EtDelele //#删除（拼写保留以兼容旧调用，正确拼写为 EtDelete）
 )
 
 type TConstType int
@@ -203,7 +177,7 @@ func (self TExistTable4POSTGR) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4POSTGR) GetSqlExistViews(UniEngineEx TUniEngine, TableName string) string {
 
-	result := "select count(relname) as value from pg_class where relname='%s'"
+	result := "select count(relname) as value from pg_class where relname='%s' and relkind='v'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
@@ -219,7 +193,7 @@ func (self TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx TUniEngine, TableName string) string {
 
-	result := "select count(*) from sysobjects where 1=1 and name='%s'"
+	result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='V'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
@@ -252,7 +226,7 @@ func (self TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
+	result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
 	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
@@ -326,18 +300,12 @@ type TAutoKeys4SQLSRV struct{}
 
 func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
 
-	//@result := "select a.name as field_name from syscolumns a  inner join sysindexkeys b on a.id=b.id  and a.colid =b.colid where a.id=object_id('%s')"
-
-	result := "select syscolumns.name as field_name" +
-		"    from syscolumns,sysobjects,sysindexes,sysindexkeys" +
-		"    where syscolumns.id=object_id('%s')" +
-		"    and sysobjects.xtype='pk'" +
-		"    and sysobjects.parent_obj=syscolumns.id" +
-		"    and sysindexes.id=syscolumns.id" +
-		"    and sysobjects.name=sysindexes.name" +
-		"    and sysindexkeys.id=syscolumns.id" +
-		"    and sysindexkeys.indid=sysindexes.indid" +
-		"    and syscolumns.colid=sysindexkeys.colid;"
+	result := "select c.name as field_name" +
+		"    from sys.indexes i" +
+		"    inner join sys.index_columns ic on ic.object_id = i.object_id and ic.index_id = i.index_id" +
+		"    inner join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id" +
+		"    where i.object_id = object_id('%s') and i.is_primary_key = 1" +
+		"    order by ic.index_column_id"
 
 	return fmt.Sprintf(result, TableName)
 }
@@ -358,7 +326,7 @@ type TAutoKeys4MYSQLN struct {
 func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
 
 	if self.DataBase == "" {
-		panic("UniEngine: you shoule be specify attribute [database] when using mysql.")
+		return ""
 	}
 	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 
