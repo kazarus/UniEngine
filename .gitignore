@@ -1,0 +1,5 @@
+# macOS
+.DS_Store
+
+# local Go toolchain caches
+.cache/

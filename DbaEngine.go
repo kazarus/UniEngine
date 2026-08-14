@@ -358,7 +358,7 @@ type TAutoKeys4MYSQLN struct {
 func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) string {
 
 	if self.DataBase == "" {
-		panic("UniEngine: you shoule be specify attribute [database] when using mysql.")
+		panic("UniEngine: you should specify attribute [database] when using mysql.")
 	}
 	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 

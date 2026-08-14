@@ -2,7 +2,6 @@
 package UniEngine
 
 import "fmt"
-import "errors"
 import "strings"
 
 type TUniTable struct {
@@ -79,11 +78,11 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 	var ListData = make([]TUniField, 0)
 	eror = this.SelectL(&ListData, cSQL)
 	if eror != nil {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s,%s", self.TableName, eror.Error())))
+		panic(fmt.Errorf("UniEngine: table:%s,%s", self.TableName, eror.Error()))
 	}
 
 	if len(ListData) == 0 {
-		panic(errors.New(fmt.Sprintf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)))
+		panic(fmt.Errorf("UniEngine: table:%s or its primary key may not exist.", self.TableName))
 	}
 
 	var CodeText string
@@ -94,7 +93,7 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		case true:
 			{
 				self.HashPkeys[strings.ToLower(ItemPara.FieldName)] = ItemCopy
-				CodeText = CodeText + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
+				CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
 			}
 		default:
 			{

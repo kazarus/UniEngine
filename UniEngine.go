@@ -11,6 +11,8 @@ import (
 	"github.com/lib/pq"
 )
 
+var reMySQLParam = regexp.MustCompile(`\$\d+`)
+
 /*
   when write data to struct, should be ptr;
   when read data from struct, whoever, ptr or struct;
@@ -57,7 +59,7 @@ func (self *TUniEngine) getColParam(FieldName string) string {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	return fmt.Sprintf(`"` + FieldName + `"`)
+	return `"` + FieldName + `"`
 }
 
 func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
@@ -80,12 +82,7 @@ func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
 		}
 
-		re, eror := regexp.Compile(`\$\d+`)
-		if eror != nil {
-			return ""
-		}
-
-		SqlQuery = re.ReplaceAllString(SqlQuery, "?")
+		SqlQuery = reMySQLParam.ReplaceAllString(SqlQuery, "?")
 	}
 	//#kazarus:2025_10_17_>
 
@@ -554,6 +551,9 @@ func (self *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, er
 			return 0, eror
 		}
 	}
+	if eror = rows.Err(); eror != nil {
+		return 0, eror
+	}
 
 	return size.Int64, nil
 }
@@ -599,6 +599,9 @@ func (self *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, 
 			return 0, eror
 		}
 	}
+	if eror = rows.Err(); eror != nil {
+		return 0, eror
+	}
 	return size.Float64, nil
 }
 
@@ -642,6 +645,9 @@ func (self *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, e
 			return "", eror
 		}
 	}
+	if eror = rows.Err(); eror != nil {
+		return "", eror
+	}
 
 	return text.String, nil
 }
@@ -658,7 +664,7 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 
 	if t.Kind() != reflect.Struct {
 		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [Select] only return a struct; may be you should try [SelectL]")
 	}
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
@@ -666,7 +672,7 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -763,6 +769,9 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 		//	}
 		//}
 	}
+	if eror = rows.Err(); eror != nil {
+		return eror
+	}
 
 	return nil
 }
@@ -779,7 +788,7 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 
 	if t.Kind() != reflect.Slice {
 		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [Select] only return a struct; may be you should try [SelectL]")
 	}
 
 	if t.Kind() == reflect.Slice {
@@ -791,7 +800,7 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -901,6 +910,9 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 		//	Result.Set(reflect.Append(Result, u.Elem()))
 		//}
 	}
+	if eror = rows.Err(); eror != nil {
+		return eror
+	}
 
 	return nil
 }
@@ -917,7 +929,7 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 
 	if t.Kind() != reflect.Map {
 		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [Select] only return a struct; may be you should try [SelectL]")
 	}
 
 	if t.Kind() == reflect.Map {
@@ -929,7 +941,7 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	if !t.Implements(THasGetMapUnique) {
@@ -1055,6 +1067,9 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 		//	Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
 		//}
 	}
+	if eror = rows.Err(); eror != nil {
+		return eror
+	}
 
 	return nil
 }
@@ -1092,7 +1107,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 
 	if t.Kind() != reflect.Map {
 		//TO DO:
-		return errors.New("UniEngine: method [select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [select] only return a struct; may be you should try [SelectL]")
 	}
 
 	if t.Kind() == reflect.Map {
@@ -1104,7 +1119,7 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 	TablName := t.String()
 	UniTable, Valid := self.HashTabl[TablName]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
+		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
 	}
 
 	//#打印语句
@@ -1185,6 +1200,9 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 			}
 		}
 	}
+	if eror = rows.Err(); eror != nil {
+		return eror
+	}
 
 	return nil
 }
@@ -1198,7 +1216,7 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [SaveIt] the second paramter need a string value.")
+			return errors.New("UniEngine: method [SaveIt] the second parameter need a string value.")
 		}
 	}
 
@@ -1208,10 +1226,10 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
@@ -1277,11 +1295,9 @@ func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
 
 	if cCount == 1 {
 		return self.Update(i, args...)
-	} else {
-		return self.Insert(i, args...)
 	}
 
-	return nil
+	return self.Insert(i, args...)
 }
 
 func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) error {
@@ -1293,7 +1309,7 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [SaveItWhenNotExist] the second paramter need a string value.")
+			return errors.New("UniEngine: method [SaveItWhenNotExist] the second parameter need a string value.")
 		}
 	}
 
@@ -1303,10 +1319,10 @@ func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) e
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
@@ -1385,7 +1401,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [Update] the second paramter need a string value.")
+			return errors.New("UniEngine: method [Update] the second parameter need a string value.")
 		}
 	}
 
@@ -1395,10 +1411,10 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
@@ -1406,7 +1422,7 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 
 	//#打印语句
 	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: try update table:%s", UniTable))
+		fmt.Println(fmt.Sprintf("UniEngine: try update table:%s", UniTable.TableName))
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1511,7 +1527,7 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [Insert] the second paramter need a string value.")
+			return errors.New("UniEngine: method [Insert] the second parameter need a string value.")
 		}
 	}
 
@@ -1522,12 +1538,12 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 
 	if t.Kind() != reflect.Struct {
 		//TO DO:
-		return errors.New("UniEngine: method [Insert] only retun a struct; may be you should try [InsertL]")
+		return errors.New("UniEngine: method [Insert] only return a struct; may be you should try [InsertL]")
 	}
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
@@ -1609,7 +1625,7 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [InsertL] the second paramter need a string value.")
+			return errors.New("UniEngine: method [InsertL] the second parameter need a string value.")
 		}
 	}
 
@@ -1628,7 +1644,7 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
@@ -1738,7 +1754,7 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 	_, eror = self.st.Exec(SqlValue...)
 	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [InsertP(PageSize)] method;", eror.Error()))
+		return fmt.Errorf("%s@UniEngine: too many parameters; try [InsertP(PageSize)] method;", eror.Error())
 	}
 
 	return nil
@@ -1753,7 +1769,7 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [SpecialInsertL] the second paramter need a string value.")
+			return errors.New("UniEngine: method [SpecialInsertL] the second parameter need a string value.")
 		}
 	}
 
@@ -1772,7 +1788,7 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if TablName == "" {
 		TablName = UniTable.TableName
@@ -1848,9 +1864,9 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 	Sql4Text := strings.ToLower(pq.CopyIn(TablName, SqlQuery...))
 	//#fmt.Println(Sql4Text)
 
-	self.st, eror = self.tx.Prepare(Sql4Text)
+	eror = self.prepare(Sql4Text)
 	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+		return fmt.Errorf("%s@UniEngine: too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error())
 	}
 	defer self.st.Close()
 
@@ -1865,7 +1881,7 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 	// 完成 COPY
 	_, eror = self.st.Exec()
 	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+		return fmt.Errorf("%s@UniEngine: too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error())
 	}
 
 	return nil
@@ -1991,7 +2007,7 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [Delete] the second paramter need a string value.")
+			return errors.New("UniEngine: method [Delete] the second parameter need a string value.")
 		}
 	}
 
@@ -2001,10 +2017,10 @@ func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
 	}
 	UniTable, Valid := self.HashTabl[t.String()]
 	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no such class registered: %s", t.String())
 	}
 	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
 	}
 
 	if TablName == "" {
@@ -2059,15 +2075,12 @@ func (self *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
 		fmt.Println(fmt.Sprintf("UniEngine: execute.sql:%s", SqlQuery))
 	}
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
-	}
-
+	eror = self.prepare(SqlQuery)
 	if eror != nil {
 		return eror
 	}
+	defer self.release()
+
 	_, eror = self.st.Exec(args...)
 	if eror != nil {
 		return eror
@@ -2082,15 +2095,11 @@ func (self *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error 
 
 	SqlQuery = self.getSqlQuery(SqlQuery, args)
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
-	}
-
+	eror = self.prepare(SqlQuery)
 	if eror != nil {
 		return eror
 	}
+	defer self.release()
 
 	result, eror := self.st.Exec(args...)
 	if eror != nil {
