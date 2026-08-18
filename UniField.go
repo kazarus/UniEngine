@@ -13,6 +13,7 @@ type TUniField struct {
 	DataLeng string `db:"data_leng" json:"dataLeng"` //#字段长度
 	DataSize int    `db:"data_size" json:"dataSize"` //#字段精度
 	ReadOnly bool   `db:"read_only" json:"readOnly"` //#是否只读
+	Encrypt  bool   `db:"encrypt" json:"encrypt"`    //#是否加密#应用加密,敏感字段(密码/证件号等)
 	PkeyOnly bool   `db:"pkey_only" json:"pkeyOnly"` //#是否主键#数据同步时用到,其他地方不要用,未初始化;
 }
 
@@ -30,6 +31,8 @@ func (self *TUniField) initialize(aValue string) {
 		switch item {
 		case "readonly":
 			self.ReadOnly = true
+		case "encrypt":
+			self.Encrypt = true
 		default:
 			//@panic(fmt.Sprintf("Unrecognized tag option for field %v: %v", self.FieldName, item))
 		}

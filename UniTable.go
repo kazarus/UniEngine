@@ -53,6 +53,31 @@ func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 	return nil
 }
 
+// #标记加密字段#用于手工注册(RegisterField)的字段,效果等同 tag:"...,encrypt"
+func (self *TUniTable) SetSecret(Fields ...interface{}) error {
+
+	var Valid bool
+	var Field TUniField
+
+	for _, ItemPara := range Fields {
+
+		Field, Valid = self.HashField[strings.ToLower(ItemPara.(string))]
+		switch Valid {
+		case true:
+			{
+				Field.Encrypt = true
+				self.HashField[strings.ToLower(ItemPara.(string))] = Field
+			}
+		default:
+			{
+				panic(fmt.Sprintf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string))))
+			}
+		}
+	}
+
+	return nil
+}
+
 func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) error {
 
 	var eror error

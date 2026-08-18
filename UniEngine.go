@@ -30,6 +30,8 @@ type TUniEngine struct {
 	SecretOn int64  //#开启敏感信息加密
 	SecretBy string //#敏感信息加密密钥
 
+	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
+
 	Instance string     //#数据库实例
 	DataBase string     //#数据库名称
 	DataUser string     //#数据库用户
@@ -736,6 +738,10 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 				if eror != nil {
 					return eror
 				}
+
+				if eror = self.DecryptResult(&Result, &UniTable, column); eror != nil {
+					return eror
+				}
 			}
 		}
 
@@ -869,6 +875,11 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 
 				eror = rows.Scan(values...)
 				if eror != nil {
+					return eror
+				}
+
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, &UniTable, column); eror != nil {
 					return eror
 				}
 
@@ -1015,6 +1026,11 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 
 				eror = rows.Scan(values...)
 				if eror != nil {
+					return eror
+				}
+
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, &UniTable, column); eror != nil {
 					return eror
 				}
 
@@ -1189,6 +1205,11 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 
 				eror = rows.Scan(values...)
 				if eror != nil {
+					return eror
+				}
+
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, &UniTable, column); eror != nil {
 					return eror
 				}
 
@@ -1478,6 +1499,16 @@ func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
 			}
 
 			UniField = UniField + "," + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
+
+			if ItemPara.Encrypt {
+				Value, eror := self.Secret(fmt.Sprintf("%v", v.FieldByName(ItemPara.AttriName).Interface()), true)
+				if eror != nil {
+					return eror
+				}
+				xValue = append(xValue, Value)
+				ColIndex = ColIndex + 1
+				continue
+			}
 			xValue = append(xValue, v.FieldByName(ItemPara.AttriName).Interface())
 
 			ColIndex = ColIndex + 1
@@ -1587,6 +1618,14 @@ func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
 			SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 			ColIndex = ColIndex + 1
 
+			if ItemPara.Encrypt {
+				Value, eror := self.Secret(fmt.Sprintf("%v", v.FieldByName(ItemPara.AttriName).Interface()), true)
+				if eror != nil {
+					return eror
+				}
+				SqlValue = append(SqlValue, Value)
+				continue
+			}
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
@@ -1705,6 +1744,15 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 						ColIndex = ColIndex + 1
+
+						if ItemPara.Encrypt {
+							Value, eror := self.Secret(fmt.Sprintf("%v", f.FieldByName(ItemPara.AttriName).Interface()), true)
+							if eror != nil {
+								return eror
+							}
+							SqlValue = append(SqlValue, Value)
+							continue
+						}
 						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 					}
 
@@ -1727,6 +1775,15 @@ func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
 
 						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 						ColIndex = ColIndex + 1
+
+						if ItemPara.Encrypt {
+							Value, eror := self.Secret(fmt.Sprintf("%v", f.FieldByName(ItemPara.AttriName).Interface()), true)
+							if eror != nil {
+								return eror
+							}
+							SqlValue = append(SqlValue, Value)
+							continue
+						}
 						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 					}
 
@@ -1844,6 +1901,14 @@ func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error
 
 			for _, ItemPara := range HashField {
 
+				if ItemPara.Encrypt {
+					Value, eror := self.Secret(fmt.Sprintf("%v", f.FieldByName(ItemPara.AttriName).Interface()), true)
+					if eror != nil {
+						return eror
+					}
+					row = append(row, Value)
+					continue
+				}
 				row = append(row, f.FieldByName(ItemPara.AttriName).Interface())
 			}
 
