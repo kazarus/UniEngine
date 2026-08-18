@@ -20,6 +20,10 @@ import (
 // #然后赋值给 TUniEngine.SecretHook,即可接管全部敏感字段的加解密;
 type TSecretHook func(Value string, Encrypt bool) (string, error)
 
+// #加密标签#密文统一加该明文前缀,用于鉴别存量数据:
+// #读取时 带标签->密文,解密; 无标签->存量明文,直通返回;
+const UniSecretTag = "ENC:"
+
 // #加密入口:SecretOn=0 时直接返回原值(不加密/不解密)
 // #应用钩子 SecretHook 为空时,使用内置 AES-256-GCM(密钥取 SecretBy 的 SHA-256)
 func (self *TUniEngine) Secret(Value string, Encrypt bool) (string, error) {
@@ -35,8 +39,13 @@ func (self *TUniEngine) Secret(Value string, Encrypt bool) (string, error) {
 	return self.SecretDefault(Value, Encrypt)
 }
 
+// #判断值是否为加密密文(带加密标签)#用于存量数据迁移脚本;
+func (self *TUniEngine) IsEncrypted(Value string) bool {
+	return strings.HasPrefix(Value, UniSecretTag)
+}
+
 // #内置默认实现:AES-256-GCM
-// #密文格式:base64( 随机nonce + GCM密文 ) ;随机nonce,同一明文两次加密结果不同;
+// #密文格式:ENC: + base64( 随机nonce + GCM密文 ) ;随机nonce,同一明文两次加密结果不同;
 func (self *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error) {
 
 	if self.SecretBy == "" {
@@ -63,11 +72,16 @@ func (self *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 			}
 
 			cipherText := gcm.Seal(nil, nonce, []byte(Value), nil)
-			return base64.StdEncoding.EncodeToString(append(nonce, cipherText...)), nil
+			return UniSecretTag + base64.StdEncoding.EncodeToString(append(nonce, cipherText...)), nil
 		}
 	default:
 		{
-			data, eror := base64.StdEncoding.DecodeString(Value)
+			// #存量数据鉴别:无标签的值视为存量明文,直通返回(不尝试解密)
+			if !strings.HasPrefix(Value, UniSecretTag) {
+				return Value, nil
+			}
+
+			data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
 			if eror != nil {
 				return "", fmt.Errorf("UniEngine: decrypt fail,%s", eror.Error())
 			}

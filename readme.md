@@ -46,7 +46,30 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - SecretOn=0(默认)时一切直通,不改变原有行为
 - 手工注册的字段可用 `.SetSecret("password")` 标记加密
 - 主键字段请勿标记 encrypt(密文含随机nonce,无法用于匹配)
-- 密文格式:base64( 随机nonce + AES-256-GCM密文 )
+- 密文格式:`ENC:` + base64( 随机nonce + AES-256-GCM密文 )
+
+##### 0.1.存量数据鉴别与迁移
+
+开启加密后,库中会存在两类数据:加密前的存量明文 + 加密后的新密文。
+密文统一带明文前缀标签 `ENC:`,读取时自动鉴别:
+
+- 带 `ENC:` 标签 → 密文,解密后返回
+- 无标签 → 存量明文,直通返回(不报错、不解密)
+
+```go
+//# 迁移脚本:逐行读出存量明文,重新保存后即落为加密密文
+UniEngineEx.IsEncrypted(value) //# true=密文 false=存量明文
+
+//# 示例:读取全量用户,让 SaveIt/Update 自动把存量明文加密
+var users []mock.TUSER
+UniEngineEx.SelectL(&users, "select * from mock_user")
+for i := range users {
+    UniEngineEx.SaveIt(&users[i], "mock_user") //# 或 Update
+}
+```
+
+注意:存量明文若恰好以 `ENC:` 开头会被误判为密文(真实敏感数据概率极低);
+带标签但密钥错误的密文会解密报错(不静默,便于发现密钥轮换问题)。
 
 ##### 1.mysql 下使用
 

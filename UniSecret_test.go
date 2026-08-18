@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -186,8 +187,8 @@ func TestInsertEncrypt(t *testing.T) {
 	var plainUserName, plainPassword string
 	for _, v := range d.insertValues[0] {
 		s := fmt.Sprintf("%v", v)
-		if dec, eror := eng.Secret(s, false); eror == nil {
-			plainPassword = dec
+		if eng.IsEncrypted(s) {
+			plainPassword, _ = eng.Secret(s, false)
 		} else {
 			plainUserName = s
 		}
@@ -279,5 +280,83 @@ func TestSetSecret(t *testing.T) {
 	tab, _ := eng.HashTabl["UniEngine.TTestUser"]
 	if !tab.HashField["password"].Encrypt {
 		t.Fatal("SetSecret should mark password Encrypt")
+	}
+}
+
+// #测试10:加密结果带明文标签 ENC:
+func TestSecretTagPrefix(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key"}
+
+	cipherText, eror := eng.Secret("p@ssw0rd", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if !strings.HasPrefix(cipherText, UniSecretTag) {
+		t.Fatalf("cipher text should carry tag %s, got %s", UniSecretTag, cipherText)
+	}
+	if !eng.IsEncrypted(cipherText) {
+		t.Fatal("IsEncrypted should be true for tagged cipher text")
+	}
+	if eng.IsEncrypted("legacy-plain") {
+		t.Fatal("IsEncrypted should be false for legacy plain text")
+	}
+}
+
+// #测试11:存量明文鉴别——解密时无标签的值直通返回,不报错
+func TestSecretLegacyPassthrough(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key"}
+
+	// #存量明文(未加密时代写入的数据)
+	for _, legacy := range []string{"p@ssw0rd", "123456", "abc-中文-123"} {
+		got, eror := eng.Secret(legacy, false)
+		if eror != nil {
+			t.Fatalf("legacy plain text %q should not error: %v", legacy, eror)
+		}
+		if got != legacy {
+			t.Fatalf("legacy plain text %q should pass through unchanged, got %q", legacy, got)
+		}
+	}
+}
+
+// #测试12:带标签但密钥错误的密文,解密报错(不静默)
+func TestSecretWrongKey(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "key-a"}
+	eng2 := &TUniEngine{SecretOn: 1, SecretBy: "key-b"}
+
+	cipherText, eror := eng.Secret("secret", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if _, eror = eng2.Secret(cipherText, false); eror == nil {
+		t.Fatal("decrypt with wrong key should fail")
+	}
+}
+
+// #测试13:混合数据读取——存量明文与新密文共存,Select 均能正确还原
+func TestSelectMixedLegacyAndEncrypted(t *testing.T) {
+	eng := newTestEngine(&mockDriver{})
+
+	cipherText, _ := eng.Secret("new-secret", true)
+	d := &mockDriver{
+		columns: []string{"user_name", "password"},
+		queryRows: [][]driver.Value{
+			{"legacy_user", "old-plain-pass"}, // #存量明文行
+			{"new_user", cipherText},          // #加密后新行
+		},
+	}
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+
+	var users []TTestUser
+	if eror := eng.SelectL(&users, "select * from test_user"); eror != nil {
+		t.Fatal(eror)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expect 2 rows, got %d", len(users))
+	}
+	if users[0].Password != "old-plain-pass" {
+		t.Fatalf("legacy row should stay plain, got %q", users[0].Password)
+	}
+	if users[1].Password != "new-secret" {
+		t.Fatalf("new row should be decrypted, got %q", users[1].Password)
 	}
 }
