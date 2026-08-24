@@ -39,15 +39,57 @@ func (self *TUniTable) SetKeys(Fields ...interface{}) error {
 
 	for _, ItemPara := range Fields {
 
-		Field, Valid = self.HashField[strings.ToLower(ItemPara.(string))]
+		fieldName, ok := ItemPara.(string)
+		if !ok {
+			return fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
+		}
+
+		Field, Valid = self.HashField[strings.ToLower(fieldName)]
+		if Valid {
+			lowerName := strings.ToLower(fieldName)
+			if _, exists := self.HashPkeys[lowerName]; !exists {
+				self.HashPkeys[lowerName] = Field
+				self.ListPkeys = append(self.ListPkeys, Field)
+			}
+		} else {
+			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered", self.TableName, strings.ToLower(fieldName))
+		}
+	}
+
+	return nil
+}
+
+func (self *TUniTable) SetSecret(Fields ...interface{}) error {
+
+	var Valid bool
+	var Field TUniField
+
+	for _, ItemPara := range Fields {
+
+		fieldName, ok := ItemPara.(string)
+		if !ok {
+			return fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
+		}
+
+		lowerName := strings.ToLower(fieldName)
+
+		Field, Valid = self.HashField[lowerName]
 		switch Valid {
 		case true:
 			{
-				self.HashPkeys[strings.ToLower(ItemPara.(string))] = Field
+				Field.Encrypt = true
+				self.HashField[lowerName] = Field
+
+				//#ListField 是 HashField 的另一份副本,须同步标记,否则 PrepareRunSQL 路径会读到旧值
+				for i := range self.ListField {
+					if strings.ToLower(self.ListField[i].FieldName) == lowerName {
+						self.ListField[i].Encrypt = true
+					}
+				}
 			}
 		default:
 			{
-				return fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", self.TableName, strings.ToLower(ItemPara.(string)))
+				return fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", self.TableName, lowerName)
 			}
 		}
 	}
@@ -79,6 +121,10 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 
 	}
 
+	if cSQL == "" {
+		return fmt.Errorf("UniEngine: can not build autokeys sql for table:%s", self.TableName)
+	}
+
 	if this.runDebug {
 		fmt.Println(cSQL)
 	}
@@ -90,7 +136,7 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 	}
 
 	if len(ListData) == 0 {
-		return fmt.Errorf("UniEngine: table:%s or his.primary key may be not exist.", self.TableName)
+		return fmt.Errorf("UniEngine: table:%s or its primary key may not exist.", self.TableName)
 	}
 
 	var CodeText string
@@ -100,8 +146,12 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		switch Valid {
 		case true:
 			{
-				self.HashPkeys[strings.ToLower(ItemPara.FieldName)] = ItemCopy
-				CodeText = CodeText + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
+				lowerName := strings.ToLower(ItemPara.FieldName)
+				if _, exists := self.HashPkeys[lowerName]; !exists {
+					self.HashPkeys[lowerName] = ItemCopy
+					self.ListPkeys = append(self.ListPkeys, ItemCopy)
+				}
+				CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
 			}
 		default:
 			{

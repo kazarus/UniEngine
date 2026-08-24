@@ -21,3 +21,6 @@ coverage.html
 *.swp
 .idea/
 .vscode/
+
+# Local Go toolchain caches
+.cache/

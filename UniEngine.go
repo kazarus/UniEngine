@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/lib/pq"
 )
@@ -29,12 +30,15 @@ type TUniEngine struct {
 	tx *sql.Tx
 	st *sql.Stmt
 
-	ColLabel string //#字段字号
-	ColParam string //#参数符号
+	mu       *sync.Mutex //#保护 HashTabl 初始化/注册（指针：按值传递引擎时共享同一把锁）
+	ColLabel string      //#字段字号
+	ColParam string      //#参数符号
 	HashTabl map[string]*TUniTable
 
 	SecretOn int64  //#开启敏感信息加密
 	SecretBy string //#敏感信息加密密钥
+
+	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
 
 	Instance string     //#数据库实例
 	DataBase string     //#数据库名称
@@ -44,6 +48,54 @@ type TUniEngine struct {
 
 	canClose bool //default is true;if is transaction,canClose = false
 	runDebug bool //default is false;print some sql;
+}
+
+// muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）
+var muLazy sync.Mutex
+
+// initLock 保证 self.mu 已创建（并发安全；供 Initialize 与 lockTables 调用）
+func (self *TUniEngine) initLock() {
+
+	muLazy.Lock()
+	defer muLazy.Unlock()
+
+	if self.mu == nil {
+		self.mu = &sync.Mutex{}
+	}
+}
+
+// lockTables 保证锁可用并加锁（懒初始化并发安全）
+func (self *TUniEngine) lockTables() {
+
+	self.initLock()
+	self.mu.Lock()
+}
+
+// ensureTables 保证 HashTabl 已初始化（加锁，供只读方法调用）
+func (self *TUniEngine) ensureTables() {
+
+	self.lockTables()
+	defer self.mu.Unlock()
+
+	if self.HashTabl == nil {
+		self.HashTabl = make(map[string]*TUniTable, 0)
+	}
+}
+
+// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
+func validIdent(name string) bool {
+
+	if name == "" {
+		return false
+	}
+
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.') {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (self *TUniEngine) getValParam(aIndex int) string {
@@ -65,37 +117,35 @@ func (self *TUniEngine) getColParam(FieldName string) string {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	return fmt.Sprintf(`"` + FieldName + `"`)
+	return "\"" + FieldName + "\""
 }
+
+// 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
+var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
 func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
 
-	//#kazarus:2020_10_31_<
 	if self.Provider == DtORACLE && len(args) > 0 {
 
 		if self.runDebug {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
 		}
 
-		SqlQuery = strings.ReplaceAll(SqlQuery, "$", self.ColParam)
+		// 仅替换参数占位符（$1 -> :1），避免误改 SQL 文本中其它 $ 字符
+		SqlQuery = reParamPlaceholder.ReplaceAllStringFunc(SqlQuery, func(m string) string {
+			return ":" + m[1:]
+		})
 	}
-	//#kazarus:2020_10_31_>
 
-	//#kazarus:2025_10_17_<
 	if self.Provider == DtMYSQLN && len(args) > 0 {
 
 		if self.runDebug {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
 		}
 
-		re, eror := regexp.Compile(`\$\d+`)
-		if eror != nil {
-			return ""
-		}
-
-		SqlQuery = re.ReplaceAllString(SqlQuery, "?")
+		// 包级预编译正则，消除每次调用 Compile 的开销与静默失败返回空串的路径
+		SqlQuery = reParamPlaceholder.ReplaceAllString(SqlQuery, "?")
 	}
-	//#kazarus:2025_10_17_>
 
 	return SqlQuery
 }
@@ -173,6 +223,9 @@ func (self *TUniEngine) DefaultPageSize() int64 {
 
 func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
 		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
@@ -195,14 +248,22 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 		UniField.initialize(f.Tag.Get(self.ColLabel))
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
+		// 保留 struct 声明顺序，供 INSERT/UPDATE 列序生成
+		UniTable.ListField = append(UniTable.ListField, UniField)
 	}
 
+	// 同时以小写表名（PrepareTables/PrepareRunSQL 路径）与类全名（SaveIt/Insert/Delete/Select* 路径）注册，
+	// 统一两套 key 的可见性；两者指向同一表
+	self.HashTabl[strings.ToLower(TableName)] = UniTable
 	self.HashTabl[t.String()] = UniTable
 
 	return UniTable
 }
 
 func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTable {
+
+	self.lockTables()
+	defer self.mu.Unlock()
 
 	if self.HashTabl == nil {
 		self.HashTabl = make(map[string]*TUniTable, 0)
@@ -230,6 +291,9 @@ func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 }
 
 func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniTable {
+
+	self.lockTables()
+	defer self.mu.Unlock()
 
 	if self.HashTabl == nil {
 		self.HashTabl = make(map[string]*TUniTable, 0)
@@ -263,6 +327,9 @@ func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 
 func (self *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniTable {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
 	if self.HashTabl == nil {
 		self.HashTabl = make(map[string]*TUniTable, 0)
 	}
@@ -291,9 +358,7 @@ func (self *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 
 func (self *TUniEngine) GetTable(TableName string) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]*TUniTable, 0)
-	}
+	self.ensureTables()
 
 	UniTable, _ := self.HashTabl[strings.ToLower(TableName)]
 
@@ -302,9 +367,7 @@ func (self *TUniEngine) GetTable(TableName string) *TUniTable {
 
 func (self *TUniEngine) PrepareTables(TableName string) error {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]*TUniTable, 0)
-	}
+	self.ensureTables()
 
 	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
 	switch Valid {
@@ -356,9 +419,7 @@ func (self *TUniEngine) PrepareTables(TableName string) error {
 
 func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (string, []TUniField, []TUniField, error) {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]*TUniTable, 0)
-	}
+	self.ensureTables()
 
 	var SqlResult string
 	var ListField = make([]TUniField, 0)
@@ -680,6 +741,10 @@ func (self *TUniEngine) SelectCtx(ctx context.Context, i interface{}, SqlQuery s
 				if eror != nil {
 					return eror
 				}
+
+				if eror = self.DecryptResult(&Result, UniTable, column); eror != nil {
+					return eror
+				}
 			}
 		}
 	}
@@ -778,6 +843,11 @@ func (self *TUniEngine) SelectLCtx(ctx context.Context, i interface{}, SqlQuery 
 
 				eror = rows.Scan(values...)
 				if eror != nil {
+					return eror
+				}
+
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, UniTable, column); eror != nil {
 					return eror
 				}
 
@@ -891,6 +961,11 @@ func (self *TUniEngine) SelectMCtx(ctx context.Context, i interface{}, SqlQuery 
 					return eror
 				}
 
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, UniTable, column); eror != nil {
+					return eror
+				}
+
 				var MapUnique string
 				if x, ok := u.Interface().(HasGetMapUnique); ok {
 					MapUnique = x.GetMapUnique()
@@ -1001,6 +1076,11 @@ func (self *TUniEngine) SelectHCtx(ctx context.Context, i interface{}, f GetMapU
 					return eror
 				}
 
+				elem := u.Elem()
+				if eror = self.DecryptResult(&elem, UniTable, column); eror != nil {
+					return eror
+				}
+
 				var MapUnique string
 				if f != nil {
 					MapUnique = f(u.Elem().Interface())
@@ -1044,6 +1124,10 @@ func (self *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, args ...in
 
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1128,6 +1212,10 @@ func (self *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	ColIndex := 1
@@ -1209,6 +1297,10 @@ func (self *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, args ...in
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	//#打印语句
 	if self.runDebug {
 		fmt.Printf("UniEngine: try update table:%s\n", UniTable.TableName)
@@ -1244,6 +1336,16 @@ func (self *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, args ...in
 			}
 
 			UniField = UniField + "," + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
+
+			if ItemPara.Encrypt {
+				Value, eror := self.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+				if eror != nil {
+					return eror
+				}
+				xValue = append(xValue, Value)
+				ColIndex = ColIndex + 1
+				continue
+			}
 			xValue = append(xValue, v.FieldByName(ItemPara.AttriName).Interface())
 
 			ColIndex = ColIndex + 1
@@ -1318,6 +1420,10 @@ func (self *TUniEngine) InsertCtx(ctx context.Context, i interface{}, args ...in
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	ColIndex := 1
@@ -1346,6 +1452,14 @@ func (self *TUniEngine) InsertCtx(ctx context.Context, i interface{}, args ...in
 			SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 			ColIndex = ColIndex + 1
 
+			if ItemPara.Encrypt {
+				Value, eror := self.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+				if eror != nil {
+					return eror
+				}
+				SqlValue = append(SqlValue, Value)
+				continue
+			}
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
@@ -1413,6 +1527,10 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, args ...i
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	if v.Len() == 0 {
@@ -1468,6 +1586,15 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, args ...i
 
 						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 						ColIndex = ColIndex + 1
+
+						if ItemPara.Encrypt {
+							Value, eror := self.secretEncrypt(f.FieldByName(ItemPara.AttriName))
+							if eror != nil {
+								return eror
+							}
+							SqlValue = append(SqlValue, Value)
+							continue
+						}
 						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 					}
 
@@ -1490,6 +1617,15 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, args ...i
 
 						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
 						ColIndex = ColIndex + 1
+
+						if ItemPara.Encrypt {
+							Value, eror := self.secretEncrypt(f.FieldByName(ItemPara.AttriName))
+							if eror != nil {
+								return eror
+							}
+							SqlValue = append(SqlValue, Value)
+							continue
+						}
 						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 					}
 
@@ -1523,11 +1659,21 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, args ...i
 	return nil
 }
 
-func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error {
-	return self.SpecialInsertLCtx(context.Background(), i, args...)
+func (self *TUniEngine) CopyInL(i interface{}, args ...interface{}) error {
+	return self.CopyInLCtx(context.Background(), i, args...)
 }
 
+// #已废弃:旧版命名,新代码请用 CopyInL;仅为源码兼容保留
+func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error {
+	return self.CopyInLCtx(context.Background(), i, args...)
+}
+
+// #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
 func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, args ...interface{}) error {
+	return self.CopyInLCtx(ctx, i, args...)
+}
+
+func (self *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, args ...interface{}) error {
 
 	var eror error
 	var mrok bool
@@ -1536,7 +1682,7 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 	if len(args) > 0 {
 		TablName, mrok = args[0].(string)
 		if !mrok {
-			return errors.New("UniEngine: method [SpecialInsertL] the second paramter need a string value.")
+			return errors.New("UniEngine: method [CopyInL] the second paramter need a string value.")
 		}
 	}
 
@@ -1545,7 +1691,7 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [SpecialInsertL] need a slice params; check your code;")
+		return errors.New("UniEngine: method [CopyInL] need a slice params; check your code;")
 	}
 	t = t.Elem()
 
@@ -1561,6 +1707,10 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 		TablName = UniTable.TableName
 	}
 
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
+	}
+
 	v := reflect.Indirect(reflect.ValueOf(i))
 
 	if v.Len() == 0 {
@@ -1572,11 +1722,20 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
-	if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
+	if x, ok := v.Index(0).Interface().(HasCopyInGetSqlInsertL); ok {
+		SqlQuery = x.CopyInGetSqlInsertL(*self, TablName, int64(v.Len()))
+	} else if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
+		//#兼容旧版接口
 		SqlQuery = x.SpecialGetSqlInsertL(*self, TablName, int64(v.Len()))
 	}
 
-	if x, ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); ok {
+	if x, ok := v.Index(0).Interface().(HasCopyInSetSqlValuesL); ok {
+		for m := 0; m < v.Len(); m++ {
+			f := v.Index(m)
+			x.CopyInSetSqlValuesL(*self, EtInsert, f, &SqlValue)
+		}
+	} else if x, ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); ok {
+		//#兼容旧版接口
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
 			x.SpecialSetSqlValuesL(*self, EtInsert, f, &SqlValue)
@@ -1609,6 +1768,14 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 
 			for _, ItemPara := range HashField {
 
+				if ItemPara.Encrypt {
+					Value, eror := self.secretEncrypt(f.FieldByName(ItemPara.AttriName))
+					if eror != nil {
+						return eror
+					}
+					row = append(row, Value)
+					continue
+				}
 				row = append(row, f.FieldByName(ItemPara.AttriName).Interface())
 			}
 
@@ -1625,9 +1792,9 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 	//#PolarDB
 	Sql4Text := strings.ToLower(pq.CopyIn(TablName, SqlQuery...))
 
-	self.st, eror = self.tx.PrepareContext(ctx, Sql4Text)
+	eror = self.prepareCtx(ctx, Sql4Text)
 	if eror != nil {
-		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error())
+		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [CopyInP(PageSize)] method;", eror.Error())
 	}
 	defer self.st.Close()
 
@@ -1642,7 +1809,7 @@ func (self *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, ar
 	// 完成 COPY
 	_, eror = self.st.ExecContext(ctx)
 	if eror != nil {
-		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error())
+		return fmt.Errorf("%s@UniEngine: if errored too many parameters; try [CopyInP(PageSize)] method;", eror.Error())
 	}
 
 	return nil
@@ -1685,7 +1852,7 @@ func (self *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize 
 			switch self.Supplier {
 			case DtPOLODB:
 				{
-					eror = self.SpecialInsertLCtx(ctx, ListData.Interface(), args...)
+					eror = self.CopyInLCtx(ctx, ListData.Interface(), args...)
 				}
 			default:
 				{
@@ -1703,7 +1870,7 @@ func (self *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize 
 	switch self.Supplier {
 	case DtPOLODB:
 		{
-			eror = self.SpecialInsertLCtx(ctx, ListData.Interface(), args...)
+			eror = self.CopyInLCtx(ctx, ListData.Interface(), args...)
 		}
 	default:
 		{
@@ -1718,11 +1885,21 @@ func (self *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize 
 	return nil
 }
 
-func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...interface{}) error {
-	return self.SpecialInsertPCtx(context.Background(), i, PageSize, args...)
+func (self *TUniEngine) CopyInP(i interface{}, PageSize int64, args ...interface{}) error {
+	return self.CopyInPCtx(context.Background(), i, PageSize, args...)
 }
 
+// #已废弃:旧版命名,新代码请用 CopyInP;仅为源码兼容保留
+func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...interface{}) error {
+	return self.CopyInPCtx(context.Background(), i, PageSize, args...)
+}
+
+// #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
 func (self *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, PageSize int64, args ...interface{}) error {
+	return self.CopyInPCtx(ctx, i, PageSize, args...)
+}
+
+func (self *TUniEngine) CopyInPCtx(ctx context.Context, i interface{}, PageSize int64, args ...interface{}) error {
 
 	var eror error
 
@@ -1735,7 +1912,7 @@ func (self *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, Pa
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [SpecialInsertP] need a slice params; check your code;")
+		return errors.New("UniEngine: method [CopyInP] need a slice params; check your code;")
 	}
 
 	if self.runDebug {
@@ -1751,7 +1928,7 @@ func (self *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, Pa
 		ListData = reflect.Append(ListData, Value)
 
 		if ListData.Len() == int(PageSize) {
-			eror = self.SpecialInsertLCtx(ctx, ListData.Interface(), args...)
+			eror = self.CopyInLCtx(ctx, ListData.Interface(), args...)
 			if eror != nil {
 				return eror
 			}
@@ -1759,7 +1936,7 @@ func (self *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, Pa
 		}
 	}
 
-	eror = self.SpecialInsertLCtx(ctx, ListData.Interface(), args...)
+	eror = self.CopyInLCtx(ctx, ListData.Interface(), args...)
 	if eror != nil {
 		return eror
 	}
@@ -1798,6 +1975,10 @@ func (self *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, args ...in
 
 	if TablName == "" {
 		TablName = UniTable.TableName
+	}
+
+	if !validIdent(TablName) {
+		return errors.New("UniEngine: invalid table name: " + TablName)
 	}
 
 	v := reflect.Indirect(reflect.ValueOf(i))
@@ -1914,6 +2095,10 @@ func (self *TUniEngine) IfDropView(TableName string) (bool, error) {
 
 func (self *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bool, error) {
 
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
+
 	var eror error
 	var cSQL string
 
@@ -1944,6 +2129,10 @@ func (self *TUniEngine) ExistTable(TableName string) (bool, error) {
 }
 
 func (self *TUniEngine) ExistTableCtx(ctx context.Context, TableName string) (bool, error) {
+
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
 
 	var eror error
 	cSQL := ""
@@ -1999,6 +2188,10 @@ func (self *TUniEngine) ExistViews(TableName string) (bool, error) {
 
 func (self *TUniEngine) ExistViewsCtx(ctx context.Context, TableName string) (bool, error) {
 
+	if !validIdent(TableName) {
+		return false, errors.New("UniEngine: invalid table name: " + TableName)
+	}
+
 	var eror error
 	cSQL := ""
 
@@ -2052,6 +2245,10 @@ func (self *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 }
 
 func (self *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName string) (bool, error) {
+
+	if !validIdent(TableName) || !validIdent(FieldName) {
+		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
+	}
 
 	var eror error
 	cSQL := ""
@@ -2205,6 +2402,10 @@ func (self *TUniEngine) RunDebug(Value bool) error {
 }
 
 func (self *TUniEngine) Initialize() error {
+
+	//#并发契约:注册(RegisterClass/RegisterTable/...)须在并发查询开始前完成;
+	//#本锁仅保证注册互斥与 HashTabl 初始化,读路径不持锁
+	self.initLock()
 
 	self.RegisterClass(TUniTable{}, "github.com/kazarus/uniengine/unitable")
 	self.RegisterClass(TUniField{}, "github.com/kazarus/uniengine/unifield")

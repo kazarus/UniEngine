@@ -3,6 +3,7 @@
 UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
 
 > 注意:`TUniEngine` 持有预备语句、事务等可变状态,**非并发安全**。请每 goroutine 独立实例,或串行调用。底层 `*sql.DB` 本身并发安全。
+> 注册方法(RegisterClass / RegisterTable / RegisterField / RegisterPkeys)内部有互斥锁保护,可并发调用;但**注册必须在并发查询/写入开始前完成**——查询路径读取注册表时不持锁,运行中动态注册与查询并发属未定义行为。
 
 ##### 0.0.驱动安装
 
@@ -70,3 +71,81 @@ defer cancel()
 
 eror = UniEngineEx.InsertCtx(ctx, &row)
 ```
+
+##### 3.应用加密(敏感字段)
+
+UniEngine 提供应用层加密 hook,敏感字段(密码/证件号/手机号等)写入时自动加密,读取时自动解密。
+
+```go
+//#1.注册类时,给敏感字段打上 encrypt 标记(结构体 tag)
+UniEngineEx.RegisterClass(mock.TUSER{}, "mock_user")
+//# 字段声明示例:Password string `db:"password,encrypt"`
+
+//#2.开启加密,并设置密钥
+UniEngineEx.SecretOn = 1
+UniEngineEx.SecretBy = "your-secret-key"
+
+//#3.可选:自定义加密钩子(默认内置 AES-256-GCM)
+UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
+    if Encrypt {
+        return myEncrypt(Value) //#业务密钥/国密/加密机
+    }
+    return myDecrypt(Value)
+}
+```
+
+- 写入:Insert / Update / InsertL / CopyInL 对标记字段自动加密
+- 读取:Select / SelectL / SelectM / SelectH 对标记字段自动解密
+- SecretOn=0(默认)时一切直通,不改变原有行为
+- 手工注册的字段可用 `.SetSecret("password")` 标记加密
+- 主键字段请勿标记 encrypt(密文含随机nonce,无法用于匹配)
+- **encrypt 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
+- **SecretBy 请使用高熵随机密钥**(如 32 字节随机串):内置实现以 SHA-256(SecretBy) 派生 AES 密钥,无盐无迭代,人类口令可被离线暴力破解
+- 密文格式:`ENC:` + base64( 随机nonce + AES-256-GCM密文 )
+
+##### 3.1.存量数据鉴别与迁移
+
+开启加密后,库中会存在两类数据:加密前的存量明文 + 加密后的新密文。
+密文统一带明文前缀标签 `ENC:`,读取时自动鉴别:
+
+- 带 `ENC:` 标签 → 密文,解密后返回
+- 无标签 → 存量明文,直通返回(不报错、不解密)
+
+```go
+//# 迁移脚本:逐行读出存量明文,重新保存后即落为加密密文
+UniEngineEx.IsEncrypted(value) //# true=密文 false=存量明文
+
+//# 示例:读取全量用户,让 SaveIt/Update 自动把存量明文加密
+var users []mock.TUSER
+UniEngineEx.SelectL(&users, "select * from mock_user")
+for i := range users {
+    UniEngineEx.SaveIt(&users[i], "mock_user") //# 或 Update
+}
+```
+
+注意:存量明文若恰好以 `ENC:` 开头会被误判为密文(真实敏感数据概率极低);
+带标签但密钥错误的密文会解密报错(不静默,便于发现密钥轮换问题)。
+
+##### 4.从旧版本迁移(SpecialInsert → CopyIn)
+
+`SpecialInsert*` 系列方法更名为 `CopyIn*`(语义即 PostgreSQL 的 COPY IN 协议):
+
+| 旧名称              | 新名称    |
+| ------------------- | --------- |
+| SpecialInsertL      | CopyInL   |
+| SpecialInsertLCtx   | CopyInLCtx|
+| SpecialInsertP      | CopyInP   |
+| SpecialInsertPCtx   | CopyInPCtx|
+| HasSpecialGetSqlInsertL | HasCopyInGetSqlInsertL |
+| HasSpecialSetSqlValuesL | HasCopyInSetSqlValuesL |
+
+- 旧方法名保留为**废弃包装**,直接委托到新实现,源码兼容无需改动;
+- 旧接口仍被引擎探测:已实现 `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` 的类**无需改动即可继续工作**,建议尽快迁移到新接口。
+
+同版本其他行为变化:
+
+- **表名/字段名白名单校验**:所有拼入 SQL 的表名/字段名仅允许字母/数字/下划线/点,非法字符直接报错(防注入);
+- **ExistViews 修正**:PostgreSQL(补 `relkind='v'`)/ SQLServer(补 `xtype='V'`)/ MySQL(改查 `information_schema.views`)不再把同名普通表误判为视图;
+- **SQLServer 主键探测**改用 `sys.indexes` 目录视图(替代老旧的 syscolumns/sysindexes 联查);
+- **RegisterClass 双 key 注册**:类同时以"小写表名"和"类全名"注册(统一 GetTable 与 SaveIt 路径的可见性)。注意:两个类注册同一表名时,小写表名 key 以后注册者为准;
+- Oracle 下 `$` 替换收窄到参数占位符(`$1`),不再误伤 SQL 文本中其它 `$` 字符。

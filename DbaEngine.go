@@ -129,6 +129,11 @@ type HasGetSqlInsertL interface {
 }
 
 // #批量插入SQL-copy协议
+type HasCopyInGetSqlInsertL interface {
+	CopyInGetSqlInsertL(TUniEngine, string, int64) []string
+}
+
+// #批量插入SQL-copy协议#已废弃:旧版命名,新代码请实现 HasCopyInGetSqlInsertL;引擎仍会探测本接口
 type HasSpecialGetSqlInsertL interface {
 	SpecialGetSqlInsertL(TUniEngine, string, int64) []string
 }
@@ -149,6 +154,11 @@ type HasSetSqlValuesL interface {
 }
 
 // #批量赋值L-copy协议
+type HasCopyInSetSqlValuesL interface {
+	CopyInSetSqlValuesL(TUniEngine, TQueryType, reflect.Value, *[][]interface{})
+}
+
+// #批量赋值L-copy协议#已废弃:旧版命名,新代码请实现 HasCopyInSetSqlValuesL;引擎仍会探测本接口
 type HasSpecialSetSqlValuesL interface {
 	SpecialSetSqlValuesL(TUniEngine, TQueryType, reflect.Value, *[][]interface{})
 }
@@ -179,7 +189,7 @@ func (self TExistTable4POSTGR) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4POSTGR) GetSqlExistViews(UniEngineEx TUniEngine, TableName string) string {
 
-	result := "select count(relname) as value from pg_class where relname='%s'"
+	result := "select count(relname) as value from pg_class where relname='%s' and relkind='v'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
@@ -195,7 +205,7 @@ func (self TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx TUniEngine, TableName string) string {
 
-	result := "select count(*) from sysobjects where 1=1 and name='%s'"
+	result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='V'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
@@ -228,7 +238,7 @@ func (self TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx TUniEngine, TableNam
 
 func (self TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
+	result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
 	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
@@ -302,16 +312,12 @@ type TAutoKeys4SQLSRV struct{}
 
 func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx TUniEngine, TableName string) (string, error) {
 
-	result := "select syscolumns.name as field_name" +
-		"    from syscolumns,sysobjects,sysindexes,sysindexkeys" +
-		"    where syscolumns.id=object_id('%s')" +
-		"    and sysobjects.xtype='pk'" +
-		"    and sysobjects.parent_obj=syscolumns.id" +
-		"    and sysindexes.id=syscolumns.id" +
-		"    and sysobjects.name=sysindexes.name" +
-		"    and sysindexkeys.id=syscolumns.id" +
-		"    and sysindexkeys.indid=sysindexes.indid" +
-		"    and syscolumns.colid=sysindexkeys.colid;"
+	result := "select c.name as field_name" +
+		"    from sys.indexes i" +
+		"    inner join sys.index_columns ic on ic.object_id = i.object_id and ic.index_id = i.index_id" +
+		"    inner join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id" +
+		"    where i.object_id = object_id('%s') and i.is_primary_key = 1" +
+		"    order by ic.index_column_id"
 
 	return fmt.Sprintf(result, TableName), nil
 }
