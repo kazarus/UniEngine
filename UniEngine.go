@@ -2294,17 +2294,63 @@ func (self *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName 
 	return true, eror
 }
 
-// ExistConst is not implemented yet; it returns a descriptive error instead
-// of silently executing an empty SQL statement.
+// #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
 func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
 	return self.ExistConstCtx(context.Background(), aConstType, aConstName)
 }
 
 func (self *TUniEngine) ExistConstCtx(ctx context.Context, aConstType TConstType, aConstName string) (bool, error) {
-	_ = ctx
-	_ = aConstType
-	_ = aConstName
-	return false, fmt.Errorf("UniEngine: ExistConst is not implemented yet")
+
+	if !validIdent(aConstName) {
+		return false, errors.New("UniEngine: invalid constraint name: " + aConstName)
+	}
+
+	var eror error
+	cSQL := ""
+
+	switch self.Provider {
+	case DtPOSTGR:
+		{
+			var ExistConst4POSTGR = TExistConst4POSTGR{}
+			cSQL = ExistConst4POSTGR.GetSqlExistConst(*self, aConstType, aConstName)
+		}
+	case DtSQLSRV:
+		{
+			var ExistConst4SQLSRV = TExistConst4SQLSRV{}
+			cSQL = ExistConst4SQLSRV.GetSqlExistConst(*self, aConstType, aConstName)
+		}
+	case DtORACLE:
+		{
+			var ExistConst4ORACLE = TExistConst4ORACLE{}
+			cSQL = ExistConst4ORACLE.GetSqlExistConst(*self, aConstType, aConstName)
+		}
+	case DtMYSQLN:
+		{
+			if self.DataBase == "" {
+				return false, errors.New("UniEngine: database is not specified")
+			}
+			var ExistConst4MYSQLN = TExistConst4MYSQLN{}
+			cSQL = ExistConst4MYSQLN.GetSqlExistConst(*self, aConstType, aConstName, self.DataBase)
+		}
+	}
+
+	if self.runDebug {
+		fmt.Println("UniEngine: existconst.sql", cSQL)
+	}
+
+	if cSQL == "" {
+		return false, errors.New("UniEngine: no sql for existconst")
+	}
+
+	Size, eror := self.SelectDCtx(ctx, cSQL)
+	if eror != nil {
+		return false, eror
+	}
+	if Size == 0 {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (self *TUniEngine) prepareCtx(ctx context.Context, SqlQuery string) error {

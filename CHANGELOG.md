@@ -29,6 +29,7 @@
   - `SecretHook` 自定义加密钩子，默认内置 AES-256-GCM（密文带 `ENC:` 标签）；
   - 读取自动解密、存量明文（无标签）自动鉴别直通；
   - 非 `string` 字段标记 `encrypt` 时写入 `fast-fail` 报错。
+- **`ExistConst` 约束存在性检查**：支持 `CtPK`/`CtFK`/`CtUK`/`CtDF` 四类约束，按数据库方言查询系统目录（PG `pg_constraint`/`pg_attrdef`、SQLServer `sys.objects`、Oracle `user_constraints`/`user_tab_cols`、MySQL `information_schema`），并对约束名做 `validIdent` 防注入校验。
 - **加固**：
   - `validIdent` 表名/字段名防注入校验；
   - 注册表 `HashTabl` 增加 `sync.Mutex` 保护；

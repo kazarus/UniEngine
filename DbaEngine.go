@@ -288,7 +288,83 @@ func (self TExistField4MYSQLN) GetSqlExistField(UniEngineEx TUniEngine, TableNam
 
 // #for tuniengine get exist const
 type HasGetSqlExistConst interface {
-	GetSqlExistConst() string
+	GetSqlExistConst(TUniEngine, TConstType, string) string
+}
+
+type TExistConst4POSTGR struct{}
+
+// #PG:主键/外键/唯一 走 pg_constraint(contype:p/f/u);默认值挂在 pg_attrdef,按列名查
+func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+
+	switch aConstType {
+	case CtPK:
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='p'", strings.ToLower(aConstName))
+	case CtFK:
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='f'", strings.ToLower(aConstName))
+	case CtUK:
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='u'", strings.ToLower(aConstName))
+	case CtDF:
+		return fmt.Sprintf("select count(*) from pg_attrdef d join pg_class c on c.oid=d.adrelid join pg_attribute a on a.attrelid=c.oid and a.attnum=d.adnum where a.attname='%s'", strings.ToLower(aConstName))
+	}
+
+	return ""
+}
+
+type TExistConst4SQLSRV struct{}
+
+// #SQLServer:约束对象都在 sys.objects,type:PK/F/UQ/D
+func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+
+	switch aConstType {
+	case CtPK:
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='PK'", strings.ToLower(aConstName))
+	case CtFK:
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='F'", strings.ToLower(aConstName))
+	case CtUK:
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='UQ'", strings.ToLower(aConstName))
+	case CtDF:
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='D'", strings.ToLower(aConstName))
+	}
+
+	return ""
+}
+
+type TExistConst4ORACLE struct{}
+
+// #Oracle:主键 P、外键 R(引用)、唯一 U 在 user_constraints;默认值在 user_tab_cols.data_default,按列名查
+func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+
+	switch aConstType {
+	case CtPK:
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='P'", aConstName)
+	case CtFK:
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='R'", aConstName)
+	case CtUK:
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='U'", aConstName)
+	case CtDF:
+		return fmt.Sprintf("select count(*) from user_tab_cols where column_name=upper('%s') and data_default is not null", aConstName)
+	}
+
+	return ""
+}
+
+type TExistConst4MYSQLN struct{}
+
+// #MySQL:命名约束在 information_schema.table_constraints;默认值在 information_schema.columns,按列名查
+func (self TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string, DataBase string) string {
+
+	switch aConstType {
+	case CtPK:
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='PRIMARY KEY' and table_schema='%s'", aConstName, DataBase)
+	case CtFK:
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='FOREIGN KEY' and table_schema='%s'", aConstName, DataBase)
+	case CtUK:
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='UNIQUE' and table_schema='%s'", aConstName, DataBase)
+	case CtDF:
+		return fmt.Sprintf("select count(*) from information_schema.columns where column_name='%s' and table_schema='%s' and column_default is not null", aConstName, DataBase)
+	}
+
+	return ""
 }
 
 // #for tuniengine get primary keys

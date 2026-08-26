@@ -1,6 +1,8 @@
 package UniEngine
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"reflect"
 	"strings"
 	"testing"
@@ -309,18 +311,100 @@ func TestPrepareRunSQLUpdate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ExistConst: 应返回明确的 not-implemented 错误(旧代码查询空串)。
+// ExistConst: 未设置 Provider 时应返回明确的 no-sql 错误(而非执行空串)。
 // ---------------------------------------------------------------------------
 
-func TestExistConstNotImplemented(t *testing.T) {
-	e := newTestEngine()
+func TestExistConstUnsupportedProvider(t *testing.T) {
+	e := TUniEngine{} // Provider 未设置(0),无对应 SQL
 	ok, err := e.ExistConst(CtPK, "any")
 	if ok {
-		t.Fatal("expected false for unimplemented ExistConst")
+		t.Fatal("expected false for unsupported provider")
 	}
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected not-implemented error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no sql for existconst") {
+		t.Fatalf("expected no-sql error, got: %v", err)
 	}
 }
 
-// (ctx 变体方法的存在性由 go build 保证;运行时需真实 DB,此处不覆盖。)
+func TestExistConstRejectsInjection(t *testing.T) {
+	e := newTestEngine()
+	if _, err := e.ExistConst(CtPK, "x;drop table t"); err == nil {
+		t.Error("ExistConst with malicious name should return error")
+	}
+}
+
+func TestExistConstSQLGenerators(t *testing.T) {
+	eng := TUniEngine{}
+	allTypes := []TConstType{CtPK, CtFK, CtUK, CtDF}
+
+	pg := TExistConst4POSTGR{}
+	for _, c := range allTypes {
+		if sql := pg.GetSqlExistConst(eng, c, "nm"); sql == "" {
+			t.Errorf("pg GetSqlExistConst(%v) should not be empty", c)
+		}
+	}
+	if sql := pg.GetSqlExistConst(eng, CtPK, "pk_user"); !strings.Contains(sql, "contype='p'") || !strings.Contains(sql, "pk_user") {
+		t.Errorf("pg pk sql wrong: %s", sql)
+	}
+
+	ss := TExistConst4SQLSRV{}
+	for _, c := range allTypes {
+		if sql := ss.GetSqlExistConst(eng, c, "nm"); sql == "" {
+			t.Errorf("sqlsrv GetSqlExistConst(%v) should not be empty", c)
+		}
+	}
+	if sql := ss.GetSqlExistConst(eng, CtUK, "uq_email"); !strings.Contains(sql, "type='UQ'") {
+		t.Errorf("sqlsrv uk sql wrong: %s", sql)
+	}
+
+	ora := TExistConst4ORACLE{}
+	for _, c := range allTypes {
+		if sql := ora.GetSqlExistConst(eng, c, "nm"); sql == "" {
+			t.Errorf("oracle GetSqlExistConst(%v) should not be empty", c)
+		}
+	}
+	if sql := ora.GetSqlExistConst(eng, CtFK, "fk_order"); !strings.Contains(sql, "constraint_type='R'") {
+		t.Errorf("oracle fk sql wrong: %s", sql)
+	}
+
+	my := TExistConst4MYSQLN{}
+	for _, c := range allTypes {
+		if sql := my.GetSqlExistConst(eng, c, "nm", "testdb"); sql == "" {
+			t.Errorf("mysql GetSqlExistConst(%v) should not be empty", c)
+		}
+	}
+	if sql := my.GetSqlExistConst(eng, CtPK, "PRIMARY", "testdb"); !strings.Contains(sql, "PRIMARY KEY") || !strings.Contains(sql, "testdb") {
+		t.Errorf("mysql pk sql wrong: %s", sql)
+	}
+}
+
+func TestExistConstFoundViaMock(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"count"},
+		queryRows: [][]driver.Value{{int64(1)}},
+	}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	ok, eror := eng.ExistConst(CtPK, "pk_user")
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if !ok {
+		t.Fatal("expected true when count > 0")
+	}
+}
+
+func TestExistConstNotFoundViaMock(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"count"},
+		queryRows: [][]driver.Value{{int64(0)}},
+	}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	ok, eror := eng.ExistConst(CtFK, "fk_none")
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if ok {
+		t.Fatal("expected false when count = 0")
+	}
+}
