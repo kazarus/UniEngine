@@ -68,7 +68,7 @@ const (
 	EtSelect TQueryType = 1 + iota
 	EtInsert
 	EtUpdate
-	EtDelele
+	EtDelete
 )
 
 type TConstType int
