@@ -19,9 +19,11 @@ import (
 // ----------------------------------------
 
 type mockDriver struct {
+	queries      []string //#记录 Prepare 的语句文本(供 SQL 文本断言)
 	insertValues [][]driver.Value
 	queryRows    [][]driver.Value
 	columns      []string
+	nextErr      error //#非空时 rows.Next 返回该错误,模拟读取中断
 }
 
 func (d *mockDriver) Open(name string) (driver.Conn, error) {
@@ -38,9 +40,12 @@ func (c mockConnector) Driver() driver.Driver { return c.d }
 
 type mockConn struct{ d *mockDriver }
 
-func (c *mockConn) Prepare(query string) (driver.Stmt, error) { return &mockStmt{d: c.d}, nil }
-func (c *mockConn) Close() error                              { return nil }
-func (c *mockConn) Begin() (driver.Tx, error)                 { return nil, errors.New("no tx") }
+func (c *mockConn) Prepare(query string) (driver.Stmt, error) {
+	c.d.queries = append(c.d.queries, query)
+	return &mockStmt{d: c.d}, nil
+}
+func (c *mockConn) Close() error              { return nil }
+func (c *mockConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
 
 type mockStmt struct{ d *mockDriver }
 
@@ -62,6 +67,9 @@ type mockRows struct {
 func (r *mockRows) Columns() []string { return r.d.columns }
 func (r *mockRows) Close() error      { return nil }
 func (r *mockRows) Next(dest []driver.Value) error {
+	if r.d.nextErr != nil {
+		return r.d.nextErr
+	}
 	if r.idx >= len(r.d.queryRows) {
 		return io.EOF
 	}

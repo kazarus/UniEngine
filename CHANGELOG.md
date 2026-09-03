@@ -19,6 +19,7 @@
 | `SpecialInsertP` / `SpecialInsertPCtx` | `CopyInP` / `CopyInPCtx` | 旧名保留为 `deprecated` 转发 |
 | `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasCopyInGetSqlInsertL` / `CopyInGetSqlInsertL` | 旧接口仍被引擎探测（向后兼容） |
 | `HasSpecialSetSqlValuesL` / `SpecialSetSqlValuesL` | `HasCopyInSetSqlValuesL` / `CopyInSetSqlValuesL` | 旧接口仍被引擎探测（向后兼容） |
+| `TUniEngine.CanClose()` | （移除） | 自调试打印移除后一直是 no-op 死代码 |
 
 ### 新增
 
@@ -44,6 +45,20 @@
 - `readme.md` 更名为 `README.md`，并补充 context 与加密说明。
 - 新增 `LICENSE`、`.gitignore`、`go.mod`、`go.sum`。
 - 删除遗留的 `copyit-p2.py`（Python 2 同步脚本）。
+
+### 行为变更与修复（第一阶段加固）
+
+- **SaveIt / SaveItWhenNotExist 默认走方言原生 UPSERT**（PG `on conflict (主键) do update / do nothing`、Oracle/SQLServer `merge`），消除原先 count 与写入两步之间的并发窗口，且参数只传一遍。回退旧的 count-then-dispatch 的情形：
+  - 类实现了自定义 SQL 钩子（`GetSqlUpdate` / `GetSqlInsert` / `SetSqlValues`）——自定义语句无法转为 UPSERT；
+  - MySQL——`ON DUPLICATE KEY UPDATE` 由任一唯一键触发而非仅主键，与 SaveIt 的主键语义不等价。
+- **查询循环补充 `rows.Err()` 检查**：`rows.Next()` 因错误提前结束（而非读完）不再被静默吞掉——此前表现为"正常返回但数据截断"。
+- **SQL 生成确定性**：CRUD 列序统一走确定序（类声明序优先，其余按字段名排序补齐，见 `TUniTable.orderedFields`/`orderedPkeys`），同一输入不再因 map 迭代产生不同 SQL 文本，利于数据库端语句缓存。
+- **CopyInL 不再把 COPY 语句整体转小写**：混合大小写表名不再被改坏。
+- **SpecialPageSize 尊重传入值**：Oracle/PG 不再强制 99；MySQL 缺省从 0 改为 10；非正值回退 `DefaultPageSize`。
+- **空列防护**：全部字段只读 / 无主键属性映射时，`Insert`/`Update`/`Delete` 返回明确错误（此前为字符串切片越界 panic）。
+- **PrepareRunSQL 对未注册表返回空结果**（此前对 nil 指针取 `ListPkeys` 会 panic）；`EtUpdate` 无可更新列时返回错误（此前 panic）。
+- **错误包装**：写路径错误统一以 `%w` 包装保留错误链；错误消息拼写修正（`retun`→`returns`、`paramter`→`parameter`）。
+- **大规模去重**（UniEngine.go 2463 → 1881 行）：`SelectD/F/S` 共享 `queryScalarCtx`；`Select/L/M/H` 共享 `queryRowsCtx` 行扫描核心；六个写方法共享 `resolveTarget` 前置；四个 `Exist*` 共享 `existCount`；`switch bool` 惯用法全部扁平化为 `if`。
 
 ### 已知限制
 

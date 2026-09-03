@@ -63,42 +63,37 @@ func (self *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		return "", eror
 	}
 
-	switch Encrypt {
-	case true:
-		{
-			nonce := make([]byte, gcm.NonceSize())
-			if _, eror = io.ReadFull(rand.Reader, nonce); eror != nil {
-				return "", eror
-			}
-
-			cipherText := gcm.Seal(nil, nonce, []byte(Value), nil)
-			return UniSecretTag + base64.StdEncoding.EncodeToString(append(nonce, cipherText...)), nil
+	if Encrypt {
+		nonce := make([]byte, gcm.NonceSize())
+		if _, eror = io.ReadFull(rand.Reader, nonce); eror != nil {
+			return "", eror
 		}
-	default:
-		{
-			// #存量数据鉴别:无标签的值视为存量明文,直通返回(不尝试解密)
-			if !strings.HasPrefix(Value, UniSecretTag) {
-				return Value, nil
-			}
 
-			data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
-			if eror != nil {
-				return "", fmt.Errorf("UniEngine: decrypt fail,%s", eror.Error())
-			}
-
-			nonceSize := gcm.NonceSize()
-			if len(data) < nonceSize {
-				return "", errors.New("UniEngine: decrypt fail,cipher text is too short")
-			}
-
-			plainText, eror := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
-			if eror != nil {
-				return "", fmt.Errorf("UniEngine: decrypt fail,%s", eror.Error())
-			}
-
-			return string(plainText), nil
-		}
+		cipherText := gcm.Seal(nil, nonce, []byte(Value), nil)
+		return UniSecretTag + base64.StdEncoding.EncodeToString(append(nonce, cipherText...)), nil
 	}
+
+	// #存量数据鉴别:无标签的值视为存量明文,直通返回(不尝试解密)
+	if !strings.HasPrefix(Value, UniSecretTag) {
+		return Value, nil
+	}
+
+	data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
+	if eror != nil {
+		return "", fmt.Errorf("UniEngine: decrypt fail: %w", eror)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", errors.New("UniEngine: decrypt fail,cipher text is too short")
+	}
+
+	plainText, eror := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	if eror != nil {
+		return "", fmt.Errorf("UniEngine: decrypt fail: %w", eror)
+	}
+
+	return string(plainText), nil
 }
 
 // #查询结果解密:把标记了 encrypt 的字段,从密文还原为明文
