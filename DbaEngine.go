@@ -294,9 +294,9 @@ type HasGetSqlExistConst interface {
 type TExistConst4POSTGR struct{}
 
 // #PG:主键/外键/唯一 走 pg_constraint(contype:p/f/u);默认值挂在 pg_attrdef,按列名查
-func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx TUniEngine, ConstType TConstType, aConstName string) string {
 
-	switch aConstType {
+	switch ConstType {
 	case CtPK:
 		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='p'", strings.ToLower(aConstName))
 	case CtFK:
@@ -313,9 +313,9 @@ func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx TUniEngine, aConstTy
 type TExistConst4SQLSRV struct{}
 
 // #SQLServer:约束对象都在 sys.objects,type:PK/F/UQ/D
-func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx TUniEngine, ConstType TConstType, aConstName string) string {
 
-	switch aConstType {
+	switch ConstType {
 	case CtPK:
 		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='PK'", strings.ToLower(aConstName))
 	case CtFK:
@@ -332,9 +332,9 @@ func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx TUniEngine, aConstTy
 type TExistConst4ORACLE struct{}
 
 // #Oracle:主键 P、外键 R(引用)、唯一 U 在 user_constraints;默认值在 user_tab_cols.data_default,按列名查
-func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string) string {
+func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx TUniEngine, ConstType TConstType, aConstName string) string {
 
-	switch aConstType {
+	switch ConstType {
 	case CtPK:
 		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='P'", aConstName)
 	case CtFK:
@@ -351,9 +351,9 @@ func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx TUniEngine, aConstTy
 type TExistConst4MYSQLN struct{}
 
 // #MySQL:命名约束在 information_schema.table_constraints;默认值在 information_schema.columns,按列名查
-func (self TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx TUniEngine, aConstType TConstType, aConstName string, DataBase string) string {
+func (self TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx TUniEngine, ConstType TConstType, aConstName string, DataBase string) string {
 
-	switch aConstType {
+	switch ConstType {
 	case CtPK:
 		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='PRIMARY KEY' and table_schema='%s'", aConstName, DataBase)
 	case CtFK:
