@@ -87,7 +87,7 @@ func TestAutoKeysMySQLMissingDatabase(t *testing.T) {
 	tb := engine.RegisterClass(hardeningUser{}, "test_user")
 
 	// 未指定 DataBase 时，GetSqlAutoKeys 返回错误，AutoKeys 应返回错误而非 panic
-	if err := tb.AutoKeys(*engine, TAutoKeys4MYSQLN{}); err == nil {
+	if err := tb.AutoKeys(engine, TAutoKeys4MYSQLN{}); err == nil {
 		t.Error("AutoKeys with empty database should return error")
 	}
 }

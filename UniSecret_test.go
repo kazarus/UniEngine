@@ -416,11 +416,11 @@ type legacyCopyInUser struct {
 	Password string `db:"password"`
 }
 
-func (u legacyCopyInUser) SpecialGetSqlInsertL(UniEngineEx TUniEngine, TableName string, Count int64) []string {
+func (u legacyCopyInUser) SpecialGetSqlInsertL(UniEngineEx *TUniEngine, TableName string, Count int64) []string {
 	return []string{"user_name", "password"}
 }
 
-func (u legacyCopyInUser) SpecialSetSqlValuesL(UniEngineEx TUniEngine, QueryType TQueryType, f reflect.Value, out *[][]interface{}) {
+func (u legacyCopyInUser) SpecialSetSqlValuesL(UniEngineEx *TUniEngine, QueryType TQueryType, f reflect.Value, out *[][]interface{}) {
 	*out = append(*out, []interface{}{
 		f.FieldByName("UserName").String(),
 		f.FieldByName("Password").String() + "-legacy",

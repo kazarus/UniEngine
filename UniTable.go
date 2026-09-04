@@ -185,7 +185,8 @@ func (self *TUniTable) SetSecret(Fields ...interface{}) error {
 	return nil
 }
 
-func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) error {
+// AutoKeys 按数据库元数据自动登记主键。this 为引擎指针(第二阶段起不再按值拷贝)。
+func (self *TUniTable) AutoKeys(this *TUniEngine, GetSqlAutoKeys ...interface{}) error {
 
 	var cSQL string
 
@@ -213,7 +214,7 @@ func (self *TUniTable) AutoKeys(this TUniEngine, GetSqlAutoKeys ...interface{}) 
 		return fmt.Errorf("UniEngine: can not build autokeys sql for table:%s", self.TableName)
 	}
 
-	if this.runDebug {
+	if this.debugging() {
 		fmt.Println(cSQL)
 	}
 

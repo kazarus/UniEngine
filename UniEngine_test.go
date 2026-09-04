@@ -224,7 +224,7 @@ func TestSetKeysUnregisteredFieldReturnsError(t *testing.T) {
 func TestAutoKeysMYSQLNMissingDatabase(t *testing.T) {
 	e := newTestEngine()
 	ak := TAutoKeys4MYSQLN{}
-	_, err := ak.GetSqlAutoKeys(e, "mock_row")
+	_, err := ak.GetSqlAutoKeys(&e, "mock_row")
 	if err == nil {
 		t.Fatal("expected error when DataBase is empty")
 	}
@@ -346,41 +346,41 @@ func TestExistConstSQLGenerators(t *testing.T) {
 
 	pg := TExistConst4POSTGR{}
 	for _, c := range allTypes {
-		if sql := pg.GetSqlExistConst(eng, c, "nm"); sql == "" {
+		if sql := pg.GetSqlExistConst(&eng, c, "nm"); sql == "" {
 			t.Errorf("pg GetSqlExistConst(%v) should not be empty", c)
 		}
 	}
-	if sql := pg.GetSqlExistConst(eng, CtPK, "pk_user"); !strings.Contains(sql, "contype='p'") || !strings.Contains(sql, "pk_user") {
+	if sql := pg.GetSqlExistConst(&eng, CtPK, "pk_user"); !strings.Contains(sql, "contype='p'") || !strings.Contains(sql, "pk_user") {
 		t.Errorf("pg pk sql wrong: %s", sql)
 	}
 
 	ss := TExistConst4SQLSRV{}
 	for _, c := range allTypes {
-		if sql := ss.GetSqlExistConst(eng, c, "nm"); sql == "" {
+		if sql := ss.GetSqlExistConst(&eng, c, "nm"); sql == "" {
 			t.Errorf("sqlsrv GetSqlExistConst(%v) should not be empty", c)
 		}
 	}
-	if sql := ss.GetSqlExistConst(eng, CtUK, "uq_email"); !strings.Contains(sql, "type='UQ'") {
+	if sql := ss.GetSqlExistConst(&eng, CtUK, "uq_email"); !strings.Contains(sql, "type='UQ'") {
 		t.Errorf("sqlsrv uk sql wrong: %s", sql)
 	}
 
 	ora := TExistConst4ORACLE{}
 	for _, c := range allTypes {
-		if sql := ora.GetSqlExistConst(eng, c, "nm"); sql == "" {
+		if sql := ora.GetSqlExistConst(&eng, c, "nm"); sql == "" {
 			t.Errorf("oracle GetSqlExistConst(%v) should not be empty", c)
 		}
 	}
-	if sql := ora.GetSqlExistConst(eng, CtFK, "fk_order"); !strings.Contains(sql, "constraint_type='R'") {
+	if sql := ora.GetSqlExistConst(&eng, CtFK, "fk_order"); !strings.Contains(sql, "constraint_type='R'") {
 		t.Errorf("oracle fk sql wrong: %s", sql)
 	}
 
 	my := TExistConst4MYSQLN{}
 	for _, c := range allTypes {
-		if sql := my.GetSqlExistConst(eng, c, "nm", "testdb"); sql == "" {
+		if sql := my.GetSqlExistConst(&eng, c, "nm", "testdb"); sql == "" {
 			t.Errorf("mysql GetSqlExistConst(%v) should not be empty", c)
 		}
 	}
-	if sql := my.GetSqlExistConst(eng, CtPK, "PRIMARY", "testdb"); !strings.Contains(sql, "PRIMARY KEY") || !strings.Contains(sql, "testdb") {
+	if sql := my.GetSqlExistConst(&eng, CtPK, "PRIMARY", "testdb"); !strings.Contains(sql, "PRIMARY KEY") || !strings.Contains(sql, "testdb") {
 		t.Errorf("mysql pk sql wrong: %s", sql)
 	}
 }
@@ -605,7 +605,7 @@ type hookUpdateUser struct {
 	Password string `db:"password"`
 }
 
-func (u hookUpdateUser) GetSqlUpdate(UniEngineEx TUniEngine, TableName string) string {
+func (u hookUpdateUser) GetSqlUpdate(UniEngineEx *TUniEngine, TableName string) string {
 	return "update hook_user set password='x' where user_name='kazarus'"
 }
 
