@@ -60,7 +60,13 @@
 - **错误包装**：写路径错误统一以 `%w` 包装保留错误链；错误消息拼写修正（`retun`→`returns`、`paramter`→`parameter`）。
 - **大规模去重**（UniEngine.go 2463 → 1881 行）：`SelectD/F/S` 共享 `queryScalarCtx`；`Select/L/M/H` 共享 `queryRowsCtx` 行扫描核心；六个写方法共享 `resolveTarget` 前置；四个 `Exist*` 共享 `existCount`；`switch bool` 惯用法全部扁平化为 `if`。
 
+### 行为变更与修复（第二阶段加固）
+
+- **移除 `github.com/lib/pq` 依赖**（模块归零第三方运行时依赖）：新增 `quoteIdent`（标识符双引号转义）与 `copyInStmt`（自实现 COPY IN 协议语句，输出与 `pq.CopyIn` 逐字一致）；`go.mod` 清空 `require`、删除 `go.sum`。
+- **目录/钩子接口首参指针化**（实现方需同步改动）：`Has*` 系列接口与目录/钩子生成器首参由 `TUniEngine` 改为 `*TUniEngine`，涉及 `GetSqlExistTable` / `GetSqlExistViews` / `GetSqlExistField` / `GetSqlExistConst` / `GetSqlAutoKeys` / `GetSqlUpdate` / `GetSqlInsert` / `GetSqlInsertL` / `SetSqlValues` / `SetSqlValuesL` / `CopyInGetSqlInsertL` / `CopyInSetSqlValuesL` / `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` / `SetSqlResult` 等。
+- **移除未使用的生命周期钩子接口**：`HasStartSelect`/`HasEndedSelect`/`HasStartUpdate`/`HasEndedUpdate`/`HasStartInsert`/`HasEndedInsert`/`HasStartDelete`/`HasEndedDelete`/`HasGetSqlDelete` 删除。
+
 ### 已知限制
 
 - `TUniEngine` 的 `st` / `tx` 仍是结构体上的共享可变状态，**非并发安全**（`HashTabl` 注册已加锁，但单实例仍建议每 goroutine 独立或串行调用）。
-- `CopyIn*` 的 COPY 协议依赖 `github.com/lib/pq`（官方已进入维护模式），长期建议迁移 `pgx`。
+- `CopyIn*` 的 COPY 协议由包内 `copyInStmt` 自实现，**不再依赖已停维护的 `github.com/lib/pq`**。
