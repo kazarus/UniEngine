@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -690,5 +692,149 @@ func TestInsertLDeterministicSQL(t *testing.T) {
 	want := `insert into test_user ( "user_name","password" ) values ( $1,$2 ),( $3,$4 )`
 	if len(d.queries) != 1 || d.queries[0] != want {
 		t.Fatalf("insertL sql wrong:\n got  %q\n want %q", d.queries, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 第二阶段:并发安全 / API 签名 / 方言路由
+// ---------------------------------------------------------------------------
+
+// Select 查出多行时报错(旧版静默保留最后一行),需要多行应使用 SelectL。
+func TestSelectMultipleRowsErrors(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"user_name", "password"},
+		queryRows: [][]driver.Value{{"a", "x"}, {"b", "y"}},
+	}
+	eng := newMockEngine(d)
+	eng.RegisterClass(TTestUser{}, "test_user")
+
+	var user TTestUser
+	eror := eng.Select(&user, "select * from test_user")
+	if eror == nil {
+		t.Fatal("Select with multiple rows should error")
+	}
+	if !strings.Contains(eror.Error(), "single row") {
+		t.Fatalf("unexpected error: %v", eror)
+	}
+
+	//#单行不受影响
+	d2 := &mockDriver{
+		columns:   []string{"user_name", "password"},
+		queryRows: [][]driver.Value{{"a", "x"}},
+	}
+	eng.Db = sql.OpenDB(mockConnector{d: d2})
+	if eror = eng.Select(&user, "select * from test_user"); eror != nil {
+		t.Fatalf("single row should pass: %v", eror)
+	}
+}
+
+// COPY 仅 PG 协议族可用:MySQL 引擎调用 CopyInL 应得到明确报错,而非发送必然失败的语句。
+func TestCopyInNonPGProviderErrors(t *testing.T) {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "?", Provider: DtMYSQLN}
+	eng.Initialize()
+	eng.RegisterClass(TTestUser{}, "test_user")
+
+	users := []TTestUser{{UserName: "a", Password: "b"}}
+	eror := eng.CopyInL(&users, "test_user")
+	if eror == nil || !strings.Contains(eror.Error(), "PostgreSQL-protocol") {
+		t.Fatalf("expected postgres-only error, got %v", eror)
+	}
+	if got := d.snapshotQueries(); len(got) != 0 {
+		t.Fatalf("no statement should reach the driver: %v", got)
+	}
+}
+
+// 并发查询 + 并发注册同引擎进行(在 -race 下验证读锁与写锁互斥;
+// 旧版查询路径不持锁,运行中注册与查询并发属未定义行为)。
+func TestConcurrentQueryAndRegister(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"user_name", "password"},
+		queryRows: [][]driver.Value{{"a", "b"}},
+	}
+	eng := newMockEngine(d)
+	eng.RegisterClass(TTestUser{}, "test_user")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func(n int) {
+			defer wg.Done()
+			eng.RegisterClass(TTestUser{}, fmt.Sprintf("t_new_%d", n))
+		}(i)
+		go func() {
+			defer wg.Done()
+			var users []TTestUser
+			if eror := eng.SelectL(&users, "select * from test_user"); eror != nil {
+				t.Errorf("concurrent select failed: %v", eror)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if eng.GetTable("t_new_7") == nil {
+		t.Fatal("concurrent registration lost a table")
+	}
+}
+
+// 事务流:Begin 后语句走事务通道,Commit 后回到连接池通道。
+func TestTransactionFlow(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.RegisterClass(TTestUser{}, "test_user")
+
+	if eror := eng.Begin(); eror != nil {
+		t.Fatal(eror)
+	}
+	row := TTestUser{UserName: "tx", Password: "p"}
+	if eror := eng.Insert(&row, "test_user"); eror != nil {
+		t.Fatal(eror)
+	}
+	if eror := eng.Commit(); eror != nil {
+		t.Fatal(eror)
+	}
+
+	//#事务结束后无事务时的重复 Commit 应报错
+	if eror := eng.Commit(); eror == nil {
+		t.Fatal("commit without transaction should error")
+	}
+
+	//#回到普通路径仍可写入
+	if eror := eng.Insert(&row, "test_user"); eror != nil {
+		t.Fatal(eror)
+	}
+	if got := d.snapshotQueries(); len(got) != 2 {
+		t.Fatalf("expect 2 statements (in tx + after commit), got %d: %v", len(got), got)
+	}
+}
+
+// setSqlResultRow 实现 HasSetSqlResult(值接收器 + *TUniEngine 参数):
+// 验证钩子路径在第二阶段签名下正常工作。
+type setSqlResultRow struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+func (u setSqlResultRow) SetSqlResult(UniEngineEx *TUniEngine, obj interface{}, column []string, fields []interface{}) {
+	if p, ok := obj.(*setSqlResultRow); ok {
+		p.UserName = fmt.Sprintf("%v", fields[0])
+		p.Password = fmt.Sprintf("%v", fields[1])
+	}
+}
+
+func TestSelectLHookSetSqlResult(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"user_name", "password"},
+		queryRows: [][]driver.Value{{"kazarus", "p@ss"}},
+	}
+	eng := newMockEngine(d)
+	eng.RegisterClass(setSqlResultRow{}, "hook_row")
+
+	var rows []setSqlResultRow
+	if eror := eng.SelectL(&rows, "select * from hook_row"); eror != nil {
+		t.Fatal(eror)
+	}
+	if len(rows) != 1 || rows[0].UserName != "kazarus" || rows[0].Password != "p@ss" {
+		t.Fatalf("hook path wrong: %+v", rows)
 	}
 }

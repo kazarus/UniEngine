@@ -2,8 +2,9 @@
 
 UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
 
-> 注意:`TUniEngine` 持有预备语句、事务等可变状态,**非并发安全**。请每 goroutine 独立实例,或串行调用。底层 `*sql.DB` 本身并发安全。
-> 注册方法(RegisterClass / RegisterTable / RegisterField / RegisterPkeys)内部有互斥锁保护,可并发调用;但**注册必须在并发查询/写入开始前完成**——查询路径读取注册表时不持锁,运行中动态注册与查询并发属未定义行为。
+> 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
+> 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
+> 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
 
 ##### 0.0.驱动安装
 
@@ -52,11 +53,11 @@ UniEngineEx.Initialize()
 var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
 AutoKeys.DataBase = "kz2020_gcgl_demo"
 
-//#注册数据库操作类(AutoKeys 返回 error,需处理)
-if eror := UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(UniEngineEx, AutoKeys); eror != nil {
+//#注册数据库操作类(AutoKeys 接收 *TUniEngine,返回 error,需处理)
+if eror := UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(&UniEngineEx, AutoKeys); eror != nil {
   panic(eror)
 }
-if eror := UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(UniEngineEx, AutoKeys); eror != nil {
+if eror := UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(&UniEngineEx, AutoKeys); eror != nil {
   panic(eror)
 }
 ```
@@ -152,4 +153,10 @@ for i := range users {
 - **SQLServer 主键探测**改用 `sys.indexes` 目录视图(替代老旧的 syscolumns/sysindexes 联查);
 - **RegisterClass 双 key 注册**:类同时以"小写表名"和"类全名"注册(统一 GetTable 与 SaveIt 路径的可见性)。注意:两个类注册同一表名时,小写表名 key 以后注册者为准;
 - Oracle 下 `$` 替换收窄到参数占位符(`$1`),不再误伤 SQL 文本中其它 `$` 字符;
-- **CopyInL 保持表名原大小写**,不再整句转小写;全部字段只读时写入方法返回明确错误而非 panic。
+- **CopyInL 保持表名原大小写**,不再整句转小写;全部字段只读时写入方法返回明确错误而非 panic;
+- **(第二阶段)引擎并发安全**:预备语句移出结构体,查询/注册可并发;事务期间仍须串行;
+- **(第二阶段)写方法表名参数类型安全化**:`args ...interface{}` → `TableName ...string`,传非字符串由运行期报错变为编译期报错,已有调用点语法不变;
+- **(第二阶段)钩子接口引擎参数改 `*TUniEngine`**(消除逐行拷贝);`AutoKeys` 同步改指针;实现方需同步修改签名;
+- **(第二阶段)`Select` 多行时报错**(旧版静默保留最后一行),多行请用 `SelectL`;
+- **(第二阶段)移除 `github.com/lib/pq` 依赖**,COPY 语句由包内 `copyInStmt` 自实现,输出逐字一致;
+- **(第二阶段)`CopyInL` 仅 PG 协议族可用**(DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB),其余方言直接报错。

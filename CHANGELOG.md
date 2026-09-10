@@ -20,6 +20,12 @@
 | `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasCopyInGetSqlInsertL` / `CopyInGetSqlInsertL` | 旧接口仍被引擎探测（向后兼容） |
 | `HasSpecialSetSqlValuesL` / `SpecialSetSqlValuesL` | `HasCopyInSetSqlValuesL` / `CopyInSetSqlValuesL` | 旧接口仍被引擎探测（向后兼容） |
 | `TUniEngine.CanClose()` | （移除） | 自调试打印移除后一直是 no-op 死代码 |
+| 写方法 `args ...interface{}`（首参字符串作表名） | `TableName ...string` | 类型安全：传非字符串由运行期报错变为**编译期报错**；已有调用点无需改动 |
+| 钩子/生成器接口的 `TUniEngine` 首参 | `*TUniEngine` | 消除按值拷贝（`SelectL` 每行拷贝整个引擎）；实现方签名需同步修改 |
+| `TUniTable.AutoKeys(TUniEngine, ...)` | `AutoKeys(*TUniEngine, ...)` | 同上 |
+| `Select` 多行时静默保留最后一行 | 返回错误 | 与 sqlx `Get` 行为一致；多行请用 `SelectL` |
+| `CopyInL` 任意方言都发送 COPY 语句 | 非 PG 协议族（`DtPOSTGR`/`DtKINGES`/`DtOPENGS`/`DtPOLODB`）直接报错 | 显式失败替代必然失败的 SQL |
+| `HasStartSelect`/`HasEndedSelect`/`HasStartUpdate`/`HasEndedUpdate`/`HasStartInsert`/`HasEndedInsert`/`HasStartDelete`/`HasEndedDelete`/`HasGetSqlDelete` | （移除） | 引擎从不调用的死接口 |
 
 ### 新增
 
@@ -62,11 +68,19 @@
 
 ### 行为变更与修复（第二阶段加固）
 
-- **移除 `github.com/lib/pq` 依赖**（模块归零第三方运行时依赖）：新增 `quoteIdent`（标识符双引号转义）与 `copyInStmt`（自实现 COPY IN 协议语句，输出与 `pq.CopyIn` 逐字一致）；`go.mod` 清空 `require`、删除 `go.sum`。
-- **目录/钩子接口首参指针化**（实现方需同步改动）：`Has*` 系列接口与目录/钩子生成器首参由 `TUniEngine` 改为 `*TUniEngine`，涉及 `GetSqlExistTable` / `GetSqlExistViews` / `GetSqlExistField` / `GetSqlExistConst` / `GetSqlAutoKeys` / `GetSqlUpdate` / `GetSqlInsert` / `GetSqlInsertL` / `SetSqlValues` / `SetSqlValuesL` / `CopyInGetSqlInsertL` / `CopyInSetSqlValuesL` / `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` / `SetSqlResult` 等。
-- **移除未使用的生命周期钩子接口**：`HasStartSelect`/`HasEndedSelect`/`HasStartUpdate`/`HasEndedUpdate`/`HasStartInsert`/`HasEndedInsert`/`HasStartDelete`/`HasEndedDelete`/`HasGetSqlDelete` 删除。
+- **引擎并发安全**（旧版"每 goroutine 独立实例"的告诫作废）：
+  - 预备语句 `st` 移出结构体，`prepareCtx` 返回局部语句——查询/写入路径不再共享可变状态；
+  - 注册表锁升级为 `sync.RWMutex`：查询只持读锁做一次表查找，`Register*` 可与查询并发执行（`TestConcurrentQueryAndRegister` 在 `-race` 下验证）；
+  - 事务状态 `tx`/`inTx` 由同一把锁保护；**事务期间（Begin 与 Commit/Cancel 之间）调用仍须串行**（`database/sql` 的 `*sql.Tx` 非并发安全）；
+  - `RunDebug` 改原子写（`runDebug int32`），可在运行中并发切换。
+- **写方法表名参数类型安全化**：`SaveIt`/`SaveItWhenNotExist`/`Update`/`Insert`/`InsertL`/`CopyInL`/`InsertP`/`CopyInP`（含废弃包装与 `*Ctx` 变体）的 `args ...interface{}` 改为 `TableName ...string`；空切片沿用注册表默认表名，已有调用点语法不变。
+- **`Select` 多行报错**：查询返回多于一行时返回错误（旧版静默保留最后一行，掩盖查询缺陷）。
+- **`CopyInL` 方言路由**：非 PG 协议族直接报错，不再发送必然失败的 COPY 语句。
+- **移除 `github.com/lib/pq` 依赖**（模块归零第三方运行时依赖）：新增 `quoteIdent`（标识符双引号转义）与 `copyInStmt`（自实现 COPY IN 协议语句，输出与 `pq.CopyIn` 逐字一致）；`go.mod` 清空 `require`。
+- **移除未使用的生命周期钩子接口**：`HasStartSelect`/`HasEndedSelect`/`HasStartUpdate`/`HasEndedUpdate`/`HasStartInsert`/`HasEndedInsert`/`HasStartDelete`/`HasEndedDelete`/`HasGetSqlDelete` 删除（引擎从不调用）。
 
 ### 已知限制
 
-- `TUniEngine` 的 `st` / `tx` 仍是结构体上的共享可变状态，**非并发安全**（`HashTabl` 注册已加锁，但单实例仍建议每 goroutine 独立或串行调用）。
+- **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。
+- 配置字段（`ColLabel`/`ColParam`/`Provider`/`SecretOn`/`SecretBy` 等）与表结构变更（`SetKeys`/`SetSecret`/`AutoKeys`/`PrepareTables`/`PrepareRunSQL`）应在并发查询开始前完成。
 - `CopyIn*` 的 COPY 协议由包内 `copyInStmt` 自实现，**不再依赖已停维护的 `github.com/lib/pq`**。

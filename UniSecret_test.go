@@ -6,11 +6,11 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -19,11 +19,33 @@ import (
 // ----------------------------------------
 
 type mockDriver struct {
-	queries      []string //#记录 Prepare 的语句文本(供 SQL 文本断言)
+	mu           sync.Mutex //#保护 queries/insertValues(并发查询测试下多 goroutine 追加)
+	queries      []string   //#记录 Prepare 的语句文本(供 SQL 文本断言)
 	insertValues [][]driver.Value
 	queryRows    [][]driver.Value
 	columns      []string
 	nextErr      error //#非空时 rows.Next 返回该错误,模拟读取中断
+}
+
+func (d *mockDriver) recordQuery(query string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.queries = append(d.queries, query)
+}
+
+func (d *mockDriver) recordExec(args []driver.Value) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.insertValues = append(d.insertValues, args)
+}
+
+// snapshotQueries 返回已记录语句的副本(测试断言用,避免直接读并发切片)
+func (d *mockDriver) snapshotQueries() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.queries))
+	copy(out, d.queries)
+	return out
 }
 
 func (d *mockDriver) Open(name string) (driver.Conn, error) {
@@ -41,18 +63,24 @@ func (c mockConnector) Driver() driver.Driver { return c.d }
 type mockConn struct{ d *mockDriver }
 
 func (c *mockConn) Prepare(query string) (driver.Stmt, error) {
-	c.d.queries = append(c.d.queries, query)
+	c.d.recordQuery(query)
 	return &mockStmt{d: c.d}, nil
 }
 func (c *mockConn) Close() error              { return nil }
-func (c *mockConn) Begin() (driver.Tx, error) { return nil, errors.New("no tx") }
+func (c *mockConn) Begin() (driver.Tx, error) { return &mockTx{}, nil }
+
+// #mockTx 供事务路径测试(Begin/Commit/Cancel)
+type mockTx struct{}
+
+func (tx *mockTx) Commit() error   { return nil }
+func (tx *mockTx) Rollback() error { return nil }
 
 type mockStmt struct{ d *mockDriver }
 
 func (s *mockStmt) Close() error  { return nil }
 func (s *mockStmt) NumInput() int { return -1 }
 func (s *mockStmt) Exec(args []driver.Value) (driver.Result, error) {
-	s.d.insertValues = append(s.d.insertValues, args)
+	s.d.recordExec(args)
 	return driver.RowsAffected(1), nil
 }
 func (s *mockStmt) Query(args []driver.Value) (driver.Rows, error) {
