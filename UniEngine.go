@@ -135,7 +135,7 @@ func validIdent(name string) bool {
 
 func (self *TUniEngine) getValParam(aIndex int) string {
 
-	if self.Provider == DtMYSQLN {
+	if self.dbFamily() == FmMYSQLN {
 		return fmt.Sprintf("%s", self.ColParam)
 	}
 
@@ -144,11 +144,11 @@ func (self *TUniEngine) getValParam(aIndex int) string {
 
 func (self *TUniEngine) getColParam(FieldName string) string {
 
-	if self.Provider == DtMYSQLN {
+	if self.dbFamily() == FmMYSQLN {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	if self.Provider == DtORACLE {
+	if self.dbFamily() == FmORACLE {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
@@ -160,7 +160,7 @@ var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
 func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
 
-	if self.Provider == DtORACLE && len(args) > 0 {
+	if self.dbFamily() == FmORACLE && len(args) > 0 {
 
 		if self.debugging() {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
@@ -172,7 +172,7 @@ func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string
 		})
 	}
 
-	if self.Provider == DtMYSQLN && len(args) > 0 {
+	if self.dbFamily() == FmMYSQLN && len(args) > 0 {
 
 		if self.debugging() {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
@@ -205,6 +205,10 @@ func (self *TUniEngine) ProviderName() string {
 		{
 			result = "oracle"
 		}
+	case DtDAMENG:
+		{
+			result = "dameng"
+		}
 	case DtSQLSRV:
 		{
 			result = "sqlserver"
@@ -213,9 +217,25 @@ func (self *TUniEngine) ProviderName() string {
 		{
 			result = "postgresql"
 		}
+	case DtKINGES:
+		{
+			result = "kingbase"
+		}
+	case DtOPENGS:
+		{
+			result = "opengauss"
+		}
+	case DtPOLODB:
+		{
+			result = "polardb"
+		}
 	case DtMYSQLN:
 		{
 			result = "mysql"
+		}
+	case DtTAURUS:
+		{
+			result = "taurus"
 		}
 	}
 
@@ -234,12 +254,12 @@ func (self *TUniEngine) SpecialPageSize(aPageSize int64) int64 {
 
 func (self *TUniEngine) DefaultPageSize() int64 {
 
-	switch self.Provider {
-	case DtORACLE, DtPOSTGR:
+	switch self.dbFamily() {
+	case FmORACLE, FmPOSTGR:
 		{
 			return 99
 		}
-	case DtSQLSRV, DtMYSQLN:
+	case FmSQLSRV, FmMYSQLN:
 		{
 			return 10
 		}
@@ -537,7 +557,7 @@ func (self *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 	TablName := elemType.String()
 	UniTable := self.tableByType(TablName)
 	if UniTable == nil {
-		return fmt.Errorf("UniEngine: no such class registered: %s", TablName)
+		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
 
 	self.debugSQL("select", SqlQuery, args)
@@ -562,6 +582,27 @@ func (self *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 	fields := make([]interface{}, cCount)
 	values := make([]interface{}, cCount)
 
+	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
+	fieldIdx := make([]int, cCount)
+	encryptIdx := make([]int, 0, 2)
+	if !hasHook {
+		for ColIndex, ItemPara := range column {
+			UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
+			if !Valid {
+				return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, elemType.String())
+			}
+			sf, ok := elemType.FieldByName(UniField.AttriName)
+			if !ok {
+				return fmt.Errorf("UniEngine: class[%s] has no attribute[%s]", elemType.String(), UniField.AttriName)
+			}
+			fieldIdx[ColIndex] = sf.Index[0]
+
+			if UniField.Encrypt {
+				encryptIdx = append(encryptIdx, sf.Index[0])
+			}
+		}
+	}
+
 	for rows.Next() {
 
 		u := reflect.New(elemType)
@@ -579,19 +620,15 @@ func (self *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 			x.SetSqlResult(self, u.Interface(), column, fields)
 		} else {
 			elem := u.Elem()
-			for ColIndex, ItemPara := range column {
-				UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-				if !Valid {
-					return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, elemType.String())
-				}
-				values[ColIndex] = elem.FieldByName(UniField.AttriName).Addr().Interface()
+			for ColIndex := range column {
+				values[ColIndex] = elem.Field(fieldIdx[ColIndex]).Addr().Interface()
 			}
 
 			if eror = rows.Scan(values...); eror != nil {
 				return eror
 			}
 
-			if eror = self.DecryptResult(&elem, UniTable, column); eror != nil {
+			if eror = self.decryptRow(elem, encryptIdx); eror != nil {
 				return eror
 			}
 		}
@@ -797,10 +834,10 @@ func (self *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 
 	UniTable := self.tableByType(t.String())
 	if UniTable == nil {
-		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: no such class registered: %s", t.String())
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrUnregisteredClass, t.String())
 	}
 	if needPkeys && len(UniTable.HashPkeys) == 0 {
-		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: no pkeys column in class registered: %s", t.String())
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrNoPkeys, t.String())
 	}
 
 	if TablName == "" {
@@ -808,7 +845,7 @@ func (self *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 	}
 
 	if !validIdent(TablName) {
-		return nil, reflect.Value{}, "", errors.New("UniEngine: invalid table name: " + TablName)
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrInvalidTableName, TablName)
 	}
 
 	return UniTable, reflect.Indirect(reflect.ValueOf(i)), TablName, nil
@@ -853,9 +890,9 @@ func (self *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 
 	updateMode := Mode == upsertModeUpdate && len(cols) > 0
 
-	switch self.Provider {
+	switch self.dbFamily() {
 
-	case DtPOSTGR:
+	case FmPOSTGR:
 		{
 			//#PG:excluded 伪表复用本次插入值,无需重复传参
 			if !updateMode {
@@ -873,7 +910,7 @@ func (self *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 				TablName, strings.Join(colList, ","), strings.Join(paramList, ","), strings.Join(keyList, ","), strings.Join(setList, ",")), true
 		}
 
-	case DtORACLE:
+	case FmORACLE:
 		{
 			//#Oracle:MERGE,源数据放 dual 子查询,参数只传一遍
 			var selectList []string
@@ -911,7 +948,7 @@ func (self *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 			return cSQL + " when not matched then insert ( " + strings.Join(colList, ",") + " ) values ( " + strings.Join(insertVals, ",") + " )", true
 		}
 
-	case DtSQLSRV:
+	case FmSQLSRV:
 		{
 			//#SQLServer:MERGE + HOLDLOCK,表值构造器传参一遍
 			var onList []string
@@ -1030,7 +1067,7 @@ func (self *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v
 	}
 
 	if len(keyCols) == 0 {
-		return 0, fmt.Errorf("UniEngine: no pkeys column in class registered: %s", UniTable.TableName)
+		return 0, fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
 	SqlQuery := fmt.Sprintf("select count(1) from %s where %s", TablName, strings.Join(keyCols, " and "))
@@ -1177,7 +1214,7 @@ func (self *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 			return fmt.Errorf("UniEngine: no updatable column in class registered: %s", UniTable.TableName)
 		}
 		if len(keyCols) == 0 {
-			return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", UniTable.TableName)
+			return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 		}
 
 		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 and %s", TablName, strings.Join(setCols, ","), strings.Join(keyCols, " and "))
@@ -1329,7 +1366,7 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 				SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 			}
 
-			if self.Provider == DtORACLE {
+			if self.dbFamily() == FmORACLE {
 				//#Oracle:INSERT ALL 多行语法
 				rowList = append(rowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(colList, ","), strings.Join(paramList, ",")))
 			} else {
@@ -1337,7 +1374,7 @@ func (self *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 			}
 		}
 
-		if self.Provider == DtORACLE {
+		if self.dbFamily() == FmORACLE {
 			SqlQuery = fmt.Sprintf("insert all %s select 1 from dual", strings.Join(rowList, " "))
 		} else {
 			SqlQuery = fmt.Sprintf("insert into %s ( %s ) values %s", TablName, strings.Join(colList, ","), strings.Join(rowList, ","))
@@ -1444,10 +1481,8 @@ func (self *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 	self.debugSQL("copyin", SqlQuery, SqlValue)
 
 	//#COPY 仅 PostgreSQL 协议族可用;其余方言显式报错,不再发送必然失败的语句
-	switch self.Provider {
-	case DtPOSTGR, DtKINGES, DtOPENGS, DtPOLODB:
-	default:
-		return fmt.Errorf("UniEngine: CopyInL requires a PostgreSQL-protocol provider (DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB), got [%d]", self.Provider)
+	if self.dbFamily() != FmPOSTGR {
+		return fmt.Errorf("UniEngine: CopyInL requires a PostgreSQL-family provider (DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB), got [%d]", self.Provider)
 	}
 
 	Sql4Text := copyInStmt(TablName, SqlQuery)
@@ -1589,7 +1624,7 @@ func (self *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName 
 	}
 
 	if len(keyCols) == 0 {
-		return fmt.Errorf("UniEngine: no pkeys column in class registered: %s", UniTable.TableName)
+		return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
 	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, strings.Join(keyCols, " and "))
@@ -1676,7 +1711,7 @@ func (self *TUniEngine) IfDropView(TableName string) (bool, error) {
 func (self *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
-		return false, errors.New("UniEngine: invalid table name: " + TableName)
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 
 	mrok, eror := self.ExistViewsCtx(ctx, TableName)
@@ -1718,19 +1753,19 @@ func (self *TUniEngine) ExistTable(TableName string) (bool, error) {
 func (self *TUniEngine) ExistTableCtx(ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
-		return false, errors.New("UniEngine: invalid table name: " + TableName)
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 
 	var cSQL string
 
-	switch self.Provider {
-	case DtPOSTGR:
+	switch self.dbFamily() {
+	case FmPOSTGR:
 		cSQL = TExistTable4POSTGR{}.GetSqlExistTable(self, TableName)
-	case DtSQLSRV:
+	case FmSQLSRV:
 		cSQL = TExistTable4SQLSRV{}.GetSqlExistTable(self, TableName)
-	case DtORACLE:
+	case FmORACLE:
 		cSQL = TExistTable4ORACLE{}.GetSqlExistTable(self, TableName)
-	case DtMYSQLN:
+	case FmMYSQLN:
 		if self.DataBase == "" {
 			return false, errors.New("UniEngine: database is not specified")
 		}
@@ -1747,19 +1782,19 @@ func (self *TUniEngine) ExistViews(TableName string) (bool, error) {
 func (self *TUniEngine) ExistViewsCtx(ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
-		return false, errors.New("UniEngine: invalid table name: " + TableName)
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 
 	var cSQL string
 
-	switch self.Provider {
-	case DtPOSTGR:
+	switch self.dbFamily() {
+	case FmPOSTGR:
 		cSQL = TExistTable4POSTGR{}.GetSqlExistViews(self, TableName)
-	case DtSQLSRV:
+	case FmSQLSRV:
 		cSQL = TExistTable4SQLSRV{}.GetSqlExistViews(self, TableName)
-	case DtORACLE:
+	case FmORACLE:
 		cSQL = TExistTable4ORACLE{}.GetSqlExistViews(self, TableName)
-	case DtMYSQLN:
+	case FmMYSQLN:
 		if self.DataBase == "" {
 			return false, errors.New("UniEngine: database is not specified")
 		}
@@ -1781,14 +1816,14 @@ func (self *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName 
 
 	var cSQL string
 
-	switch self.Provider {
-	case DtPOSTGR:
+	switch self.dbFamily() {
+	case FmPOSTGR:
 		cSQL = TExistField4POSTGR{}.GetSqlExistField(self, TableName, FieldName)
-	case DtSQLSRV:
+	case FmSQLSRV:
 		cSQL = TExistField4SQLSRV{}.GetSqlExistField(self, TableName, FieldName)
-	case DtORACLE:
+	case FmORACLE:
 		cSQL = TExistField4ORACLE{}.GetSqlExistField(self, TableName, FieldName)
-	case DtMYSQLN:
+	case FmMYSQLN:
 		if self.DataBase == "" {
 			return false, errors.New("UniEngine: database is not specified")
 		}
@@ -1806,19 +1841,19 @@ func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bo
 func (self *TUniEngine) ExistConstCtx(ctx context.Context, aConstType TConstType, aConstName string) (bool, error) {
 
 	if !validIdent(aConstName) {
-		return false, errors.New("UniEngine: invalid constraint name: " + aConstName)
+		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, aConstName)
 	}
 
 	var cSQL string
 
-	switch self.Provider {
-	case DtPOSTGR:
+	switch self.dbFamily() {
+	case FmPOSTGR:
 		cSQL = TExistConst4POSTGR{}.GetSqlExistConst(self, aConstType, aConstName)
-	case DtSQLSRV:
+	case FmSQLSRV:
 		cSQL = TExistConst4SQLSRV{}.GetSqlExistConst(self, aConstType, aConstName)
-	case DtORACLE:
+	case FmORACLE:
 		cSQL = TExistConst4ORACLE{}.GetSqlExistConst(self, aConstType, aConstName)
-	case DtMYSQLN:
+	case FmMYSQLN:
 		if self.DataBase == "" {
 			return false, errors.New("UniEngine: database is not specified")
 		}
@@ -1870,7 +1905,7 @@ func (self *TUniEngine) Cancel() error {
 	defer self.mu.Unlock()
 
 	if !self.inTx || self.tx == nil {
-		return errors.New("UniEngine: no transaction")
+		return ErrNoTransaction
 	}
 
 	if eror := self.tx.Rollback(); eror != nil {
@@ -1889,7 +1924,7 @@ func (self *TUniEngine) Commit() error {
 	defer self.mu.Unlock()
 
 	if !self.inTx || self.tx == nil {
-		return errors.New("UniEngine: no transaction")
+		return ErrNoTransaction
 	}
 
 	if eror := self.tx.Commit(); eror != nil {

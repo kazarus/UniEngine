@@ -737,7 +737,7 @@ func TestCopyInNonPGProviderErrors(t *testing.T) {
 
 	users := []TTestUser{{UserName: "a", Password: "b"}}
 	eror := eng.CopyInL(&users, "test_user")
-	if eror == nil || !strings.Contains(eror.Error(), "PostgreSQL-protocol") {
+	if eror == nil || !strings.Contains(eror.Error(), "PostgreSQL-family") {
 		t.Fatalf("expected postgres-only error, got %v", eror)
 	}
 	if got := d.snapshotQueries(); len(got) != 0 {

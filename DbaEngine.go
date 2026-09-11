@@ -72,6 +72,41 @@ const (
 	DtTAURUS //#华为(mysql)
 )
 
+// TDbFamily 数据库协议族:同一族共享 占位符风格/标识符引用方式/元数据目录/UPSERT 语法。
+// Provider 是具体数据库,Family 是它兼容的协议;新增国产库时按兼容协议归族,
+// 引擎所有按方言分支的行为(Exist*/UPSERT/INSERT ALL/CopyIn/占位符)均按族判断。
+type TDbFamily int
+
+const (
+	FmPOSTGR  TDbFamily = 1 + iota //#PostgreSQL 协议族(含金仓/openGauss/PolarDB)
+	FmSQLSRV                       //#SQL Server
+	FmORACLE                       //#Oracle 协议族(含达梦)
+	FmMYSQLN                       //#MySQL 协议族(含 Taurus)
+	FmUNKNOWN                      //#未识别/未支持(DtACCESS/DtSQLITE/未设置)
+)
+
+// dbFamilyOf 将具体数据库映射到协议族。
+func dbFamilyOf(Provider TDriveType) TDbFamily {
+
+	switch Provider {
+	case DtPOSTGR, DtKINGES, DtOPENGS, DtPOLODB:
+		return FmPOSTGR
+	case DtSQLSRV:
+		return FmSQLSRV
+	case DtORACLE, DtDAMENG:
+		return FmORACLE
+	case DtMYSQLN, DtTAURUS:
+		return FmMYSQLN
+	}
+
+	return FmUNKNOWN
+}
+
+// dbFamily 返回本引擎的协议族。
+func (self *TUniEngine) dbFamily() TDbFamily {
+	return dbFamilyOf(self.Provider)
+}
+
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
 var THasGetMapUnique = reflect.TypeOf(new(HasGetMapUnique)).Elem()
 

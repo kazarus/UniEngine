@@ -126,6 +126,32 @@ func (self *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable
 	return nil
 }
 
+// #decryptRow 按预解析的字段下标解密(热路径;DecryptResult 的无查找版本,
+// #encryptIdx 由 queryRowsCtx 在行循环前一次性算好)
+func (self *TUniEngine) decryptRow(Result reflect.Value, encryptIdx []int) error {
+
+	if self.SecretOn == 0 {
+		return nil
+	}
+
+	for _, idx := range encryptIdx {
+
+		FieldValue := Result.Field(idx)
+		if FieldValue.Kind() != reflect.String {
+			continue
+		}
+
+		PlainText, eror := self.Secret(FieldValue.String(), false)
+		if eror != nil {
+			return eror
+		}
+
+		FieldValue.SetString(PlainText)
+	}
+
+	return nil
+}
+
 // #加密写入值:encrypt 仅支持 string 字段,非 string 字段直接报错
 // #(读取侧 DecryptResult 只还原 string 字段;写入侧若放行其它类型,会出现写入密文/读取不解密的不对称,故 fast-fail)
 func (self *TUniEngine) secretEncrypt(FieldValue reflect.Value) (interface{}, error) {

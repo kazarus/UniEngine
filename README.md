@@ -8,24 +8,30 @@ UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 
 
 ##### 0.0.驱动安装
 
-```sh
-cp /Users/kazarus/ORACLE/instantclient_11_2/{libclntsh.dylib.11.1,libnnz11.dylib,libociei.dylib}   /usr/local/lib
-```
+Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等动态库放入系统库路径(如 `/usr/local/lib`)。
 
-##### 0.1.驱动标识
+##### 0.1.驱动标识与协议族
 
-| 驱动标识           | 数据库     | 连接符 | 字段连接符 |
-| ------------------ | ---------- | ------ | ---------- |
-| UniEngine.DtPOSTGR | PostgreSQL | $      | $1         |
-| UniEngine.DtSQLSRV | SQLServer  | $      | $1         |
-| UniEngine.DtMYSQLN | MySQL      | ?      | ?          |
-| UniEngine.DtORACLE | Oracle     | :      | :1         |
+引擎行为(占位符/标识符引用/元数据目录/UPSERT/INSERT ALL/COPY)按**协议族**判断,新增兼容数据库按族归入:
+
+| 协议族   | 驱动标识                                                  | 连接符 | 占位符 | 标识符引用 |
+| -------- | --------------------------------------------------------- | ------ | ------ | ---------- |
+| Postgre  | DtPOSTGR / DtKINGES(金仓) / DtOPENGS / DtPOLODB | $      | $1     | "name"     |
+| Oracle   | DtORACLE / DtDAMENG(达梦)                                 | :      | :1     | name(裸)   |
+| MySQL    | DtMYSQLN / DtTAURUS(华为)                                 | ?      | ?      | name(裸)   |
+| SQLServer| DtSQLSRV                                                  | $      | $1     | "name"     |
 
 #### 1.安装方式
 
 ```sh
-go get github.com/kazarus/UniEngine
+go get github.com/kazarus/UniEngine/v2
 ```
+
+```go
+import "github.com/kazarus/UniEngine/v2" //包名仍为 UniEngine
+```
+
+> v1(github.com/kazarus/UniEngine,master 分支)继续可用且不再变更;v2 相对 v1 的差异见 CHANGELOG。
 
 #### 2.使用方法
 

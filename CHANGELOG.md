@@ -2,9 +2,42 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
-## Unreleased — ai-dev-20260824
+## v2.0.0 — ai-dev-20260904
 
-三线融合：`context.Context` 支持 + 应用层加密 + 加固。
+三线融合：`context.Context` 支持 + 应用层加密 + 加固（第一阶段/第二阶段），并以 **v2 module 路径**发布（钩子接口签名有破坏性修改，按 Go modules 惯例升主版本）。
+
+### 模块路径（v2）
+
+| 旧 | 新 |
+|----|----|
+| `module github.com/kazarus/UniEngine` | `module github.com/kazarus/UniEngine/v2`（`go get github.com/kazarus/UniEngine/v2`，包名仍为 `UniEngine`） |
+
+v1（master 分支）继续可用且不再变更。
+
+### 协议族归一化（provider family）
+
+新增 `TDbFamily`（`FmPOSTGR`/`FmSQLSRV`/`FmORACLE`/`FmMYSQLN`/`FmUNKNOWN`）与 `dbFamilyOf`，引擎所有按方言分支的行为（占位符风格、标识符引用、元数据探测、UPSERT、INSERT ALL、COPY 白名单、分页缺省）统一按协议族判断。由此国产兼容库获得完整能力：
+
+| 驱动 | 族 | 行为变化 |
+|------|----|----------|
+| DtKINGES/DtOPENGS/DtPOLODB | PG | 新增元数据探测（pg 目录）、原生 UPSERT、CopyIn 可用（此前仅 DtPOSTGR 有） |
+| DtDAMENG | Oracle | 新增元数据探测（oracle 目录）、多行插入改走 `INSERT ALL`（此前生成 Oracle 不支持的多 values 语法）、标识符改裸名（Oracle 风格） |
+| DtTAURUS | MySQL | 占位符 `$N`→`?`、标识符改裸名（此前按 PG 风格生成，MySQL 协议无法执行）、新增元数据探测 |
+
+`ProviderName()` 补齐 kingbase/dameng/opengauss/polardb/taurus。
+
+### 哨兵错误
+
+新增 `errors.go`：`ErrUnregisteredClass`/`ErrNoPkeys`/`ErrNoTransaction`/`ErrInvalidTableName`/`ErrInvalidConstraintName`，调用方改用 `errors.Is` 判别；报错点以 `%w` 包装，**消息文本与旧版一致**。
+
+### 性能
+
+- **行扫描热路径**：`queryRowsCtx` 在行循环前一次性解析"列→字段下标"与加密列下标，循环内以 `Field(idx)` 取代每行每列的 `FieldByName` 线性扫描与 HashField 查找；解密走无查找的 `decryptRow`。公开 API `DecryptResult` 保持不变。
+
+### 其它
+
+- `AutoKeys` 的建议输出收敛到 `RunDebug(true)` 之后（库代码不再无条件打印到 stdout）。
+- README 移除机器相关路径，驱动表补充协议族说明。
 
 ### 破坏性变更（Breaking Changes）
 

@@ -242,7 +242,9 @@ func (self *TUniTable) AutoKeys(this *TUniEngine, GetSqlAutoKeys ...interface{})
 		CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
 	}
 	CodeText = fmt.Sprintf(".SetKeys( %s )", CodeText[1:])
-	fmt.Printf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s\n", self.TableName, CodeText)
+	if this.debugging() {
+		fmt.Printf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s\n", self.TableName, CodeText)
+	}
 
 	return nil
 }
