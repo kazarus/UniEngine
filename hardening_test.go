@@ -1,6 +1,7 @@
 package UniEngine
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -113,5 +114,73 @@ func TestConcurrentRegisterClass(t *testing.T) {
 		if engine.GetTable(name) == nil {
 			t.Fatalf("table %s not registered", name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 标识符引用:schema.table 需逐段加引号,不能被当成单个标识符
+// ---------------------------------------------------------------------------
+
+func TestQuoteIdentDotted(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"t", `"t"`},
+		{"schema.table", `"schema"."table"`},
+		{`a"b`, `"a""b"`},
+	}
+	for _, c := range cases {
+		if got := quoteIdent(c.in); got != c.want {
+			t.Errorf("quoteIdent(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCopyInStmtDottedTable(t *testing.T) {
+	got := copyInStmt("schema.t", []string{"a", "b"})
+	want := `COPY "schema"."t" ("a", "b") FROM STDIN`
+	if got != want {
+		t.Fatalf("copyInStmt = %s, want %s", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 注册:跳过无 db tag 与未导出字段(前者污染 "" 键,后者反射 panic)
+// ---------------------------------------------------------------------------
+
+// regSkipUser 含 正常字段 / 无 tag 字段 / 未导出字段
+type regSkipUser struct {
+	ID     int64  `db:"id"`
+	Name   string `db:"name"`
+	NoTag  string // 无 db tag,应被跳过
+	hidden string // 未导出,应被跳过
+}
+
+func TestRegisterClassSkipsUntaggedAndUnexported(t *testing.T) {
+	engine := newHardeningEngine(DtPOSTGR)
+	tb := engine.RegisterClass(regSkipUser{}, "reg_skip_user")
+
+	if len(tb.ListField) != 2 {
+		t.Fatalf("ListField = %d, want 2 (only tagged exported fields)", len(tb.ListField))
+	}
+	if _, ok := tb.HashField[""]; ok {
+		t.Error(`registry must not contain empty "" field key`)
+	}
+	if _, ok := tb.HashField["notag"]; ok {
+		t.Error("untagged field must be skipped")
+	}
+	if _, ok := tb.HashField["hidden"]; ok {
+		t.Error("unexported field must be skipped")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 事务:重复 Begin 必须显式拒绝,而非覆盖并泄漏上一个事务
+// ---------------------------------------------------------------------------
+
+func TestBeginTwiceRejected(t *testing.T) {
+	engine := &TUniEngine{}
+	engine.inTx = true // 模拟已开启事务;守卫应在触碰 Db(此处为 nil)前返回
+
+	if err := engine.Begin(); !errors.Is(err, ErrAlreadyInTransaction) {
+		t.Fatalf("expected ErrAlreadyInTransaction, got %v", err)
 	}
 }

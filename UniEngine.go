@@ -152,7 +152,7 @@ func (self *TUniEngine) getColParam(FieldName string) string {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	return "\"" + FieldName + "\""
+	return quoteIdent(FieldName)
 }
 
 // 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
@@ -289,10 +289,20 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 
 		f := t.Field(i)
 
+		// 跳过未导出字段:反射无法读写(FieldByName().Interface() 会 panic)
+		if f.PkgPath != "" {
+			continue
+		}
+
 		var UniField = TUniField{}
 		UniField.AttriName = f.Name
 
 		UniField.initialize(f.Tag.Get(self.ColLabel))
+
+		// 跳过无 db tag 的字段:FieldName 为空会以 "" 键污染注册表并生成非法 SQL
+		if UniField.FieldName == "" {
+			continue
+		}
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
 		// 保留 struct 声明顺序，供 INSERT/UPDATE 列序生成
@@ -1889,13 +1899,18 @@ func (self *TUniEngine) Begin() error {
 
 func (self *TUniEngine) BeginCtx(ctx context.Context) error {
 
+	self.lockTables()
+	defer self.mu.Unlock()
+
+	// 重复 Begin 会让上一个事务失去引用(悬挂/泄漏),此处显式拒绝
+	if self.inTx || self.tx != nil {
+		return ErrAlreadyInTransaction
+	}
+
 	tx, eror := self.Db.BeginTx(ctx, nil)
 	if eror != nil {
 		return eror
 	}
-
-	self.lockTables()
-	defer self.mu.Unlock()
 
 	self.tx = tx
 	self.inTx = true

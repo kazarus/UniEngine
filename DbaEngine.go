@@ -178,8 +178,15 @@ type HasSetSqlResult interface {
 // ---------------------------------------------------------------------------
 
 // quoteIdent 双引号包裹标识符,内嵌双引号翻倍转义(SQL 标准)。
+// 支持 schema.table:按 "." 分段逐段加引号,避免整体加引号被当成单个标识符。
 func quoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		parts[i] = `"` + strings.ReplaceAll(part, `"`, `""`) + `"`
+	}
+
+	return strings.Join(parts, ".")
 }
 
 // copyInStmt 拼 COPY IN 协议语句,输出与 pq.CopyIn 逐字一致:

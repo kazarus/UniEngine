@@ -28,7 +28,7 @@ v1（master 分支）继续可用且不再变更。
 
 ### 哨兵错误
 
-新增 `errors.go`：`ErrUnregisteredClass`/`ErrNoPkeys`/`ErrNoTransaction`/`ErrInvalidTableName`/`ErrInvalidConstraintName`，调用方改用 `errors.Is` 判别；报错点以 `%w` 包装，**消息文本与旧版一致**。
+新增 `errors.go`：`ErrUnregisteredClass`/`ErrNoPkeys`/`ErrNoTransaction`/`ErrAlreadyInTransaction`/`ErrInvalidTableName`/`ErrInvalidConstraintName`，调用方改用 `errors.Is` 判别；报错点以 `%w` 包装，**消息文本与旧版一致**。
 
 ### 性能
 
@@ -111,6 +111,13 @@ v1（master 分支）继续可用且不再变更。
 - **`CopyInL` 方言路由**：非 PG 协议族直接报错，不再发送必然失败的 COPY 语句。
 - **移除 `github.com/lib/pq` 依赖**（模块归零第三方运行时依赖）：新增 `quoteIdent`（标识符双引号转义）与 `copyInStmt`（自实现 COPY IN 协议语句，输出与 `pq.CopyIn` 逐字一致）；`go.mod` 清空 `require`。
 - **移除未使用的生命周期钩子接口**：`HasStartSelect`/`HasEndedSelect`/`HasStartUpdate`/`HasEndedUpdate`/`HasStartInsert`/`HasEndedInsert`/`HasStartDelete`/`HasEndedDelete`/`HasGetSqlDelete` 删除（引擎从不调用）。
+
+### 行为变更与修复（第三阶段加固）
+
+- **标识符引用修正**：`quoteIdent` 改为按 `.` 分段逐段加引号（`schema.table` → `"schema"."table"`），修复 COPY 路径把限定名整体加引号当成单个标识符的问题；`getColParam` 复用 `quoteIdent`，列名引用与 COPY 路径一致（CRUD 表名仍保持裸插值，因其对限定名本就正确且 MySQL 不适用双引号）。
+- **注册过滤**：`RegisterClass` 跳过**未导出字段**（避免 `FieldByName().Interface()` 反射 panic）与**无 `db` tag 字段**（避免以 `""` 键污染注册表并生成空列名 SQL）。
+- **`Begin` 重复守卫**：重复 `Begin` 返回新增哨兵 `ErrAlreadyInTransaction`，不再覆盖并泄漏上一个事务；检查与设置改为持锁原子。
+- **内嵌结构体防御**：行扫描预计算下，字段解析到提升字段（`reflect.Index` 长度 > 1）时返回明确错误，而非按 `[0]` 错绑到内嵌结构体本身。
 
 ### 已知限制
 

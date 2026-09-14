@@ -11,6 +11,8 @@ var (
 	ErrNoPkeys = errors.New("UniEngine: no pkeys column in class registered")
 	// ErrNoTransaction 无进行中的事务(Cancel/Commit)
 	ErrNoTransaction = errors.New("UniEngine: no transaction")
+	// ErrAlreadyInTransaction 已有进行中的事务(重复 Begin)
+	ErrAlreadyInTransaction = errors.New("UniEngine: transaction already in progress")
 	// ErrInvalidTableName 表名标识符不合法(防注入白名单)
 	ErrInvalidTableName = errors.New("UniEngine: invalid table name")
 	// ErrInvalidConstraintName 约束名标识符不合法(防注入白名单)
