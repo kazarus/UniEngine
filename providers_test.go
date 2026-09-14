@@ -204,3 +204,36 @@ func TestSentinelErrors(t *testing.T) {
 		t.Fatalf("expect ErrNoTransaction, got %v", eror)
 	}
 }
+
+// 内嵌提升字段防御:AttriName 解析到提升字段(reflect Index 长度>1)时报错,
+// 而不是按 [0] 错绑到内嵌结构体本身(旧 FieldByName 路径能处理提升字段,预计算后不再支持)。
+// 引擎只注册顶层字段,正常注册不可达此路径;此处直写 HashField 模拟(注册表为导出 map)。
+func TestSelectPromotedFieldGuard(t *testing.T) {
+	type embeddedBase struct {
+		ID int64
+	}
+	type outerRow struct {
+		embeddedBase
+		Name string `db:"name"`
+	}
+
+	d := &mockDriver{
+		columns:   []string{"id"},
+		queryRows: [][]driver.Value{{int64(1)}},
+	}
+	eng := newMockEngine(d)
+	eng.RegisterClass(outerRow{}, "t_outer")
+
+	//#手工注入提升字段映射:FieldByName("ID") 对 outerRow 返回 Index=[0,0]
+	tbl := eng.GetTable("t_outer")
+	if tbl == nil {
+		t.Fatal("t_outer not registered")
+	}
+	tbl.HashField["id"] = TUniField{AttriName: "ID", FieldName: "id"}
+
+	var rows []outerRow
+	eror := eng.SelectL(&rows, "select id from t_outer")
+	if eror == nil || !strings.Contains(eror.Error(), "embedded struct") {
+		t.Fatalf("expected promoted-field guard error, got %v", eror)
+	}
+}

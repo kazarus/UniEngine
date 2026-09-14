@@ -595,6 +595,10 @@ func (self *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 			if !ok {
 				return fmt.Errorf("UniEngine: class[%s] has no attribute[%s]", elemType.String(), UniField.AttriName)
 			}
+			//#仅支持扁平类:内嵌结构体的提升字段 Index 长度>1,取 [0] 会错绑到内嵌字段本身
+			if len(sf.Index) != 1 {
+				return fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", elemType.String(), UniField.AttriName)
+			}
 			fieldIdx[ColIndex] = sf.Index[0]
 
 			if UniField.Encrypt {
