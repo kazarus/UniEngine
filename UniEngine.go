@@ -1438,8 +1438,8 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
-	if x, ok := v.Index(0).Interface().(HasCopyInGetSqlInsertL); ok {
-		SqlQuery = x.CopyInGetSqlInsertL(this, TablName, int64(v.Len()))
+	if x, ok := v.Index(0).Interface().(HasGetSqlCopyInL); ok {
+		SqlQuery = x.GetSqlCopyInL(this, TablName, int64(v.Len()))
 	} else if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
 		//#兼容旧版接口
 		SqlQuery = x.SpecialGetSqlInsertL(this, TablName, int64(v.Len()))

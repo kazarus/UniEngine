@@ -50,7 +50,7 @@ v1（master 分支）继续可用且不再变更。
 | `GetSqlAutoKeys(TUniEngine, string) string` | `GetSqlAutoKeys(TUniEngine, string) (string, error)` | `HasGetSqlAutoKeys` 接口及实现返回值增加 `error` |
 | `SpecialInsertL` / `SpecialInsertLCtx` | `CopyInL` / `CopyInLCtx` | 旧名保留为 `deprecated` 转发 |
 | `SpecialInsertP` / `SpecialInsertPCtx` | `CopyInP` / `CopyInPCtx` | 旧名保留为 `deprecated` 转发 |
-| `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasCopyInGetSqlInsertL` / `CopyInGetSqlInsertL` | 旧接口仍被引擎探测（向后兼容） |
+| `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasGetSqlCopyInL` / `GetSqlCopyInL` | 旧接口仍被引擎探测（向后兼容） |
 | `HasSpecialSetSqlValuesL` / `SpecialSetSqlValuesL` | `HasCopyInSetSqlValuesL` / `CopyInSetSqlValuesL` | 旧接口仍被引擎探测（向后兼容） |
 | `TUniEngine.CanClose()` | （移除） | 自调试打印移除后一直是 no-op 死代码 |
 | 写方法 `args ...interface{}`（首参字符串作表名） | `TableName ...string` | 类型安全：传非字符串由运行期报错变为**编译期报错**；已有调用点无需改动 |

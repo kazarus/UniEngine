@@ -143,7 +143,7 @@ for i := range users {
 | SpecialInsertLCtx   | CopyInLCtx|
 | SpecialInsertP      | CopyInP   |
 | SpecialInsertPCtx   | CopyInPCtx|
-| HasSpecialGetSqlInsertL | HasCopyInGetSqlInsertL |
+| HasSpecialGetSqlInsertL | HasGetSqlCopyInL |
 | HasSpecialSetSqlValuesL | HasCopyInSetSqlValuesL |
 
 - 旧方法名保留为**废弃包装**,直接委托到新实现,源码兼容无需改动;

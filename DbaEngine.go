@@ -139,11 +139,11 @@ type HasGetSqlInsertL interface {
 }
 
 // #批量插入SQL-copy协议
-type HasCopyInGetSqlInsertL interface {
-	CopyInGetSqlInsertL(*TUniEngine, string, int64) []string
+type HasGetSqlCopyInL interface {
+	GetSqlCopyInL(*TUniEngine, string, int64) []string
 }
 
-// #批量插入SQL-copy协议#已废弃:旧版命名,新代码请实现 HasCopyInGetSqlInsertL;引擎仍会探测本接口
+// #批量插入SQL-copy协议#已废弃:旧版命名,新代码请实现 HasGetSqlCopyInL;引擎仍会探测本接口
 type HasSpecialGetSqlInsertL interface {
 	SpecialGetSqlInsertL(*TUniEngine, string, int64) []string
 }
