@@ -103,8 +103,8 @@ func dbFamilyOf(Provider TDriveType) TDbFamily {
 }
 
 // dbFamily 返回本引擎的协议族。
-func (self *TUniEngine) dbFamily() TDbFamily {
-	return dbFamilyOf(self.Provider)
+func (this *TUniEngine) dbFamily() TDbFamily {
+	return dbFamilyOf(this.Provider)
 }
 
 var THasSetSqlResult = reflect.TypeOf(new(HasSetSqlResult)).Elem()
@@ -215,14 +215,14 @@ type HasGetSqlExistViews interface {
 
 type TExistTable4POSTGR struct{}
 
-func (self TExistTable4POSTGR) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4POSTGR) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(relname) as value from pg_class where relname='%s'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
 
-func (self TExistTable4POSTGR) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4POSTGR) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(relname) as value from pg_class where relname='%s' and relkind='v'"
 
@@ -231,14 +231,14 @@ func (self TExistTable4POSTGR) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 
 type TExistTable4SQLSRV struct{}
 
-func (self TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(*) from sysobjects where 1=1 and name='%s'"
 
 	return fmt.Sprintf(result, strings.ToLower(TableName))
 }
 
-func (self TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='V'"
 
@@ -247,14 +247,14 @@ func (self TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 
 type TExistTable4ORACLE struct{}
 
-func (self TExistTable4ORACLE) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4ORACLE) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(*) from all_tables where table_name=upper('%s')"
 
 	return fmt.Sprintf(result, TableName)
 }
 
-func (self TExistTable4ORACLE) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
+func (this TExistTable4ORACLE) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
 	result := "select count(*) from user_views where view_name=upper('%s')"
 
@@ -263,7 +263,7 @@ func (self TExistTable4ORACLE) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 
 type TExistTable4MYSQLN struct{}
 
-func (self TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
+func (this TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
 
 	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
@@ -271,7 +271,7 @@ func (self TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableNa
 	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
 }
 
-func (self TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
+func (this TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
 
 	result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
 
@@ -286,7 +286,7 @@ type HasGetSqlExistField interface {
 
 type TExistField4POSTGR struct{}
 
-func (self TExistField4POSTGR) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
+func (this TExistField4POSTGR) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
 	result := "select count(a.attname) as value from pg_attribute a" +
 		"    left join pg_class b on a.attrelid=b.oid where b.relname='%s' and a.attname='%s' and attnum>0"
@@ -296,7 +296,7 @@ func (self TExistField4POSTGR) GetSqlExistField(UniEngineEx *TUniEngine, TableNa
 
 type TExistField4SQLSRV struct{}
 
-func (self TExistField4SQLSRV) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
+func (this TExistField4SQLSRV) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
 	result := "select count(*) as value from syscolumns where 1=1 and id=object_id('%s') and  name='%s'"
 
@@ -305,7 +305,7 @@ func (self TExistField4SQLSRV) GetSqlExistField(UniEngineEx *TUniEngine, TableNa
 
 type TExistField4ORACLE struct{}
 
-func (self TExistField4ORACLE) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
+func (this TExistField4ORACLE) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
 	result := "select count(*) as value from user_tab_columns where table_name=upper('%s') and column_name=upper('%s')"
 
@@ -314,7 +314,7 @@ func (self TExistField4ORACLE) GetSqlExistField(UniEngineEx *TUniEngine, TableNa
 
 type TExistField4MYSQLN struct{}
 
-func (self TExistField4MYSQLN) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string, DataBase string) string {
+func (this TExistField4MYSQLN) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string, DataBase string) string {
 
 	result := "select count(*) as value from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_name='%s'"
 
@@ -329,7 +329,7 @@ type HasGetSqlExistConst interface {
 type TExistConst4POSTGR struct{}
 
 // #PG:主键/外键/唯一 走 pg_constraint(contype:p/f/u);默认值挂在 pg_attrdef,按列名查
-func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
 
 	switch ConstType {
 	case CtPK:
@@ -348,7 +348,7 @@ func (self TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4SQLSRV struct{}
 
 // #SQLServer:约束对象都在 sys.objects,type:PK/F/UQ/D
-func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
 
 	switch ConstType {
 	case CtPK:
@@ -367,7 +367,7 @@ func (self TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4ORACLE struct{}
 
 // #Oracle:主键 P、外键 R(引用)、唯一 U 在 user_constraints;默认值在 user_tab_cols.data_default,按列名查
-func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
 
 	switch ConstType {
 	case CtPK:
@@ -386,7 +386,7 @@ func (self TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4MYSQLN struct{}
 
 // #MySQL:命名约束在 information_schema.table_constraints;默认值在 information_schema.columns,按列名查
-func (self TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string, DataBase string) string {
+func (this TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string, DataBase string) string {
 
 	switch ConstType {
 	case CtPK:
@@ -409,7 +409,7 @@ type HasGetSqlAutoKeys interface {
 
 type TAutoKeys4POSTGR struct{}
 
-func (self TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
+func (this TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
 	result := "select attname as field_name from pg_attribute" +
 		"    left join pg_class on pg_attribute.attrelid=pg_class.oid" +
@@ -421,7 +421,7 @@ func (self TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName s
 
 type TAutoKeys4SQLSRV struct{}
 
-func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
+func (this TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
 	result := "select c.name as field_name" +
 		"    from sys.indexes i" +
@@ -435,7 +435,7 @@ func (self TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName s
 
 type TAutoKeys4ORACLE struct{}
 
-func (self TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
+func (this TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
 	result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s')"
 
@@ -446,12 +446,12 @@ type TAutoKeys4MYSQLN struct {
 	DataBase string
 }
 
-func (self TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
+func (this TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
-	if self.DataBase == "" {
+	if this.DataBase == "" {
 		return "", fmt.Errorf("UniEngine: you should specify attribute [database] when using mysql.")
 	}
 	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 
-	return fmt.Sprintf(result, self.DataBase, TableName), nil
+	return fmt.Sprintf(result, this.DataBase, TableName), nil
 }

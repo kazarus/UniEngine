@@ -17,21 +17,21 @@ type TUniField struct {
 	PkeyOnly bool   `db:"pkey_only" json:"pkeyOnly"` //#是否主键#数据同步时用到,其他地方不要用,未初始化;
 }
 
-func (self *TUniField) initialize(aValue string) {
+func (this *TUniField) initialize(aValue string) {
 
 	cArguments := strings.Split(aValue, ",")
-	self.FieldName = cArguments[0]
-	if self.FieldName == "-" || self.FieldName == "_" {
-		self.ReadOnly = true
+	this.FieldName = cArguments[0]
+	if this.FieldName == "-" || this.FieldName == "_" {
+		this.ReadOnly = true
 	}
 
 	for _, item := range cArguments[1:] {
 		item := strings.TrimSpace(item)
 		switch item {
 		case "readonly":
-			self.ReadOnly = true
+			this.ReadOnly = true
 		case "encrypt":
-			self.Encrypt = true
+			this.Encrypt = true
 		default:
 			//未识别的 tag 选项,忽略
 		}
