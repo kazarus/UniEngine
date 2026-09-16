@@ -1,3 +1,3 @@
-module github.com/kazarus/UniEngine/v2
+module github.com/kazarus/UniEngine
 
 go 1.21

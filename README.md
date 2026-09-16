@@ -24,14 +24,14 @@ Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等�
 #### 1.安装方式
 
 ```sh
-go get github.com/kazarus/UniEngine/v2
+go get github.com/kazarus/UniEngine
 ```
 
 ```go
-import "github.com/kazarus/UniEngine/v2" //包名仍为 UniEngine
+import "github.com/kazarus/UniEngine" //包名仍为 UniEngine
 ```
 
-> v1(github.com/kazarus/UniEngine,master 分支)继续可用且不再变更;v2 相对 v1 的差异见 CHANGELOG。
+> 模块路径为 `github.com/kazarus/UniEngine`;相对旧版(master 基线)的破坏性变更与新增见 CHANGELOG。
 
 #### 2.使用方法
 

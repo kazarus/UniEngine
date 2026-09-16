@@ -2,17 +2,15 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
-## v2.0.0 — ai-dev-20260904
+## ai-dev-20260904
 
-三线融合：`context.Context` 支持 + 应用层加密 + 加固（第一阶段/第二阶段），并以 **v2 module 路径**发布（钩子接口签名有破坏性修改，按 Go modules 惯例升主版本）。
+三线融合：`context.Context` 支持 + 应用层加密 + 加固（第一阶段/第二阶段）。
 
-### 模块路径（v2）
+### 模块路径
 
-| 旧 | 新 |
-|----|----|
-| `module github.com/kazarus/UniEngine` | `module github.com/kazarus/UniEngine/v2`（`go get github.com/kazarus/UniEngine/v2`，包名仍为 `UniEngine`） |
+`module github.com/kazarus/UniEngine`（`go get github.com/kazarus/UniEngine`，包名 `UniEngine`）。
 
-v1（master 分支）继续可用且不再变更。
+> 注：该线上一度改为 `github.com/kazarus/UniEngine/v2` 并打过 `v2.0.0` / `v2.0.1` tag，现已改回**无主版本后缀**。无后缀模块在 Go modules 中只接受 `v0` / `v1` 版本号，故 `v2.x.y` 形式的 tag **不再适用于本模块**；后续发布请使用 `v1.x.y`。
 
 ### 协议族归一化（provider family）
 
