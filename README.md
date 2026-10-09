@@ -177,3 +177,38 @@ go test -bench . -benchmem -run '^$'
 - **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
 - **加解密**:`BenchmarkSecretEncrypt/Decrypt`(ENC2 稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
 - **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。
+
+#### 6.真实数据库集成测试
+
+`integration/` 是**独立 Go 模块**(自带 go.mod),用真实 PostgreSQL(pgx 驱动)验证
+COPY 协议、原生 UPSERT、应用加密、元数据探测与事务的真实驱动行为——库本体保持零第三方依赖不受影响。
+
+```sh
+# 本地运行(需要可达的 PostgreSQL;连不上时自动跳过)
+UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" \
+  go test ./integration/ -v
+
+# 不可达时强制失败而非跳过(CI 即如此)
+UNIENGINE_PG_REQUIRED=1 go test ./integration/ -v
+```
+
+CI 中由 `integration-pg` job 提供 `postgres:16-alpine` service 容器自动执行;
+覆盖用例见 `integration/pg_test.go`(CRUD / on conflict UPSERT / CopyInL+CopyInP /
+ENC2 密文落库与读取还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚)。
+
+#### 7.pgx 驱动与 COPY 协议
+
+pgx(当前主流 PG 驱动)的 `database/sql` 适配层**不模拟** lib/pq 的逐行 COPY 约定
+( COPY 语句 `NumInput()=0`,逐行传参被 `database/sql` 拒绝),因此不接钩子时
+`CopyInL/CopyInP` 在 pgx 下会报 `expected 0 arguments`。解决方式——接 `CopyInHook`
+走 pgx 原生 `CopyFrom`:
+
+```go
+import "github.com/kazarus/UniEngine/contrib/pgxcopy"
+
+UniEngineEx.CopyInHook = pgxcopy.Hook // 一次性设置,之后 CopyInL/CopyInP 正常可用
+```
+
+`contrib/pgxcopy` 为独立模块(自带 go.mod),不引入则库本体保持零第三方依赖;
+非 pgx 驱动(如 lib/pq)下钩子返回未接管,自动回退内置协议。
+注意:钩子经由连接池取连接,无法路由到 `*sql.Tx`,**事务期间** `CopyInL` 会被引擎显式拒绝。

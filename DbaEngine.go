@@ -1,6 +1,8 @@
 package UniEngine
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 	"strings"
@@ -172,6 +174,13 @@ type HasSpecialSetSqlValuesL interface {
 type HasSetSqlResult interface {
 	SetSqlResult(*TUniEngine, interface{}, []string, []interface{})
 }
+
+// #COPY协议执行钩子#为空时使用内置 pq 风格逐行协议(lib/pq 兼容驱动可用);
+// #pgx 等现代驱动不模拟该协议(NumInput=0,逐行传参被 database/sql 拒绝),
+// #需以本钩子接管(官方实现见 contrib/pgxcopy,经 conn.Raw 走原生 CopyFrom)。
+// #Rows 为最终写入行(已完成应用加密);返回 handled=false 回退内置协议。
+// #注意:钩子经由 *sql.DB 连接池取连接,无法路由到当前事务——事务期间引擎显式拒绝。
+type TCopyInHook func(ctx context.Context, db *sql.DB, TableName string, Columns []string, Rows [][]interface{}) (bool, error)
 
 // ---------------------------------------------------------------------------
 // COPY 协议语句(自实现,替代 github.com/lib/pq 的 pq.CopyIn,消除第三方依赖)

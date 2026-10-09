@@ -1,6 +1,7 @@
 package UniEngine
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -837,4 +838,57 @@ func TestSelectLHookSetSqlResult(t *testing.T) {
 	if len(rows) != 1 || rows[0].UserName != "kazarus" || rows[0].Password != "p@ss" {
 		t.Fatalf("hook path wrong: %+v", rows)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// CopyInHook 分发:钩子接管 / handled=false 回退 / 事务期间拒绝
+// ---------------------------------------------------------------------------
+
+func TestCopyInHookDispatch(t *testing.T) {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	eng.RegisterClass(mockRow{}, "mock_row")
+
+	rows := []mockRow{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}}
+
+	//#钩子接管:内置协议不执行(驱动零 exec)
+	var gotTable string
+	var gotRows int
+	eng.CopyInHook = func(ctx context.Context, db *sql.DB, table string, cols []string, rs [][]interface{}) (bool, error) {
+		gotTable, gotRows = table, len(rs)
+		return true, nil
+	}
+	if eror := eng.CopyInL(&rows); eror != nil {
+		t.Fatalf("hook path: %v", eror)
+	}
+	if gotTable != "mock_row" || gotRows != 2 {
+		t.Fatalf("hook args: %s %d", gotTable, gotRows)
+	}
+	if len(d.insertValues) != 0 {
+		t.Fatalf("hook path should not touch driver, got %d execs", len(d.insertValues))
+	}
+
+	//#handled=false:回退内置 pq 风格协议(mock 驱动可执行,2行+1次收尾)
+	eng.CopyInHook = func(ctx context.Context, db *sql.DB, table string, cols []string, rs [][]interface{}) (bool, error) {
+		return false, nil
+	}
+	if eror := eng.CopyInL(&rows); eror != nil {
+		t.Fatalf("fallback path: %v", eror)
+	}
+	if len(d.insertValues) != 3 {
+		t.Fatalf("fallback should exec via driver, got %d execs", len(d.insertValues))
+	}
+
+	//#事务期间:钩子走连接池无法路由到 *sql.Tx,必须显式拒绝
+	eng.CopyInHook = func(ctx context.Context, db *sql.DB, table string, cols []string, rs [][]interface{}) (bool, error) {
+		return true, nil
+	}
+	if eror := eng.Begin(); eror != nil {
+		t.Fatalf("begin: %v", eror)
+	}
+	if eror := eng.CopyInL(&rows); eror == nil || !strings.Contains(eror.Error(), "inside a transaction") {
+		t.Fatalf("tx guard fail: %v", eror)
+	}
+	eng.Cancel()
 }

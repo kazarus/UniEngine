@@ -42,6 +42,7 @@ type TUniEngine struct {
 	SecretIter int    //#PBKDF2迭代次数#0用缺省(UniSecretIter);仅影响新写入,读取以密文内嵌值为准
 
 	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
+	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 
 	Instance string     //#数据库实例
 	DataBase string     //#数据库名称
@@ -1507,6 +1508,24 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 	//#COPY 仅 PostgreSQL 协议族可用;其余方言显式报错,不再发送必然失败的语句
 	if this.dbFamily() != FmPOSTGR {
 		return fmt.Errorf("UniEngine: CopyInL requires a PostgreSQL-family provider (DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB), got [%d]", this.Provider)
+	}
+
+	//#应用钩子优先(pgx 等驱动用 contrib/pgxcopy 接管原生 CopyFrom);
+	//#未处理(handled=false)时回退内置 pq 风格逐行协议
+	if this.CopyInHook != nil {
+
+		//#钩子从连接池取连接,无法路由到 *sql.Tx;事务期间显式拒绝,避免数据落到事务外
+		if this.currentTx() != nil {
+			return errors.New("UniEngine: CopyInHook can not run inside a transaction (pool connection, not tx-routed); commit or cancel first")
+		}
+
+		handled, eror := this.CopyInHook(ctx, this.Db, TablName, SqlQuery, SqlValue)
+		if eror != nil {
+			return fmt.Errorf("UniEngine: copyin fail: %w", eror)
+		}
+		if handled {
+			return nil
+		}
 	}
 
 	Sql4Text := copyInStmt(TablName, SqlQuery)

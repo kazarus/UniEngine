@@ -1,4 +1,4 @@
-# CI: build + vet + gofmt + test -race 的 Go 版本矩阵
+# CI: build + vet + gofmt + test -race 的 Go 版本矩阵 + PostgreSQL 真库集成测试
 # go.mod 下限 1.24;矩阵覆盖下限与后续各版本,新增 Go 版本时在此追加
 name: CI
 
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache: false # 本库零第三方依赖,无 go.sum 可缓存
+          cache: false # 库本体零第三方依赖,无 go.sum 可缓存
 
       - name: Build
         run: go build ./...
@@ -44,3 +44,45 @@ jobs:
       # 基准代码也在 CI 里编译并各执行一次,防止其随重构腐化
       - name: Benchmark smoke
         run: go test -run '^$' -bench . -benchtime=1x .
+
+  # PostgreSQL 真实驱动(pgx)集成测试:独立模块 integration/,不污染库本体零依赖
+  integration-pg:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: uni
+          POSTGRES_PASSWORD: uni
+          POSTGRES_DB: uni
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U uni -d uni"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      UNIENGINE_PG_DSN: postgres://uni:uni@127.0.0.1:5432/uni?sslmode=disable
+      UNIENGINE_PG_REQUIRED: '1' # 容器就绪后数据库必须可达,不可静默跳过
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: |
+            integration/go.sum
+            contrib/pgxcopy/go.sum
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: integration
+
+      - name: Vet (contrib/pgxcopy)
+        run: go vet ./...
+        working-directory: contrib/pgxcopy
+
+      - name: Integration tests (CRUD/UPSERT/COPY/加密/元数据/事务)
+        run: go test -race -count=1 -v ./...
+        working-directory: integration

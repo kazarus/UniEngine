@@ -141,8 +141,30 @@
 
 push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.x`，1.24 为 go.mod 下限）× ubuntu-latest，依次执行 build → vet → gofmt 检查 → `go test -race -count=1` → 基准冒烟（`-benchtime=1x` 编译并各执行一次，防基准代码随重构腐化）。新 Go 版本发布后在矩阵追加一行即可。仓库零第三方依赖（无 go.sum），故关闭 setup-go 依赖缓存。
 
+### PostgreSQL 真实驱动集成测试（integration/ 独立模块）
+
+新增 `integration/` 目录为**独立 Go 模块**（自带 go.mod，`replace` 指向库本体），引入 `github.com/jackc/pgx/v5/stdlib` 作为**仅测试依赖**——库本体（根模块）保持零第三方依赖、go 1.24 下限不变，pgx 的传递版本要求被隔离在集成模块内。此前所有测试基于自实现 mock driver，真实驱动路径（COPY 协议、UPSERT 语句、加密密文落库）从未被验证过，本组测试补上这一层：
+
+- **CRUD**：Insert/SelectL/Select/SelectS/SelectD/Update/Delete 全链路；
+- **原生 UPSERT**：SaveIt 的插入/更新两分支、SaveItWhenNotExist 的插入/跳过两分支（`on conflict` 真实执行）；
+- **COPY 协议**：CopyInL 批量 120 行、CopyInP 按 PageSize 分页（自实现 `copyInStmt` 对 pgx 的兼容性由此验证）；
+- **应用加密**：Insert/Update/SaveIt 后库中为 `ENC2:` 密文（同明文两次加密密文不同）、SelectL/Select 自动还原（含中文）、存量明文直通、COPY 路径加密；
+- **元数据探测**：AutoKeys 发现 bigserial 主键、ExistTable/ExistField/ExistConst（pg_catalog 真实查询）；
+- **事务**：Begin→Insert→Cancel 回滚、Begin→Insert→Commit 提交、事务期间重复 Begin 返回 `ErrAlreadyInTransaction`。
+
+运行方式：`UNIENGINE_PG_DSN=... go test ./integration/ -v`（连不上默认跳过，`UNIENGINE_PG_REQUIRED=1` 强制失败）；CI 由 `integration-pg` job 提供 `postgres:16-alpine` service 容器并设 `UNIENGINE_PG_REQUIRED=1` 自动执行。
+
+### CopyInHook 与 contrib/pgxcopy（集成测试发现的真实缺陷及修复）
+
+集成测试首次在真实 pgx 驱动下验证 COPY 协议时即抓到缺陷：**内置的 pq 风格逐行 COPY 协议在 pgx 下不可用**——pgx 的 stdlib 适配层不模拟 lib/pq 的 COPY 约定（COPY 语句 `NumInput()=0`，逐行传参被 `database/sql` 以 "expected 0 arguments" 拒绝），而 pgx 是当前主流 PG 驱动。修复为"引擎钩子 + 官方适配模块"，库本体保持零第三方依赖：
+
+- **`TUniEngine.CopyInHook`**（`TCopyInHook` 类型）：COPY 协议执行钩子，接管 `CopyInL`/`CopyInP` 的批量写入；返回 `handled=false` 回退内置 pq 风格协议（lib/pq 兼容驱动不变）。`Rows` 为最终写入行（已完成应用加密）。**事务守卫**：钩子经由 `*sql.DB` 连接池取连接、无法路由到 `*sql.Tx`，事务期间引擎显式拒绝（避免数据静默落到事务外）。
+- **`contrib/pgxcopy`（独立模块）**：经 `*sql.Conn.Raw` 取 pgx 原生连接执行 `CopyFrom`，`UniEngineEx.CopyInHook = pgxcopy.Hook` 一行接入；支持 `schema.table` 限定名；非 pgx 驱动返回未接管自动回退。
+- 集成测试同步钉住两种行为：接钩子后 `CopyInL`（120 行）/`CopyInP`（PageSize 分页）真实写入且内容正确；**不接钩子**时 pgx 下报 `expected 0 arguments` 且零写入（文档化限制，防未来静默漂移）。
+
 ### 已知限制
 
+- **pgx 驱动下 `CopyIn*` 需接 `CopyInHook`**（`contrib/pgxcopy.Hook`）：pgx stdlib 不模拟 lib/pq 逐行 COPY 约定，不接钩子报 `expected 0 arguments`；lib/pq 兼容驱动不受影响。事务期间 `CopyIn*`（钩子路径）被显式拒绝。
 - **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。
 - 配置字段（`ColLabel`/`ColParam`/`Provider`/`SecretOn`/`SecretBy` 等）与表结构变更（`SetKeys`/`SetSecret`/`AutoKeys`/`PrepareTables`/`PrepareRunSQL`）应在并发查询开始前完成。
 - **`encrypt` 不适用于主键字段**：主键值必须明文才能参与 WHERE 定位与冲突匹配；`SetSecret`/`SetKeys`/`AutoKeys` 会显式拒绝该组合，请勿对主键字段标记 `encrypt`。
