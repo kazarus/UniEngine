@@ -61,7 +61,7 @@ type itUser struct {
 	Password string `db:"password"`
 }
 
-// #加密列变体:走 ENC2 应用加密路径
+// #加密列变体:走 ENC 应用加密路径
 type itSecretUser struct {
 	UserName string `db:"user_name"`
 	Password string `db:"password,encrypt"`
@@ -278,7 +278,7 @@ func TestIntegrationCopyInDefaultPathPinned(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 应用加密:存储层为 ENC2 密文,读取层自动还原
+// 应用加密:存储层为 ENC 密文,读取层自动还原
 // ---------------------------------------------------------------------------
 
 func TestIntegrationSecret(t *testing.T) {
@@ -291,13 +291,13 @@ func TestIntegrationSecret(t *testing.T) {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
-	//#Insert:库中落为 ENC2 密文(SelectS 标量路径不解密,恰好用于断言存储形态)
+	//#Insert:库中落为 ENC 密文(SelectS 标量路径不解密,恰好用于断言存储形态)
 	if eror := eng.Insert(&itSecretUser{"sec-1", "s3cret中文"}); eror != nil {
 		t.Fatalf("insert: %v", eror)
 	}
 	raw1 := passwordOf(t, eng, "sec-1")
-	if !strings.HasPrefix(raw1, "ENC2:") || raw1 == "s3cret中文" {
-		t.Fatalf("stored value should be ENC2 cipher, got %.40s", raw1)
+	if !strings.HasPrefix(raw1, "ENC:") || raw1 == "s3cret中文" {
+		t.Fatalf("stored value should be ENC cipher, got %.40s", raw1)
 	}
 
 	//#同一明文两次加密,密文不同(随机盐+nonce)
@@ -321,7 +321,7 @@ func TestIntegrationSecret(t *testing.T) {
 	if eror := eng.Update(&itSecretUser{"sec-1", "rotated"}); eror != nil {
 		t.Fatalf("update: %v", eror)
 	}
-	if raw := passwordOf(t, eng, "sec-1"); !strings.HasPrefix(raw, "ENC2:") {
+	if raw := passwordOf(t, eng, "sec-1"); !strings.HasPrefix(raw, "ENC:") {
 		t.Fatalf("update should store cipher, got %.40s", raw)
 	}
 	var one itSecretUser
@@ -336,7 +336,7 @@ func TestIntegrationSecret(t *testing.T) {
 	if eror := eng.SaveIt(&itSecretUser{"sec-2", "v9"}); eror != nil {
 		t.Fatalf("saveit: %v", eror)
 	}
-	if v := passwordOf(t, eng, "sec-2"); !strings.HasPrefix(v, "ENC2:") {
+	if v := passwordOf(t, eng, "sec-2"); !strings.HasPrefix(v, "ENC:") {
 		t.Fatalf("saveit should store cipher, got %.40s", v)
 	}
 	var two itSecretUser
@@ -369,7 +369,7 @@ func TestIntegrationSecret(t *testing.T) {
 	if n := countUser(t, eng); n != 3 {
 		t.Fatalf("copyinl secret count: %d", n)
 	}
-	if raw := passwordOf(t, eng, "cp-2"); !strings.HasPrefix(raw, "ENC2:") {
+	if raw := passwordOf(t, eng, "cp-2"); !strings.HasPrefix(raw, "ENC:") {
 		t.Fatalf("copyin should store cipher, got %.40s", raw)
 	}
 	var cps []itSecretUser

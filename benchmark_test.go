@@ -4,14 +4,8 @@
 package UniEngine
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/base64"
-	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -246,7 +240,7 @@ func benchmarkSecretDecrypt(b *testing.B, value string) {
 	}
 }
 
-// #现行格式 ENC2:稳定态加/解密(派生密钥缓存命中),按值长度分档
+// #稳定态加/解密(派生密钥缓存命中),按值长度分档
 func BenchmarkSecretEncrypt(b *testing.B) {
 	for _, size := range []struct {
 		name string
@@ -266,46 +260,6 @@ func BenchmarkSecretDecrypt(b *testing.B) {
 		b.Run(size.name, func(b *testing.B) {
 			benchmarkSecretDecrypt(b, strings.Repeat("v", size.n))
 		})
-	}
-}
-
-// #benchLegacyCipherText 按旧算法(单次SHA-256派生)构造 ENC: 密文
-func benchLegacyCipherText(b *testing.B, secretBy, plain string) string {
-
-	b.Helper()
-
-	sum := sha256.Sum256([]byte(secretBy))
-	block, eror := aes.NewCipher(sum[:])
-	if eror != nil {
-		b.Fatal(eror)
-	}
-	gcm, eror := cipher.NewGCM(block)
-	if eror != nil {
-		b.Fatal(eror)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, eror = io.ReadFull(rand.Reader, nonce); eror != nil {
-		b.Fatal(eror)
-	}
-	ct := gcm.Seal(nil, nonce, []byte(plain), nil)
-
-	return UniSecretTag + base64.StdEncoding.EncodeToString(append(nonce, ct...))
-}
-
-// #旧格式 ENC: 读取路径(每次调用重建 cipher,无缓存)
-func BenchmarkSecretDecryptLegacyENC(b *testing.B) {
-
-	eng := &TUniEngine{SecretOn: 1, SecretBy: "bench-secret-key"}
-	legacy := benchLegacyCipherText(b, "bench-secret-key", strings.Repeat("v", 16))
-
-	b.SetBytes(16)
-	b.ReportAllocs()
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		if _, eror := eng.Secret(legacy, false); eror != nil {
-			b.Fatal(eror)
-		}
 	}
 }
 

@@ -122,9 +122,9 @@
 ### 密钥派生加固（评审加固）
 
 - **内置加密的密钥派生从单次 SHA-256 升级为 PBKDF2-HMAC-SHA256**（标准库 `crypto/pbkdf2`，`go.mod` 最低版本 1.21 → 1.24，仍零第三方依赖）：低熵密钥不再可直接离线暴力破解，缺省 600000 次迭代（OWASP 2023 建议值），新增 `TUniEngine.SecretIter` 可调。
-- **现行密文格式 `ENC2:`** + base64( 盐(16) + 迭代数(4,大端) + 随机nonce + GCM密文 )：盐与迭代数内嵌密文，读取自包含（跨进程/跨密文可直接解密）；密文内嵌迭代数做合法性校验（≤0 或超上限拒绝），防损坏或恶意密文触发超高开销派生。
+- **密文格式 `ENC:`** + base64( 盐(16) + 迭代数(4,大端) + 随机nonce + GCM密文 )：盐与迭代数内嵌密文，读取自包含（跨进程/跨密文可直接解密）；密文内嵌迭代数做合法性校验（≤0 或超上限拒绝），防损坏或恶意密文触发超高开销派生。
 - **派生密钥缓存**：按"盐+迭代数"缓存在引擎内（指针字段，按值拷贝引擎时共享），每进程每份盐只付一次 PBKDF2 开销；首个到达的调用持锁派生，并发等待者直接命中缓存。行级加解密本身仍是纯 AES-GCM，读写吞吐不受影响。
-- **旧格式 `ENC:` 读兼容**：存量密文（单次 SHA-256 派生时代写入）仍可解密读取，重新保存后自动落为 `ENC2:`；`IsEncrypted` 识别新旧两种标签。
+- **单标签 `ENC:`**：项目未投产、无存量密文兼容负担，双标签（`ENC2:`）与旧格式（单次 SHA-256 派生）读兼容路径已删除，加密格式只有一种。
 - `SecretHook` 自定义钩子路径不受影响（钩子完全接管加解密时，格式由应用自定）。
 
 ### 基准测试（benchmark_test.go）
@@ -133,8 +133,8 @@
 
 - **`BenchmarkSelectLScan` vs `BenchmarkSelectLScanLegacy`**：现行"列→字段下标预解析"路径与旧算法复刻（每行每列 `FieldByName` + `HashField` 查找）走同一 mock 传输，差值即该优化的净收益（Apple M3 Ultra 实测 1000 行×10 列：320µs vs 777µs，**约 2.4×**，分配次数少 1/3）。
 - **`BenchmarkSelectLScanDecrypt`**：行扫描+每行解密 1 个加密列的联合路径，解密增量与独立解密基准吻合（约 0.4µs/值）。
-- **`BenchmarkSecretEncrypt/Decrypt`**：ENC2 稳定态（派生密钥缓存命中）按 16B/256B/4KB 分档；4KB 档 GCM 吞吐约 0.8-1.2 GB/s。
-- **`BenchmarkSecretDecryptLegacyENC` / `BenchmarkSecretDecryptPlaintext`**：旧格式读取与存量明文直通（后者零分配，约 2ns）。
+- **`BenchmarkSecretEncrypt/Decrypt`**：稳定态（派生密钥缓存命中）按 16B/256B/4KB 分档；4KB 档 GCM 吞吐约 0.8-1.2 GB/s。
+- **`BenchmarkSecretDecryptPlaintext`**：存量明文直通（零分配，约 2ns）。
 - **`BenchmarkSecretPBKDF2DeriveCold`**：一次性冷派生开销（缺省 600000 次迭代，实测约 53ms）——生产中每进程每份盐只付一次，行级吞吐不受影响。
 
 ### CI（.github/workflows/ci.yml）
@@ -148,7 +148,7 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 - **CRUD**：Insert/SelectL/Select/SelectS/SelectD/Update/Delete 全链路；
 - **原生 UPSERT**：SaveIt 的插入/更新两分支、SaveItWhenNotExist 的插入/跳过两分支（`on conflict` 真实执行）；
 - **COPY 协议**：CopyInL 批量 120 行、CopyInP 按 PageSize 分页（自实现 `copyInStmt` 对 pgx 的兼容性由此验证）；
-- **应用加密**：Insert/Update/SaveIt 后库中为 `ENC2:` 密文（同明文两次加密密文不同）、SelectL/Select 自动还原（含中文）、存量明文直通、COPY 路径加密；
+- **应用加密**：Insert/Update/SaveIt 后库中为 `ENC:` 密文（同明文两次加密密文不同）、SelectL/Select 自动还原（含中文）、存量明文直通、COPY 路径加密；
 - **元数据探测**：AutoKeys 发现 bigserial 主键、ExistTable/ExistField/ExistConst（pg_catalog 真实查询）；
 - **事务**：Begin→Insert→Cancel 回滚、Begin→Insert→Commit 提交、事务期间重复 Begin 返回 `ErrAlreadyInTransaction`。
 
