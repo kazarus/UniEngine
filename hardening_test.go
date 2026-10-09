@@ -1,8 +1,10 @@
 package UniEngine
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -182,5 +184,39 @@ func TestBeginTwiceRejected(t *testing.T) {
 
 	if err := engine.Begin(); !errors.Is(err, ErrAlreadyInTransaction) {
 		t.Fatalf("expected ErrAlreadyInTransaction, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 写方法传入 typed nil 指针:返回明确错误,不再反射 panic
+// ---------------------------------------------------------------------------
+
+func TestWriteMethodsRejectNilPointer(t *testing.T) {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	tbl := eng.RegisterClass(hardeningUser{}, "hardening_user")
+	if err := tbl.SetKeys("id"); err != nil {
+		t.Fatalf("SetKeys: %v", err)
+	}
+
+	cases := map[string]func() error{
+		"SaveIt": func() error { return eng.SaveIt((*hardeningUser)(nil)) },
+		"Update": func() error { return eng.Update((*hardeningUser)(nil)) },
+		"Insert": func() error { return eng.Insert((*hardeningUser)(nil)) },
+		"Delete": func() error { return eng.Delete((*hardeningUser)(nil)) },
+		"SaveItWhenNotExist": func() error {
+			return eng.SaveItWhenNotExist((*hardeningUser)(nil))
+		},
+	}
+	for name, call := range cases {
+		err := call()
+		if err == nil {
+			t.Errorf("%s with nil pointer should return error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "nil pointer") {
+			t.Errorf("%s error should mention nil pointer, got: %v", name, err)
+		}
 	}
 }

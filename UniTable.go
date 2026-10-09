@@ -131,6 +131,21 @@ func (this *TUniTable) pkeyFields() []TUniField {
 	return keys
 }
 
+// secretColumn 判断写入路径是否对该列应用加密:主键值一律保持明文
+// (WHERE 定位行的语义,密文无法与库中存量匹配),仅数据列参与应用加密。
+// SetSecret/SetKeys/AutoKeys 已在登记时双向拒绝 encrypt×主键,
+// 此处对绕过守卫直接改注册表的用法兜底。
+func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
+
+	if !ItemPara.Encrypt {
+		return false
+	}
+
+	_, isPkey := this.HashPkeys[strings.ToLower(ItemPara.FieldName)]
+
+	return !isPkey
+}
+
 func (this *TUniTable) SetKeys(Fields ...interface{}) error {
 
 	for _, ItemPara := range Fields {
@@ -143,6 +158,11 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) error {
 		Field, Valid := this.HashField[strings.ToLower(fieldName)]
 		if !Valid {
 			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(fieldName))
+		}
+
+		//#主键值一律明文(WHERE 定位语义),与 encrypt 互斥
+		if Field.Encrypt {
+			return fmt.Errorf("UniEngine: field[%s.%s] is encrypt-marked; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
 		}
 
 		lowerName := strings.ToLower(fieldName)
@@ -169,6 +189,11 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) error {
 		Field, Valid := this.HashField[lowerName]
 		if !Valid {
 			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+		}
+
+		//#主键值一律明文(WHERE 定位语义),与 encrypt 互斥
+		if _, isPkey := this.HashPkeys[lowerName]; isPkey {
+			return fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, lowerName)
 		}
 
 		Field.Encrypt = true
@@ -232,6 +257,11 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 		ItemCopy, Valid := this.HashField[strings.ToLower(ItemPara.FieldName)]
 		if !Valid {
 			return fmt.Errorf("UniEngine: database have field[%s.%s], but class not.", this.TableName, ItemPara.FieldName)
+		}
+
+		//#主键值一律明文(WHERE 定位语义),与 encrypt 互斥
+		if ItemCopy.Encrypt {
+			return fmt.Errorf("UniEngine: field[%s.%s] is encrypt-marked; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, ItemPara.FieldName)
 		}
 
 		lowerName := strings.ToLower(ItemPara.FieldName)

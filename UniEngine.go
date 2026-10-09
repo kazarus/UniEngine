@@ -837,6 +837,11 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 		t = t.Elem()
 	}
 
+	//#typed nil 指针:Indirect 返回零值 Value,后续反射取值会 panic,此处显式拒绝
+	if rv := reflect.ValueOf(i); rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] got a nil pointer param; check your code;", Method)
+	}
+
 	if wantKind == reflect.Slice {
 		if t.Kind() != reflect.Slice {
 			return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] needs a slice param; check your code;", Method)
@@ -1037,19 +1042,21 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 		return false, nil
 	}
 
+	//#主键值一律明文(on conflict 的匹配即 WHERE 语义);仅数据列参与应用加密
 	values := make([]interface{}, 0, len(keys)+len(cols))
-	for _, list := range [][]TUniField{keys, cols} {
-		for _, ItemPara := range list {
-			if ItemPara.Encrypt {
-				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
-				if eror != nil {
-					return false, eror
-				}
-				values = append(values, Value)
-				continue
+	for _, ItemPara := range keys {
+		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+	}
+	for _, ItemPara := range cols {
+		if UniTable.secretColumn(ItemPara) {
+			Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+			if eror != nil {
+				return false, eror
 			}
-			values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+			values = append(values, Value)
+			continue
 		}
+		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
 	}
 
 	this.debugSQL("upsert", cSQL, values)
@@ -1287,7 +1294,7 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 			paramList = append(paramList, this.getValParam(ColIndex))
 			ColIndex = ColIndex + 1
 
-			if ItemPara.Encrypt {
+			if UniTable.secretColumn(ItemPara) {
 				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
 				if eror != nil {
 					return eror
@@ -1369,7 +1376,7 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 				paramList = append(paramList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
-				if ItemPara.Encrypt {
+				if UniTable.secretColumn(ItemPara) {
 					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
 					if eror != nil {
 						return eror
@@ -1477,7 +1484,7 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 			for _, ItemPara := range fields {
 
-				if ItemPara.Encrypt {
+				if UniTable.secretColumn(ItemPara) {
 					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
 					if eror != nil {
 						return eror

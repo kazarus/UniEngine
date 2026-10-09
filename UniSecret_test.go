@@ -533,3 +533,136 @@ func TestSetSecretSyncListField(t *testing.T) {
 		t.Fatal("non-string argument should return error")
 	}
 }
+
+// ----------------------------------------
+// #encrypt×主键互斥与主键值明文(WHERE 定位语义)
+// ----------------------------------------
+
+// #测试18:SetSecret 拒绝已登记为主键的字段
+func TestSetSecretRejectsPkey(t *testing.T) {
+	d := &mockDriver{}
+	eng := newSecretTestEngine(d)
+	tbl := eng.RegisterClass(TTestUser{}, "test_user2")
+	if eror := tbl.SetKeys("user_name"); eror != nil {
+		t.Fatalf("SetKeys: %v", eror)
+	}
+	if eror := tbl.SetSecret("user_name"); eror == nil {
+		t.Fatal("SetSecret on a pkey field should return error")
+	}
+}
+
+// #测试19:SetKeys 拒绝已标记 encrypt 的字段(与测试18构成双向守卫)
+func TestSetKeysRejectsEncrypt(t *testing.T) {
+	d := &mockDriver{}
+	eng := newSecretTestEngine(d)
+	tbl := eng.RegisterClass(TTestUser{}, "test_user3")
+	if eror := tbl.SetKeys("password"); eror == nil {
+		t.Fatal("SetKeys on an encrypt-marked field should return error")
+	}
+}
+
+// #测试20:AutoKeys 发现的主键若已标记 encrypt,同样拒绝
+func TestAutoKeysRejectsEncrypt(t *testing.T) {
+	d := &mockDriver{columns: []string{"field_name"}, queryRows: [][]driver.Value{{"password"}}}
+	eng := newSecretTestEngine(d)
+	tbl := eng.RegisterClass(TTestUser{}, "test_user")
+	eror := tbl.AutoKeys(eng)
+	if eror == nil || !strings.Contains(eror.Error(), "encrypt") {
+		t.Fatalf("AutoKeys on encrypt-marked pkey should return error, got: %v", eror)
+	}
+}
+
+// #tPkeySecretRow 两列均标记 encrypt;user_name 经直接改注册表强制成为主键,
+// #绕过 SetKeys/SetSecret 守卫,验证写入路径的兜底行为:主键值明文,数据列密文
+type tPkeySecretRow struct {
+	UserName string `db:"user_name,encrypt"`
+	Password string `db:"password,encrypt"`
+}
+
+func newPkeySecretEngine(d *mockDriver) *TUniEngine {
+	db := sql.OpenDB(mockConnector{d: d})
+	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
+		SecretOn: 1, SecretBy: "test-secret-key"}
+	eng.Initialize()
+	tbl := eng.RegisterClass(tPkeySecretRow{}, "t_pkey_secret")
+	fld := tbl.HashField["user_name"]
+	tbl.HashPkeys["user_name"] = fld
+	tbl.ListPkeys = append(tbl.ListPkeys, fld)
+	return eng
+}
+
+// #测试21:Insert 路径主键值明文,数据列密文
+func TestInsertPkeyPlaintext(t *testing.T) {
+	d := &mockDriver{}
+	eng := newPkeySecretEngine(d)
+
+	row := tPkeySecretRow{UserName: "UID001", Password: "PW001"}
+	if eror := eng.Insert(&row); eror != nil {
+		t.Fatalf("insert: %v", eror)
+	}
+
+	if len(d.insertValues) != 1 {
+		t.Fatalf("expected 1 exec, got %d", len(d.insertValues))
+	}
+	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
+		t.Fatalf("pkey value should stay plaintext, got %q", got)
+	}
+	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC:") {
+		t.Fatalf("data column should be encrypted, got %q", got)
+	}
+}
+
+// #测试22:SaveIt 原生 UPSERT 路径主键值明文(on conflict 匹配即 WHERE 语义)
+func TestSaveItPkeyPlaintext(t *testing.T) {
+	d := &mockDriver{}
+	eng := newPkeySecretEngine(d)
+
+	row := tPkeySecretRow{UserName: "UID001", Password: "PW001"}
+	if eror := eng.SaveIt(&row); eror != nil {
+		t.Fatalf("saveit: %v", eror)
+	}
+
+	sqls := d.snapshotQueries()
+	if len(sqls) == 0 || !strings.Contains(sqls[0], "on conflict") {
+		t.Fatalf("expected native upsert sql, got %v", sqls)
+	}
+	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
+		t.Fatalf("upsert pkey value should stay plaintext, got %q", got)
+	}
+	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC:") {
+		t.Fatalf("upsert data column should be encrypted, got %q", got)
+	}
+}
+
+// #测试23:Update 的 SET 数据列密文,WHERE 主键值明文
+func TestUpdatePkeyPlaintext(t *testing.T) {
+	d := &mockDriver{}
+	eng := newPkeySecretEngine(d)
+
+	row := tPkeySecretRow{UserName: "UID001", Password: "PW002"}
+	if eror := eng.Update(&row); eror != nil {
+		t.Fatalf("update: %v", eror)
+	}
+
+	if got := fmt.Sprintf("%v", d.insertValues[0][0]); !strings.HasPrefix(got, "ENC:") {
+		t.Fatalf("update set column should be encrypted, got %q", got)
+	}
+	if got := fmt.Sprintf("%v", d.insertValues[0][1]); got != "UID001" {
+		t.Fatalf("update where pkey should stay plaintext, got %q", got)
+	}
+}
+
+// #测试24:Delete 的 WHERE 主键值明文
+func TestDeletePkeyPlaintext(t *testing.T) {
+	d := &mockDriver{}
+	eng := newPkeySecretEngine(d)
+
+	row := tPkeySecretRow{UserName: "UID001", Password: "PW002"}
+	if eror := eng.Delete(&row); eror != nil {
+		t.Fatalf("delete: %v", eror)
+	}
+
+	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
+		t.Fatalf("delete where pkey should stay plaintext, got %q", got)
+	}
+}

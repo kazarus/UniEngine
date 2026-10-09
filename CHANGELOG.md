@@ -116,9 +116,12 @@
 - **注册过滤**：`RegisterClass` 跳过**未导出字段**（避免 `FieldByName().Interface()` 反射 panic）与**无 `db` tag 字段**（避免以 `""` 键污染注册表并生成空列名 SQL）。
 - **`Begin` 重复守卫**：重复 `Begin` 返回新增哨兵 `ErrAlreadyInTransaction`，不再覆盖并泄漏上一个事务；检查与设置改为持锁原子。
 - **内嵌结构体防御**：行扫描预计算下，字段解析到提升字段（`reflect.Index` 长度 > 1）时返回明确错误，而非按 `[0]` 错绑到内嵌结构体本身。
+- **主键值一律明文（encrypt×主键互斥）**：主键是 WHERE 定位行的标识，值保持明文才能与库中存量匹配。`SetSecret` 对已登记主键的字段返回错误，`SetKeys`/`AutoKeys` 对已标记 `encrypt` 的字段返回错误（双向守卫）；写入路径（`Insert`/`InsertL`/`CopyInL`/`saveUpsert`）经 `secretColumn` 对主键列跳过应用加密，兜底防御绕过守卫直接改注册表的用法——`SaveIt` 与 `Update` 对同一行的定位语义从此一致。
+- **写方法 nil 指针守卫**：`SaveIt`/`Update`/`Insert`/`Delete`/`SaveItWhenNotExist`（含 `*Ctx` 变体）传入 typed nil 指针时返回明确错误（此前反射对零值 Value 取 `Interface()` 直接 panic）。
 
 ### 已知限制
 
 - **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。
 - 配置字段（`ColLabel`/`ColParam`/`Provider`/`SecretOn`/`SecretBy` 等）与表结构变更（`SetKeys`/`SetSecret`/`AutoKeys`/`PrepareTables`/`PrepareRunSQL`）应在并发查询开始前完成。
+- **`encrypt` 不适用于主键字段**：主键值必须明文才能参与 WHERE 定位与冲突匹配；`SetSecret`/`SetKeys`/`AutoKeys` 会显式拒绝该组合，请勿对主键字段标记 `encrypt`。
 - `CopyIn*` 的 COPY 协议由包内 `copyInStmt` 自实现，**不再依赖已停维护的 `github.com/lib/pq`**。
