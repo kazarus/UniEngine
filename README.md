@@ -108,15 +108,14 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - 主键字段请勿标记 encrypt(密文含随机nonce,无法用于匹配)
 - **encrypt 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
 - **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调;派生密钥按"盐+迭代数"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
-- 密文格式:`ENC2:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
+- 密文格式:`ENC:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
 
 ##### 3.1.存量数据鉴别与迁移
 
-开启加密后,库中会存在三类数据:加密前的存量明文、旧格式密文(`ENC:`)、现行格式密文(`ENC2:`)。
+开启加密后,库中会存在两类数据:加密前的存量明文、加密后的密文。
 读取时自动鉴别:
 
-- 带 `ENC2:` 标签 → 现行密文,解密后返回
-- 带 `ENC:` 标签 → 旧格式密文(单次 SHA-256 派生密钥时代写入),仍可解密读取;重新保存后自动落为 `ENC2:`
+- 带 `ENC:` 标签 → 密文,解密后返回
 - 无标签 → 存量明文,直通返回(不报错、不解密)
 
 ```go
@@ -131,7 +130,7 @@ for i := range users {
 }
 ```
 
-注意:存量明文若恰好以 `ENC:` 或 `ENC2:` 开头会被误判为密文(真实敏感数据概率极低);
+注意:存量明文若恰好以 `ENC:` 开头会被误判为密文(真实敏感数据概率极低);
 带标签但密钥错误的密文会解密报错(不静默,便于发现密钥轮换问题)。
 
 ##### 4.从旧版本迁移(SpecialInsert → CopyIn)
@@ -175,7 +174,7 @@ go test -bench . -benchmem -run '^$'
 ```
 
 - **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
-- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(ENC2 稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
+- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
 - **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。
 
 #### 6.真实数据库集成测试
@@ -194,7 +193,7 @@ UNIENGINE_PG_REQUIRED=1 go test ./integration/ -v
 
 CI 中由 `integration-pg` job 提供 `postgres:16-alpine` service 容器自动执行;
 覆盖用例见 `integration/pg_test.go`(CRUD / on conflict UPSERT / CopyInL+CopyInP /
-ENC2 密文落库与读取还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚)。
+ENC 密文落库与读取还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚)。
 
 #### 7.pgx 驱动与 COPY 协议
 

@@ -25,17 +25,15 @@ import (
 type TSecretHook func(Value string, Encrypt bool) (string, error)
 
 const (
-	// #旧版密文标签(密钥为 SecretBy 的单次 SHA-256);仅读取兼容,新写入不再产出
+	// #密文标签:PBKDF2 派生密钥,盐与迭代数内嵌密文,读取自包含
 	UniSecretTag = "ENC:"
-	// #现行密文标签:PBKDF2 派生密钥,盐与迭代数内嵌密文,读取自包含
-	UniSecretTagV2 = "ENC2:"
 	// #PBKDF2-HMAC-SHA256 缺省迭代次数(OWASP 2023 建议值);
 	// #派生密钥带缓存,每份"盐+迭代数"每进程只付一次派生开销
 	UniSecretIter = 600000
 
-	secretSaltLen = 16                     //#v2写盐长度(字节)
-	secretHeadLen = secretSaltLen + 4 + 12 //#v2密文头:盐 + 迭代数(4) + nonce(12)
-	//#v2密文内嵌迭代数的合法上限,防御损坏/恶意密文触发超高开销派生
+	secretSaltLen = 16                     //#写盐长度(字节)
+	secretHeadLen = secretSaltLen + 4 + 12 //#密文头:盐 + 迭代数(4) + nonce(12)
+	//#密文内嵌迭代数的合法上限,防御损坏/恶意密文触发超高开销派生
 	secretIterMax = 10000000
 )
 
@@ -158,16 +156,15 @@ func (this *TUniEngine) Secret(Value string, Encrypt bool) (string, error) {
 	return this.SecretDefault(Value, Encrypt)
 }
 
-// #判断值是否为加密密文(带加密标签)#用于存量数据迁移脚本;新旧标签都识别
+// #判断值是否为加密密文(带加密标签)#用于存量数据迁移脚本
 func (this *TUniEngine) IsEncrypted(Value string) bool {
-	return strings.HasPrefix(Value, UniSecretTagV2) || strings.HasPrefix(Value, UniSecretTag)
+	return strings.HasPrefix(Value, UniSecretTag)
 }
 
 // #内置默认实现:
-// #现行格式 ENC2: + base64( 盐(16) + 迭代数(4,大端) + 随机nonce + GCM密文 ),
+// #密文格式 ENC: + base64( 盐(16) + 迭代数(4,大端) + 随机nonce + GCM密文 ),
 // #  密钥 = PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数);盐与迭代数内嵌密文,读取自包含,
 // #  同一明文两次加密结果不同(随机nonce),离线暴力破解需按盐逐份进行;
-// #旧格式 ENC:(密钥为 SecretBy 单次 SHA-256,无盐无迭代)仅保留读取兼容,存量密文仍可解;
 // #无标签的值视为存量明文,直通返回(不尝试解密)
 func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error) {
 
@@ -214,7 +211,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		payload = append(payload, nonce...)
 		payload = append(payload, cipherText...)
 
-		return UniSecretTagV2 + base64.StdEncoding.EncodeToString(payload), nil
+		return UniSecretTag + base64.StdEncoding.EncodeToString(payload), nil
 	}
 
 	//#存量数据鉴别:无标签的值视为存量明文,直通返回(不尝试解密)
@@ -222,45 +219,27 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		return Value, nil
 	}
 
-	//#现行格式:盐与迭代数内嵌,读取自包含(跨进程/跨密文均可解)
-	if strings.HasPrefix(Value, UniSecretTagV2) {
-
-		data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTagV2))
-		if eror != nil {
-			return "", fmt.Errorf("UniEngine: decrypt fail: %w", eror)
-		}
-		if len(data) < secretHeadLen {
-			return "", errors.New("UniEngine: decrypt fail,cipher text is too short")
-		}
-
-		salt := data[:secretSaltLen]
-		iter := int(binary.BigEndian.Uint32(data[secretSaltLen : secretSaltLen+4]))
-		if iter <= 0 || iter > secretIterMax {
-			return "", errors.New("UniEngine: decrypt fail,invalid iterations in cipher text")
-		}
-
-		key, eror := this.deriveKey(salt, iter)
-		if eror != nil {
-			return "", eror
-		}
-
-		plainText, eror := gcmOpen(key, data[secretSaltLen+4:])
-		if eror != nil {
-			return "", eror
-		}
-
-		return string(plainText), nil
-	}
-
-	//#旧格式 ENC::密钥为 SecretBy 的单次 SHA-256(读兼容路径,新写入不再产出)
+	//#密文:盐与迭代数内嵌,读取自包含(跨进程/跨密文均可解)
 	data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
 	if eror != nil {
 		return "", fmt.Errorf("UniEngine: decrypt fail: %w", eror)
 	}
+	if len(data) < secretHeadLen {
+		return "", errors.New("UniEngine: decrypt fail,cipher text is too short")
+	}
 
-	sum := sha256.Sum256([]byte(this.SecretBy))
+	salt := data[:secretSaltLen]
+	iter := int(binary.BigEndian.Uint32(data[secretSaltLen : secretSaltLen+4]))
+	if iter <= 0 || iter > secretIterMax {
+		return "", errors.New("UniEngine: decrypt fail,invalid iterations in cipher text")
+	}
 
-	plainText, eror := gcmOpen(sum[:], data)
+	key, eror := this.deriveKey(salt, iter)
+	if eror != nil {
+		return "", eror
+	}
+
+	plainText, eror := gcmOpen(key, data[secretSaltLen+4:])
 	if eror != nil {
 		return "", eror
 	}
