@@ -167,3 +167,13 @@ for i := range users {
 - **(第二阶段)`Select` 多行时报错**(旧版静默保留最后一行),多行请用 `SelectL`;
 - **(第二阶段)移除 `github.com/lib/pq` 依赖**,COPY 语句由包内 `copyInStmt` 自实现,输出逐字一致;
 - **(第二阶段)`CopyInL` 仅 PG 协议族可用**(DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB),其余方言直接报错。
+
+#### 5.性能基准
+
+```sh
+go test -bench . -benchmem -run '^$'
+```
+
+- **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
+- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(ENC2 稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
+- **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。

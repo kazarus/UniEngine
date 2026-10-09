@@ -127,6 +127,16 @@
 - **旧格式 `ENC:` 读兼容**：存量密文（单次 SHA-256 派生时代写入）仍可解密读取，重新保存后自动落为 `ENC2:`；`IsEncrypted` 识别新旧两种标签。
 - `SecretHook` 自定义钩子路径不受影响（钩子完全接管加解密时，格式由应用自定）。
 
+### 基准测试（benchmark_test.go）
+
+`go test -bench . -benchmem -run '^$'` 可复现，覆盖行扫描热路径与内置加解密：
+
+- **`BenchmarkSelectLScan` vs `BenchmarkSelectLScanLegacy`**：现行"列→字段下标预解析"路径与旧算法复刻（每行每列 `FieldByName` + `HashField` 查找）走同一 mock 传输，差值即该优化的净收益（Apple M3 Ultra 实测 1000 行×10 列：320µs vs 777µs，**约 2.4×**，分配次数少 1/3）。
+- **`BenchmarkSelectLScanDecrypt`**：行扫描+每行解密 1 个加密列的联合路径，解密增量与独立解密基准吻合（约 0.4µs/值）。
+- **`BenchmarkSecretEncrypt/Decrypt`**：ENC2 稳定态（派生密钥缓存命中）按 16B/256B/4KB 分档；4KB 档 GCM 吞吐约 0.8-1.2 GB/s。
+- **`BenchmarkSecretDecryptLegacyENC` / `BenchmarkSecretDecryptPlaintext`**：旧格式读取与存量明文直通（后者零分配，约 2ns）。
+- **`BenchmarkSecretPBKDF2DeriveCold`**：一次性冷派生开销（缺省 600000 次迭代，实测约 53ms）——生产中每进程每份盐只付一次，行级吞吐不受影响。
+
 ### 已知限制
 
 - **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。
