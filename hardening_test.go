@@ -1,0 +1,222 @@
+package UniEngine
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// hardeningUser 用于注册测试：email 标记 readonly
+type hardeningUser struct {
+	ID    int64  `db:"id" json:"id"`
+	Name  string `db:"name" json:"name"`
+	Email string `db:"email,readonly" json:"email"`
+}
+
+func newHardeningEngine(provider TDriveType) *TUniEngine {
+	return &TUniEngine{ColLabel: "db", ColParam: "$", Provider: provider}
+}
+
+func TestValidIdent(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"test_user", true},
+		{"schema.table", true},
+		{"a_b123", true},
+		{"x;drop table t", false},
+		{"a'b", false},
+		{"a--b", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := validIdent(c.name); got != c.want {
+			t.Errorf("validIdent(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestExistTableRejectsInjection(t *testing.T) {
+	engine := newHardeningEngine(DtPOSTGR)
+	if _, err := engine.ExistTable("t;drop table x"); err == nil {
+		t.Error("ExistTable with malicious name should return error")
+	}
+}
+
+func TestRegisterClassFieldOrder(t *testing.T) {
+	engine := newHardeningEngine(DtPOSTGR)
+	engine.RegisterClass(hardeningUser{}, "test_user")
+
+	uniTable, ok := engine.HashTabl["test_user"]
+	if !ok {
+		t.Fatal("registered table not found by lowercase name key")
+	}
+	if len(uniTable.ListField) != 3 {
+		t.Fatalf("ListField = %d, want 3 (including readonly)", len(uniTable.ListField))
+	}
+	if uniTable.ListField[0].FieldName != "id" || uniTable.ListField[1].FieldName != "name" {
+		t.Errorf("field order = %s,%s; want id,name", uniTable.ListField[0].FieldName, uniTable.ListField[1].FieldName)
+	}
+}
+
+func TestSetKeysDedupAndOrder(t *testing.T) {
+	engine := newHardeningEngine(DtPOSTGR)
+	tb := engine.RegisterClass(hardeningUser{}, "test_user")
+
+	if err := tb.SetKeys("name", "id"); err != nil {
+		t.Fatalf("SetKeys: %v", err)
+	}
+	if err := tb.SetKeys("id"); err != nil {
+		t.Fatalf("SetKeys dup: %v", err)
+	}
+	if len(tb.ListPkeys) != 2 {
+		t.Fatalf("ListPkeys = %d, want 2 (dedup)", len(tb.ListPkeys))
+	}
+	if tb.ListPkeys[0].FieldName != "name" {
+		t.Errorf("pkey order[0] = %q, want name", tb.ListPkeys[0].FieldName)
+	}
+
+	if err := tb.SetKeys("not_exist"); err == nil {
+		t.Error("SetKeys on unregistered field should return error")
+	}
+}
+
+func TestAutoKeysMySQLMissingDatabase(t *testing.T) {
+	engine := newHardeningEngine(DtMYSQLN)
+	tb := engine.RegisterClass(hardeningUser{}, "test_user")
+
+	// 未指定 DataBase 时，GetSqlAutoKeys 返回错误，AutoKeys 应返回错误而非 panic
+	if err := tb.AutoKeys(engine, TAutoKeys4MYSQLN{}); err == nil {
+		t.Error("AutoKeys with empty database should return error")
+	}
+}
+
+// 并发注册:不经过 Initialize 的引擎并发 RegisterClass,验证锁的懒初始化与注册互斥
+// (在 -race 下运行才能捕获旧实现的懒初始化数据竞争)
+func TestConcurrentRegisterClass(t *testing.T) {
+	engine := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+
+	const N = 16
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			engine.RegisterClass(hardeningUser{}, fmt.Sprintf("t_conc_%d", n))
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < N; i++ {
+		name := fmt.Sprintf("t_conc_%d", i)
+		if engine.GetTable(name) == nil {
+			t.Fatalf("table %s not registered", name)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 标识符引用:schema.table 需逐段加引号,不能被当成单个标识符
+// ---------------------------------------------------------------------------
+
+func TestQuoteIdentDotted(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"t", `"t"`},
+		{"schema.table", `"schema"."table"`},
+		{`a"b`, `"a""b"`},
+	}
+	for _, c := range cases {
+		if got := quoteIdent(c.in); got != c.want {
+			t.Errorf("quoteIdent(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
+func TestCopyInStmtDottedTable(t *testing.T) {
+	got := copyInStmt("schema.t", []string{"a", "b"})
+	want := `COPY "schema"."t" ("a", "b") FROM STDIN`
+	if got != want {
+		t.Fatalf("copyInStmt = %s, want %s", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 注册:跳过无 db tag 与未导出字段(前者污染 "" 键,后者反射 panic)
+// ---------------------------------------------------------------------------
+
+// regSkipUser 含 正常字段 / 无 tag 字段 / 未导出字段
+type regSkipUser struct {
+	ID     int64  `db:"id"`
+	Name   string `db:"name"`
+	NoTag  string // 无 db tag,应被跳过
+	hidden string // 未导出,应被跳过
+}
+
+func TestRegisterClassSkipsUntaggedAndUnexported(t *testing.T) {
+	engine := newHardeningEngine(DtPOSTGR)
+	tb := engine.RegisterClass(regSkipUser{}, "reg_skip_user")
+
+	if len(tb.ListField) != 2 {
+		t.Fatalf("ListField = %d, want 2 (only tagged exported fields)", len(tb.ListField))
+	}
+	if _, ok := tb.HashField[""]; ok {
+		t.Error(`registry must not contain empty "" field key`)
+	}
+	if _, ok := tb.HashField["notag"]; ok {
+		t.Error("untagged field must be skipped")
+	}
+	if _, ok := tb.HashField["hidden"]; ok {
+		t.Error("unexported field must be skipped")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 事务:重复 Begin 必须显式拒绝,而非覆盖并泄漏上一个事务
+// ---------------------------------------------------------------------------
+
+func TestBeginTwiceRejected(t *testing.T) {
+	engine := &TUniEngine{}
+	engine.inTx = true // 模拟已开启事务;守卫应在触碰 Db(此处为 nil)前返回
+
+	if err := engine.Begin(); !errors.Is(err, ErrAlreadyInTransaction) {
+		t.Fatalf("expected ErrAlreadyInTransaction, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 写方法传入 typed nil 指针:返回明确错误,不再反射 panic
+// ---------------------------------------------------------------------------
+
+func TestWriteMethodsRejectNilPointer(t *testing.T) {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	tbl := eng.RegisterClass(hardeningUser{}, "hardening_user")
+	if err := tbl.SetKeys("id"); err != nil {
+		t.Fatalf("SetKeys: %v", err)
+	}
+
+	cases := map[string]func() error{
+		"SaveIt": func() error { return eng.SaveIt((*hardeningUser)(nil)) },
+		"Update": func() error { return eng.Update((*hardeningUser)(nil)) },
+		"Insert": func() error { return eng.Insert((*hardeningUser)(nil)) },
+		"Delete": func() error { return eng.Delete((*hardeningUser)(nil)) },
+		"SaveItWhenNotExist": func() error {
+			return eng.SaveItWhenNotExist((*hardeningUser)(nil))
+		},
+	}
+	for name, call := range cases {
+		err := call()
+		if err == nil {
+			t.Errorf("%s with nil pointer should return error", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "nil pointer") {
+			t.Errorf("%s error should mention nil pointer, got: %v", name, err)
+		}
+	}
+}

@@ -1,14 +1,15 @@
 package UniEngine
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
-
-	"github.com/lib/pq"
+	"sync"
+	"sync/atomic"
 )
 
 /*
@@ -16,17 +17,32 @@ import (
   when read data from struct, whoever, ptr or struct;
 */
 
+// TUniEngine is a multi-database ORM-like engine built on database/sql.
+//
+// Concurrency: TUniEngine is safe for concurrent use. Query/write paths hold
+// the registry RWMutex only for the duration of a lookup (class registry /
+// current transaction), and Register* may run alongside queries. Two
+// exceptions:
+//   - while a transaction is active (between Begin and Commit/Cancel), calls
+//     must be serialized — database/sql's *sql.Tx is not safe for concurrent
+//     use, and every statement is routed to that transaction;
+//   - config fields (ColLabel/ColParam/Provider/SecretOn/SecretBy/...) and
+//     table-structure edits (SetKeys/SetSecret/AutoKeys/PrepareTables/
+//     PrepareRunSQL) should complete before concurrent queries begin.
 type TUniEngine struct {
 	Db *sql.DB
-	tx *sql.Tx
-	st *sql.Stmt
 
-	ColLabel string //#字段字号
-	ColParam string //#参数符号
-	HashTabl map[string]TUniTable
+	mu       *sync.RWMutex //#保护 HashTabl 与事务状态（指针：按值传递引擎时共享同一把锁）
+	ColLabel string        //#字段字号
+	ColParam string        //#参数符号
+	HashTabl map[string]*TUniTable
 
-	SecretOn int64  //#开启敏感信息加密
-	SecretBy string //#敏感信息加密密钥
+	SecretOn   int64  //#开启敏感信息加密
+	SecretBy   string //#敏感信息加密密钥
+	SecretIter int    //#PBKDF2迭代次数#0用缺省(UniSecretIter);仅影响新写入,读取以密文内嵌值为准
+
+	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
+	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 
 	Instance string     //#数据库实例
 	DataBase string     //#数据库名称
@@ -34,72 +50,168 @@ type TUniEngine struct {
 	Provider TDriveType //#数据库驱动
 	Supplier TDriveType //#数据库驱动(区分 DtORACLE VS DtDAMENG)
 
-	canClose bool //default is true;if is transaction,canClose = false
-	runDebug bool //default is false;print some sql;
+	tx       *sql.Tx //#当前事务(Begin 之后非 nil)
+	inTx     bool    //#事务进行中(期间调用须串行)
+	runDebug int32   //#SQL调试输出开关#原子读写,可运行中切换
+
+	secret *secretState //#派生密钥缓存与本进程写盐(懒初始化,详见UniSecret.go)
 }
 
-func (self *TUniEngine) getValParam(aIndex int) string {
+// muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）
+var muLazy sync.Mutex
 
-	if self.Provider == DtMYSQLN {
-		return fmt.Sprintf("%s", self.ColParam)
+// initLock 保证 this.mu 已创建（并发安全；供 Initialize 与 lockTables 调用）
+func (this *TUniEngine) initLock() {
+
+	muLazy.Lock()
+	defer muLazy.Unlock()
+
+	if this.mu == nil {
+		this.mu = &sync.RWMutex{}
+	}
+}
+
+// lockTables 保证锁可用并加写锁（注册/表结构变更/事务状态变更）
+func (this *TUniEngine) lockTables() {
+
+	this.initLock()
+	this.mu.Lock()
+}
+
+// rlockTables 保证锁可用并加读锁（注册表/事务状态查询）
+func (this *TUniEngine) rlockTables() {
+
+	this.initLock()
+	this.mu.RLock()
+}
+
+// debugging 返回调试输出开关状态（原子读，可运行中切换）
+func (this *TUniEngine) debugging() bool {
+	return atomic.LoadInt32(&this.runDebug) != 0
+}
+
+// tableByType 按类全名取注册表条目（读锁；未注册返回 nil）
+func (this *TUniEngine) tableByType(TypeName string) *TUniTable {
+
+	this.rlockTables()
+	defer this.mu.RUnlock()
+
+	return this.HashTabl[TypeName]
+}
+
+// tableByName 按表名取注册表条目（读锁；未注册返回 nil）
+func (this *TUniEngine) tableByName(TableName string) *TUniTable {
+
+	this.rlockTables()
+	defer this.mu.RUnlock()
+
+	return this.HashTabl[strings.ToLower(TableName)]
+}
+
+// currentTx 返回当前事务（无事务时 nil）；读锁保护，与 Begin/Commit/Cancel 互斥
+func (this *TUniEngine) currentTx() *sql.Tx {
+
+	this.rlockTables()
+	defer this.mu.RUnlock()
+
+	if this.inTx {
+		return this.tx
 	}
 
-	return fmt.Sprintf("%s%d", self.ColParam, aIndex)
+	return nil
 }
 
-func (self *TUniEngine) getColParam(FieldName string) string {
+// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
+func validIdent(name string) bool {
 
-	if self.Provider == DtMYSQLN {
+	if name == "" {
+		return false
+	}
+
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.') {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (this *TUniEngine) getValParam(aIndex int) string {
+
+	if this.dbFamily() == FmMYSQLN {
+		return fmt.Sprintf("%s", this.ColParam)
+	}
+
+	return fmt.Sprintf("%s%d", this.ColParam, aIndex)
+}
+
+func (this *TUniEngine) getColParam(FieldName string) string {
+
+	if this.dbFamily() == FmMYSQLN {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	if self.Provider == DtORACLE {
+	if this.dbFamily() == FmORACLE {
 		return fmt.Sprintf("%s", FieldName)
 	}
 
-	return fmt.Sprintf(`"` + FieldName + `"`)
+	return quoteIdent(FieldName)
 }
 
-func (self *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
+// 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
+var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
-	//#kazarus:2020_10_31_<
-	if self.Provider == DtORACLE && len(args) > 0 {
+func (this *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
 
-		if self.runDebug {
+	if this.dbFamily() == FmORACLE && len(args) > 0 {
+
+		if this.debugging() {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
 		}
 
-		SqlQuery = strings.ReplaceAll(SqlQuery, "$", self.ColParam)
+		// 仅替换参数占位符（$1 -> :1），避免误改 SQL 文本中其它 $ 字符
+		SqlQuery = reParamPlaceholder.ReplaceAllStringFunc(SqlQuery, func(m string) string {
+			return ":" + m[1:]
+		})
 	}
-	//#kazarus:2020_10_31_>
 
-	//#kazarus:2025_10_17_<
-	if self.Provider == DtMYSQLN && len(args) > 0 {
+	if this.dbFamily() == FmMYSQLN && len(args) > 0 {
 
-		if self.runDebug {
+		if this.debugging() {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
 		}
 
-		re, eror := regexp.Compile(`\$\d+`)
-		if eror != nil {
-			return ""
-		}
-
-		SqlQuery = re.ReplaceAllString(SqlQuery, "?")
+		// 包级预编译正则，消除每次调用 Compile 的开销与静默失败返回空串的路径
+		SqlQuery = reParamPlaceholder.ReplaceAllString(SqlQuery, "?")
 	}
-	//#kazarus:2025_10_17_>
 
 	return SqlQuery
 }
 
-func (self *TUniEngine) ProviderName() string {
+// debugSQL 统一的 SQL 调试输出（runDebug 开启时）
+func (this *TUniEngine) debugSQL(Kind string, SqlQuery interface{}, args interface{}) {
+
+	if !this.debugging() {
+		return
+	}
+
+	fmt.Printf("UniEngine: %s.sql: %v\n", Kind, SqlQuery)
+	fmt.Printf("UniEngine: %s.val: %v\n", Kind, args)
+}
+
+func (this *TUniEngine) ProviderName() string {
 
 	var result string
 
-	switch self.Provider {
+	switch this.Provider {
 	case DtORACLE:
 		{
 			result = "oracle"
+		}
+	case DtDAMENG:
+		{
+			result = "dameng"
 		}
 	case DtSQLSRV:
 		{
@@ -109,74 +221,70 @@ func (self *TUniEngine) ProviderName() string {
 		{
 			result = "postgresql"
 		}
+	case DtKINGES:
+		{
+			result = "kingbase"
+		}
+	case DtOPENGS:
+		{
+			result = "opengauss"
+		}
+	case DtPOLODB:
+		{
+			result = "polardb"
+		}
 	case DtMYSQLN:
 		{
 			result = "mysql"
+		}
+	case DtTAURUS:
+		{
+			result = "taurus"
 		}
 	}
 
 	return result
 }
 
-// #只是用函数包一下
-func (self *TUniEngine) SpecialPageSize(aPageSize int64) int64 {
+// SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
+func (this *TUniEngine) SpecialPageSize(aPageSize int64) int64 {
 
-	var PageSize int64
+	if aPageSize <= 0 {
+		return this.DefaultPageSize()
+	}
 
-	switch self.Provider {
-	case DtORACLE:
+	return aPageSize
+}
+
+func (this *TUniEngine) DefaultPageSize() int64 {
+
+	switch this.dbFamily() {
+	case FmORACLE, FmPOSTGR:
 		{
-			PageSize = 99
+			return 99
 		}
-	case DtSQLSRV:
+	case FmSQLSRV, FmMYSQLN:
 		{
-			PageSize = aPageSize
-		}
-	case DtPOSTGR:
-		{
-			PageSize = 99
+			return 10
 		}
 	}
 
-	return PageSize
+	return 0
 }
 
-func (self *TUniEngine) DefaultPageSize() int64 {
+func (this *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUniTable {
 
-	var PageSize int64
+	this.lockTables()
+	defer this.mu.Unlock()
 
-	switch self.Provider {
-	case DtORACLE:
-		{
-			PageSize = 99
-		}
-	case DtSQLSRV:
-		{
-			PageSize = 10
-		}
-	case DtPOSTGR:
-		{
-			PageSize = 99
-		}
-	default:
-		{
-			PageSize = 99
-		}
-	}
-
-	return PageSize
-}
-
-func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUniTable {
-
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+	if this.HashTabl == nil {
+		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
 	t := reflect.TypeOf(aClass)
 	n := t.NumField()
 
-	var UniTable = TUniTable{}
+	var UniTable = &TUniTable{}
 	UniTable.HashField = make(map[string]TUniField, 0)
 	UniTable.HashPkeys = make(map[string]TUniField, 0)
 	UniTable.TableName = TableName
@@ -185,65 +293,72 @@ func (self *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 
 		f := t.Field(i)
 
+		// 跳过未导出字段:反射无法读写(FieldByName().Interface() 会 panic)
+		if f.PkgPath != "" {
+			continue
+		}
+
 		var UniField = TUniField{}
 		UniField.AttriName = f.Name
-		//@UniField.FieldType = f.Type
 
-		UniField.initialize(f.Tag.Get(self.ColLabel))
+		UniField.initialize(f.Tag.Get(this.ColLabel))
+
+		// 跳过无 db tag 的字段:FieldName 为空会以 "" 键污染注册表并生成非法 SQL
+		if UniField.FieldName == "" {
+			continue
+		}
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
+		// 保留 struct 声明顺序，供 INSERT/UPDATE 列序生成
+		UniTable.ListField = append(UniTable.ListField, UniField)
 	}
 
-	self.HashTabl[t.String()] = UniTable
+	// 同时以小写表名（PrepareTables/PrepareRunSQL 路径）与类全名（SaveIt/Insert/Delete/Select* 路径）注册，
+	// 统一两套 key 的可见性；两者指向同一表
+	this.HashTabl[strings.ToLower(TableName)] = UniTable
+	this.HashTabl[t.String()] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
-func (self *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTable {
+func (this *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	if this.HashTabl == nil {
+		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
-	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
-	switch Valid {
-	case true:
-		{
-			//@UniTable = self.HashTabl[strings.ToLower(TableName)]
-			UniTable.IPriority = IPriority
-		}
-	default:
-		{
-			UniTable.HashField = make(map[string]TUniField, 0)
-			UniTable.HashPkeys = make(map[string]TUniField, 0)
-			UniTable.TableName = strings.ToLower(TableName)
-			UniTable.IPriority = IPriority
-		}
+	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	if !Valid {
+		UniTable = &TUniTable{}
+		UniTable.HashField = make(map[string]TUniField, 0)
+		UniTable.HashPkeys = make(map[string]TUniField, 0)
+		UniTable.TableName = strings.ToLower(TableName)
 	}
+	UniTable.IPriority = IPriority
 
-	self.HashTabl[strings.ToLower(TableName)] = UniTable
+	this.HashTabl[strings.ToLower(TableName)] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
-func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniTable {
+func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	if this.HashTabl == nil {
+		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
-	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
-	switch Valid {
-	case true:
-		{
-			//@UniTable = self.HashTabl[strings.ToLower(TableName)]
-		}
-	default:
-		{
-			UniTable.HashField = make(map[string]TUniField, 0)
-			UniTable.HashPkeys = make(map[string]TUniField, 0)
-			UniTable.TableName = strings.ToLower(TableName)
-		}
+	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	if !Valid {
+		UniTable = &TUniTable{}
+		UniTable.HashField = make(map[string]TUniField, 0)
+		UniTable.HashPkeys = make(map[string]TUniField, 0)
+		UniTable.TableName = strings.ToLower(TableName)
 	}
 
 	var UniField = TUniField{}
@@ -253,403 +368,349 @@ func (self *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 
 	UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
 
-	self.HashTabl[strings.ToLower(TableName)] = UniTable
+	this.HashTabl[strings.ToLower(TableName)] = UniTable
 
-	return &UniTable
+	return UniTable
 }
 
-func (self *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniTable {
+func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	if this.HashTabl == nil {
+		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
-	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
-	switch Valid {
-	case true:
-		{
-			//@UniTable = self.HashTabl[strings.ToLower(TableName)]
+	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	if Valid {
+		var UniField = TUniField{}
+		UniField.AttriName = ""
+		UniField.FieldName = strings.ToLower(FieldName)
+		UniField.TableName = strings.ToLower(TableName)
 
-			var UniField = TUniField{}
-			UniField.AttriName = ""
-			UniField.FieldName = strings.ToLower(FieldName)
-			UniField.TableName = strings.ToLower(TableName)
+		UniTable.HashPkeys[strings.ToLower(UniField.FieldName)] = UniField
 
-			UniTable.HashPkeys[strings.ToLower(UniField.FieldName)] = UniField
-
-			self.HashTabl[strings.ToLower(TableName)] = UniTable
-		}
-	default:
-		{
-			//UniTable.HashField = make(map[string]TUniField, 0)
-			//UniTable.HashPkeys = make(map[string]TUniField, 0)
-			//UniTable.TableName = strings.ToLower(TableName)
-		}
+		this.HashTabl[strings.ToLower(TableName)] = UniTable
 	}
 
-	return &UniTable
+	return UniTable
 }
 
-func (self *TUniEngine) GetTable(TableName string) *TUniTable {
+func (this *TUniEngine) GetTable(TableName string) *TUniTable {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
-	}
-
-	UniTable, _ := self.HashTabl[strings.ToLower(TableName)]
-
-	return &UniTable
+	return this.tableByName(TableName)
 }
 
-func (self *TUniEngine) PrepareTables(TableName string) error {
+func (this *TUniEngine) PrepareTables(TableName string) error {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	if !Valid {
+		//#未注册的表静默跳过,保持旧行为
+		return nil
 	}
 
-	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
-	switch Valid {
-	case true:
-		{
-			if UniTable.ListField == nil {
-				UniTable.ListField = make([]TUniField, 0)
-			}
-			UniTable.ListField = UniTable.ListField[0:0]
-
-			if UniTable.ListPkeys == nil {
-				UniTable.ListPkeys = make([]TUniField, 0)
-			}
-			UniTable.ListPkeys = UniTable.ListPkeys[0:0]
-
-			if len(UniTable.HashField) > 0 {
-
-				for _, ItemPara := range UniTable.HashField {
-
-					if ItemPara.ReadOnly {
-						continue
-					}
-
-					UniTable.ListField = append(UniTable.ListField, ItemPara)
-				}
-			}
-
-			if len(UniTable.HashPkeys) > 0 {
-
-				for _, ItemPara := range UniTable.HashPkeys {
-
-					if ItemPara.ReadOnly {
-						continue
-					}
-
-					UniTable.ListPkeys = append(UniTable.ListPkeys, ItemPara)
-				}
-			}
-
-			self.HashTabl[strings.ToLower(TableName)] = UniTable
+	//#按确定序重建(ListField 既有序优先,其余按字段名排序),避免 map 迭代序导致 SQL 文本漂移
+	ListField := make([]TUniField, 0, len(UniTable.HashField))
+	for _, ItemPara := range UniTable.orderedFields() {
+		if ItemPara.ReadOnly {
+			continue
 		}
-	default:
-		{
-		}
+		ListField = append(ListField, ItemPara)
 	}
+	UniTable.ListField = ListField
+
+	ListPkeys := make([]TUniField, 0, len(UniTable.HashPkeys))
+	for _, ItemPara := range UniTable.orderedPkeys() {
+		if ItemPara.ReadOnly {
+			continue
+		}
+		ListPkeys = append(ListPkeys, ItemPara)
+	}
+	UniTable.ListPkeys = ListPkeys
 
 	return nil
 }
 
-func (self *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (string, []TUniField, []TUniField, error) {
+func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (string, []TUniField, []TUniField, error) {
 
-	if self.HashTabl == nil {
-		self.HashTabl = make(map[string]TUniTable, 0)
-	}
+	this.lockTables()
+	defer this.mu.Unlock()
 
 	var SqlResult string
 	var ListField = make([]TUniField, 0)
 
-	UniTable, Valid := self.HashTabl[strings.ToLower(TableName)]
-	switch Valid {
-	case true:
+	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	if !Valid {
+		//#未注册的表:返回空结果(旧代码在此对 nil 指针取 ListPkeys 会 panic)
+		return SqlResult, ListField, nil, nil
+	}
+
+	switch QueryType {
+
+	case EtSelect:
 		{
-
-			switch QueryType {
-			case EtSelect:
-				{
-					var ColIndex int = 1
-					var SqlField string = ""
-					var SqlParam string = ""
-					var SqlWhere string = ""
-
-					if len(UniTable.HashPkeys) > 0 {
-
-						for _, ItemPara := range UniTable.ListPkeys {
-
-							if ItemPara.ReadOnly {
-								continue
-							}
-
-							/*
-									UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-								    SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-							*/
-
-							SqlField = self.getColParam(ItemPara.FieldName)
-							SqlParam = self.getValParam(ColIndex)
-							SqlWhere = SqlWhere + fmt.Sprintf("    and %s=%s", SqlField, SqlParam)
-							ColIndex = ColIndex + 1
-						}
-
-						SqlField = string(SqlField[1:])
-						SqlParam = string(SqlParam[1:])
-
-						SqlResult = fmt.Sprintf("where 1=1 %s", SqlWhere)
-						UniTable.SqlSelect = SqlResult
-					}
+			var SqlWhere []string
+			ColIndex := 1
+			for _, ItemPara := range UniTable.orderedPkeys() {
+				if ItemPara.ReadOnly {
+					continue
 				}
-			case EtInsert:
-				{
-					var ColIndex int = 1
-					var SqlField string = ""
-					var SqlParam string = ""
-
-					if len(UniTable.HashField) > 0 {
-
-						for _, ItemPara := range UniTable.ListField {
-
-							if ItemPara.ReadOnly {
-								continue
-							}
-
-							/*
-									UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-								    SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-							*/
-
-							SqlField = SqlField + "," + self.getColParam(ItemPara.FieldName)
-							SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-							ColIndex = ColIndex + 1
-
-							ListField = append(ListField, ItemPara)
-						}
-
-						SqlField = string(SqlField[1:])
-						SqlParam = string(SqlParam[1:])
-
-						SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, SqlField, SqlParam)
-						UniTable.SqlInsert = SqlResult
-					}
-				}
-			case EtUpdate:
-				{
-					var ColIndex int = 1
-					var SqlField string = ""
-					var SqlParam string = ""
-					var SqlWhere string = ""
-
-					fmt.Println(SqlParam)
-
-					if len(UniTable.HashField) > 0 {
-
-						for _, ItemPara := range UniTable.ListField {
-
-							if ItemPara.ReadOnly {
-								continue
-							}
-
-							/*
-								if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-									SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-								} else {
-									UniField = UniField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-								}
-							*/
-
-							/*
-								if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-									SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-									zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
-								} else {
-									UniField = UniField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-									xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
-								}
-							*/
-
-							if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
-								ItemPara.PkeyOnly = true
-								ListField = append(ListField, ItemPara)
-								continue
-							}
-
-							SqlField = SqlField + "," + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
-
-							ColIndex = ColIndex + 1
-
-							ListField = append(ListField, ItemPara)
-						}
-					}
-
-					if len(UniTable.HashPkeys) > 0 {
-
-						for _, item := range UniTable.ListPkeys {
-
-							SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-							ColIndex = ColIndex + 1
-						}
-					}
-
-					SqlField = string(SqlField[1:])
-					SqlWhere = string(SqlWhere[1:])
-
-					SqlResult = fmt.Sprintf("update %s set %s where 1=1 %s", UniTable.TableName, SqlField, SqlWhere)
-					UniTable.SqlUpdate = SqlResult
-				}
+				SqlWhere = append(SqlWhere, fmt.Sprintf("    and %s=%s", this.getColParam(ItemPara.FieldName), this.getValParam(ColIndex)))
+				ColIndex = ColIndex + 1
 			}
 
-			self.HashTabl[strings.ToLower(TableName)] = UniTable
+			if len(UniTable.HashPkeys) > 0 {
+				SqlResult = fmt.Sprintf("where 1=1 %s", strings.Join(SqlWhere, ""))
+				UniTable.SqlSelect = SqlResult
+			}
 		}
-	default:
+	case EtInsert:
 		{
-			//UniTable.HashField = make(map[string]TUniField, 0)
-			//UniTable.HashPkeys = make(map[string]TUniField, 0)
-			//UniTable.TableName = strings.ToLower(TableName)
+			var colList []string
+			var paramList []string
+			ColIndex := 1
+			for _, ItemPara := range UniTable.orderedFields() {
+				if ItemPara.ReadOnly {
+					continue
+				}
+				colList = append(colList, this.getColParam(ItemPara.FieldName))
+				paramList = append(paramList, this.getValParam(ColIndex))
+				ColIndex = ColIndex + 1
+
+				ListField = append(ListField, ItemPara)
+			}
+
+			if len(colList) > 0 {
+				SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, strings.Join(colList, ","), strings.Join(paramList, ","))
+				UniTable.SqlInsert = SqlResult
+			}
+		}
+	case EtUpdate:
+		{
+			var setList []string
+			var keyList []string
+			ColIndex := 1
+			for _, ItemPara := range UniTable.orderedFields() {
+				if ItemPara.ReadOnly {
+					continue
+				}
+
+				if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
+					ItemPara.PkeyOnly = true
+					ListField = append(ListField, ItemPara)
+					continue
+				}
+
+				setList = append(setList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+				ColIndex = ColIndex + 1
+
+				ListField = append(ListField, ItemPara)
+			}
+
+			for _, ItemPara := range UniTable.orderedPkeys() {
+				keyList = append(keyList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+				ColIndex = ColIndex + 1
+			}
+
+			if len(setList) == 0 {
+				return "", ListField, UniTable.ListPkeys, fmt.Errorf("UniEngine: no updatable column for table:%s", UniTable.TableName)
+			}
+
+			SqlResult = fmt.Sprintf("update %s set %s where 1=1 and %s", UniTable.TableName, strings.Join(setList, ","), strings.Join(keyList, " and "))
+			UniTable.SqlUpdate = SqlResult
 		}
 	}
 
 	return SqlResult, ListField, UniTable.ListPkeys, nil
 }
 
-// return int64;
-func (self *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, error) {
+// ---------------------------------------------------------------------------
+// 查询公共核心
+// ---------------------------------------------------------------------------
 
-	var eror error
-	var size sql.NullInt64
+// queryScalarCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
+func (this *TUniEngine) queryScalarCtx(ctx context.Context, SqlQuery string, dst sql.Scanner, args []interface{}) error {
 
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
+	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
+	this.debugSQL("select", SqlQuery, args)
 
-	eror = self.prepare(SqlQuery)
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
-		return 0, eror
+		return eror
 	}
-	defer self.release()
+	defer st.Close()
 
-	rows, eror := self.st.Query(args...)
+	rows, eror := st.QueryContext(ctx, args...)
 	if eror != nil {
-		return 0, eror
+		return eror
 	}
 	defer rows.Close()
 
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
 	for rows.Next() {
-		eror = rows.Scan(&size)
-		if eror != nil {
-			return 0, eror
+		if eror = rows.Scan(dst); eror != nil {
+			return eror
 		}
+	}
+
+	//#rows.Next() 因错误提前结束(而非读完)时必须上抛,否则错误被静默吞掉、数据表现为截断
+	return rows.Err()
+}
+
+// queryRowsCtx 行查询公共核心：逐行解码后交给 sink 写入目标容器
+// （单个 struct / 切片 / map 由调用方决定）。HasSetSqlResult 钩子类的探测结果由
+// 调用方传入,保持各方法原有的钩子识别语义。
+func (this *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type, hasHook bool, SqlQuery string, sink func(reflect.Value) error, args ...interface{}) error {
+
+	SqlQuery = this.getSqlQuery(SqlQuery, args...)
+
+	TablName := elemType.String()
+	UniTable := this.tableByType(TablName)
+	if UniTable == nil {
+		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
+	}
+
+	this.debugSQL("select", SqlQuery, args)
+
+	st, eror := this.prepareCtx(ctx, SqlQuery)
+	if eror != nil {
+		return eror
+	}
+	defer st.Close()
+
+	rows, eror := st.QueryContext(ctx, args...)
+	if eror != nil {
+		return eror
+	}
+	defer rows.Close()
+
+	column, eror := rows.Columns()
+	if eror != nil {
+		return eror
+	}
+	cCount := len(column)
+	fields := make([]interface{}, cCount)
+	values := make([]interface{}, cCount)
+
+	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
+	fieldIdx := make([]int, cCount)
+	encryptIdx := make([]int, 0, 2)
+	if !hasHook {
+		for ColIndex, ItemPara := range column {
+			UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
+			if !Valid {
+				return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, elemType.String())
+			}
+			sf, ok := elemType.FieldByName(UniField.AttriName)
+			if !ok {
+				return fmt.Errorf("UniEngine: class[%s] has no attribute[%s]", elemType.String(), UniField.AttriName)
+			}
+			//#仅支持扁平类:内嵌结构体的提升字段 Index 长度>1,取 [0] 会错绑到内嵌字段本身
+			if len(sf.Index) != 1 {
+				return fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", elemType.String(), UniField.AttriName)
+			}
+			fieldIdx[ColIndex] = sf.Index[0]
+
+			if UniField.Encrypt {
+				encryptIdx = append(encryptIdx, sf.Index[0])
+			}
+		}
+	}
+
+	for rows.Next() {
+
+		u := reflect.New(elemType)
+
+		if hasHook {
+			for i := 0; i < cCount; i++ {
+				values[i] = &fields[i]
+			}
+
+			if eror = rows.Scan(values...); eror != nil {
+				return eror
+			}
+
+			x := u.Interface().(HasSetSqlResult)
+			x.SetSqlResult(this, u.Interface(), column, fields)
+		} else {
+			elem := u.Elem()
+			for ColIndex := range column {
+				values[ColIndex] = elem.Field(fieldIdx[ColIndex]).Addr().Interface()
+			}
+
+			if eror = rows.Scan(values...); eror != nil {
+				return eror
+			}
+
+			if eror = this.decryptRow(elem, encryptIdx); eror != nil {
+				return eror
+			}
+		}
+
+		if eror = sink(u.Elem()); eror != nil {
+			return eror
+		}
+	}
+
+	//#rows.Next() 因错误提前结束(而非读完)时必须上抛,否则错误被静默吞掉、数据表现为截断
+	return rows.Err()
+}
+
+// return int64;
+func (this *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, error) {
+	return this.SelectDCtx(context.Background(), SqlQuery, args...)
+}
+
+func (this *TUniEngine) SelectDCtx(ctx context.Context, SqlQuery string, args ...interface{}) (int64, error) {
+
+	var size sql.NullInt64
+	if eror := this.queryScalarCtx(ctx, SqlQuery, &size, args); eror != nil {
+		return 0, eror
 	}
 
 	return size.Int64, nil
 }
 
 // return float64;
-func (self *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, error) {
+func (this *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, error) {
+	return this.SelectFCtx(context.Background(), SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) SelectFCtx(ctx context.Context, SqlQuery string, args ...interface{}) (float64, error) {
+
 	var size sql.NullFloat64
-
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
-
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
+	if eror := this.queryScalarCtx(ctx, SqlQuery, &size, args); eror != nil {
 		return 0, eror
 	}
-	defer self.release()
 
-	rows, eror := self.st.Query(args...)
-
-	if eror != nil {
-		return 0, eror
-	}
-	defer rows.Close()
-
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
-
-	for rows.Next() {
-		eror = rows.Scan(&size)
-		if eror != nil {
-			return 0, eror
-		}
-	}
 	return size.Float64, nil
 }
 
 // return string;
-func (self *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, error) {
+func (this *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, error) {
+	return this.SelectSCtx(context.Background(), SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) SelectSCtx(ctx context.Context, SqlQuery string, args ...interface{}) (string, error) {
+
 	var text sql.NullString
-
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
-
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
+	if eror := this.queryScalarCtx(ctx, SqlQuery, &text, args); eror != nil {
 		return "", eror
-	}
-	defer self.release()
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return "", eror
-	}
-	defer rows.Close()
-
-	/*
-		if !rows.Next() {
-			return 0, sql.ErrNoRows
-		}
-		rows.Scan(&size)
-		return size, nil
-	*/
-
-	for rows.Next() {
-		eror = rows.Scan(&text)
-		if eror != nil {
-			return "", eror
-		}
 	}
 
 	return text.String, nil
 }
 
-// return struct;
-func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface{}) error {
+// return struct;查询返回多行时报错(旧版静默保留最后一行),需要多行请用 SelectL。
+func (this *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface{}) error {
+	return this.SelectCtx(context.Background(), i, SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) SelectCtx(ctx context.Context, i interface{}, SqlQuery string, args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -657,120 +718,31 @@ func (self *TUniEngine) Select(i interface{}, SqlQuery string, args ...interface
 	}
 
 	if t.Kind() != reflect.Struct {
-		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [Select] only returns a struct; may be you should try [SelectL]")
 	}
 
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
+	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	TablName := t.String()
-	UniTable, Valid := self.HashTabl[TablName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
-	}
+	//#钩子探测保持旧语义:以传入值本身是否实现 HasSetSqlResult 为准
+	_, hasHook := i.(HasSetSqlResult)
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
-	}
-	defer self.release()
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-	//->
-
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
-	}
-	cCount := len(column)
-	fields := make([]interface{}, cCount)
-	values := make([]interface{}, cCount)
-
-	for rows.Next() {
-
-		x, ok := i.(HasSetSqlResult)
-		switch ok {
-		case true:
-			{
-				for i := 0; i < cCount; i++ {
-					values[i] = &fields[i]
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				x.SetSqlResult(*self, i, column, fields)
-			}
-		default:
-			{
-				var Result = reflect.Indirect(reflect.ValueOf(i))
-
-				for ItemIndx, ItemPara := range column {
-					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-					}
-					values[ItemIndx] = Result.FieldByName(UniField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-			}
+	rowCount := 0
+	return this.queryRowsCtx(ctx, t, hasHook, SqlQuery, func(row reflect.Value) error {
+		rowCount++
+		if rowCount > 1 {
+			return errors.New("UniEngine: method [Select] expects a single row, but the query returned more; use [SelectL]")
 		}
-
-		//if x, ok := i.(HasSetSqlResult); ok {
-		//	for i := 0; i < cCount; i++ {
-		//		values[i] = &fields[i]
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//
-		//	x.SetSqlResult(*self, i, column, fields)
-		//
-		//} else {
-		//
-		//	var Result = reflect.Indirect(reflect.ValueOf(i))
-		//
-		//	for ColIndex, ItemPara := range column {
-		//		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-		//		if !Valid {
-		//			return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-		//		}
-		//		values[ColIndex] = Result.FieldByName(UniField.AttriName).Addr().Interface()
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//}
-	}
-
-	return nil
+		Result.Set(row)
+		return nil
+	}, args...)
 }
 
 // return slice of struct;
-func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interface{}) error {
+func (this *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interface{}) error {
+	return this.SelectLCtx(context.Background(), i, SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) SelectLCtx(ctx context.Context, i interface{}, SqlQuery string, args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -778,137 +750,24 @@ func (self *TUniEngine) SelectL(i interface{}, SqlQuery string, args ...interfac
 	}
 
 	if t.Kind() != reflect.Slice {
-		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [SelectL] needs a slice param; may be you should try [Select]")
 	}
-
-	if t.Kind() == reflect.Slice {
-		t = t.Elem()
-	}
-
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
-
-	TablName := t.String()
-	UniTable, Valid := self.HashTabl[TablName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
-	}
-
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
-	}
-	defer self.release()
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-	//->
-
-	//columnstype,eror := rows.ColumnTypes()
-	//fmt.Println(columnstype)
-
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
-	}
-
-	cCount := len(column)
-	fields := make([]interface{}, cCount)
-	values := make([]interface{}, cCount)
+	t = t.Elem()
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	for rows.Next() {
-
-		u := reflect.New(t)
-		switch t.Implements(THasSetSqlResult) {
-		case true:
-			{
-				for i := 0; i < cCount; i++ {
-					values[i] = &fields[i]
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				x := u.Interface().(HasSetSqlResult)
-				x.SetSqlResult(*self, u.Interface(), column, fields)
-
-				Result.Set(reflect.Append(Result, u.Elem()))
-			}
-		default:
-			{
-				for ColIndex, ItemPara := range column {
-					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-					}
-					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				Result.Set(reflect.Append(Result, u.Elem()))
-			}
-		}
-
-		//if t.Implements(THasSetSqlResult) {
-		//
-		//	for i := 0; i < cCount; i++ {
-		//		values[i] = &fields[i]
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//
-		//	x := u.Interface().(HasSetSqlResult)
-		//	x.SetSqlResult(*self, u.Interface(), column, fields)
-		//
-		//	Result.Set(reflect.Append(Result, u.Elem()))
-		//
-		//} else {
-		//
-		//	for ColIndex, ItemPara := range column {
-		//		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-		//		if !Valid {
-		//			return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-		//		}
-		//		values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//
-		//	Result.Set(reflect.Append(Result, u.Elem()))
-		//}
-	}
-
-	return nil
+	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value) error {
+		Result.Set(reflect.Append(Result, row))
+		return nil
+	}, args...)
 }
 
 // return map of struct;user;GetMapUnique;
-func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interface{}) error {
+func (this *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interface{}) error {
+	return this.SelectMCtx(context.Background(), i, SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) SelectMCtx(ctx context.Context, i interface{}, SqlQuery string, args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -916,174 +775,29 @@ func (self *TUniEngine) SelectM(i interface{}, SqlQuery string, args ...interfac
 	}
 
 	if t.Kind() != reflect.Map {
-		//TO DO:
-		return errors.New("UniEngine: method [Select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [SelectM] needs a map param; may be you should try [SelectL]")
 	}
-
-	if t.Kind() == reflect.Map {
-		t = t.Elem()
-	}
-
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
-
-	TablName := t.String()
-	UniTable, Valid := self.HashTabl[TablName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
-	}
+	t = t.Elem()
 
 	if !t.Implements(THasGetMapUnique) {
-		return errors.New(fmt.Sprintf("UniEngine: the class registered:[%s] does not Implemented [HasGetMapUnique]", TablName))
+		return fmt.Errorf("UniEngine: the class registered:[%s] does not Implemented [HasGetMapUnique]", t.String())
 	}
-
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
-	}
-	defer self.release()
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-	//->
-
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
-	}
-	cCount := len(column)
-	fields := make([]interface{}, cCount)
-	values := make([]interface{}, cCount)
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	for rows.Next() {
-
-		u := reflect.New(t)
-
-		switch t.Implements(THasSetSqlResult) {
-		case true:
-			{
-				for i := 0; i < cCount; i++ {
-					values[i] = &fields[i]
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				x := u.Interface().(HasSetSqlResult)
-				x.SetSqlResult(*self, u.Interface(), column, fields)
-
-				var MapUnique string
-				if x, ok := u.Interface().(HasGetMapUnique); ok {
-					MapUnique = x.GetMapUnique()
-				}
-				Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-			}
-		default:
-			{
-				for ColIndex, ItemPara := range column {
-					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-					}
-					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				var MapUnique string
-				if x, ok := u.Interface().(HasGetMapUnique); ok {
-					MapUnique = x.GetMapUnique()
-				}
-				Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-			}
-		}
-		//if t.Implements(THasSetSqlResult) {
-		//
-		//	for i := 0; i < cCount; i++ {
-		//		values[i] = &fields[i]
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//
-		//	x := u.Interface().(HasSetSqlResult)
-		//	x.SetSqlResult(*self, u.Interface(), column, fields)
-		//
-		//	var MapUnique string
-		//	if x, ok := u.Interface().(HasGetMapUnique); ok {
-		//		MapUnique = x.GetMapUnique()
-		//	}
-		//	Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-		//
-		//} else {
-		//
-		//	for ColIndex, ItemPara := range column {
-		//		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-		//		if !Valid {
-		//			return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-		//		}
-		//		values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
-		//	}
-		//
-		//	eror = rows.Scan(values...)
-		//	if eror != nil {
-		//		return eror
-		//	}
-		//
-		//	var MapUnique string
-		//	if x, ok := u.Interface().(HasGetMapUnique); ok {
-		//		MapUnique = x.GetMapUnique()
-		//	}
-		//	Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-		//}
-	}
-
-	return nil
+	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value) error {
+		MapUnique := row.Interface().(HasGetMapUnique).GetMapUnique()
+		Result.SetMapIndex(reflect.ValueOf(MapUnique), row)
+		return nil
+	}, args...)
 }
 
-//return map;use custom function;
+// return map;use custom function;
+func (this *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, args ...interface{}) error {
+	return this.SelectHCtx(context.Background(), i, f, SqlQuery, args...)
+}
 
-/*
-    var HashData = make(map[string]TDATA, 0)
-
-	cSQL = "SELECT * FROM ANTV_DATA WHERE 1=1 AND WHO_BUILD=$1 AND USER_INDX=$2 AND SOURCE_ND=$3 AND SOURCE_QJ=$4"
-	eror = UniEngineEx.SelectH(&HashData, func(u interface{}) string {
-		DataPara := u.(TDATA)
-		return fmt.Sprintf("%d-%d-%d-%d", DataPara.ANTVMAIN, DataPara.UNITINDX, DataPara.SOURCEND, DataPara.SOURCEQJ)
-	}, cSQL, whobuild, userindx, sourcend, sourceqj)
-
-    ExistVal, Valid := HashData[fmt.Sprintf("%d-%d-%d-%d", ItemPara.ANTVMAIN, ItemPara.UNITINDX, ItemPara.SOURCEND, ItemPara.SOURCEQJ)]
-    if Valid {
-        ItemPara.DataIndx = ExistVal.DataIndx
-
-        continue
-    }
-
-   ExistVal,
-   Imok,Mrok,
-*/
-
-func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, args ...interface{}) error {
-
-	var eror error
+func (this *TUniEngine) SelectHCtx(ctx context.Context, i interface{}, f GetMapUnique, SqlQuery string, args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -1091,789 +805,759 @@ func (self *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 	}
 
 	if t.Kind() != reflect.Map {
-		//TO DO:
-		return errors.New("UniEngine: method [select] only retun a struct; may be you should try [SelectL]")
+		return errors.New("UniEngine: method [SelectH] needs a map param; may be you should try [SelectL]")
 	}
-
-	if t.Kind() == reflect.Map {
-		t = t.Elem()
-	}
-
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
-
-	TablName := t.String()
-	UniTable, Valid := self.HashTabl[TablName]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", TablName))
-	}
-
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", args)
-	}
-
-	//-<
-	eror = self.prepare(SqlQuery)
-	if eror != nil {
-		return eror
-	}
-	defer self.release()
-
-	rows, eror := self.st.Query(args...)
-	if eror != nil {
-		return eror
-	}
-	defer rows.Close()
-	//->
-
-	column, eror := rows.Columns()
-	if eror != nil {
-		return eror
-	}
-	cCount := len(column)
-	fields := make([]interface{}, cCount)
-	values := make([]interface{}, cCount)
+	t = t.Elem()
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	for rows.Next() {
-
-		u := reflect.New(t)
-
-		switch t.Implements(THasSetSqlResult) {
-		case true:
-			{
-				for i := 0; i < cCount; i++ {
-					values[i] = &fields[i]
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				x := u.Interface().(HasSetSqlResult)
-				x.SetSqlResult(*self, u.Interface(), column, fields)
-
-				var MapUnique string
-				if f != nil {
-					MapUnique = f(u.Elem().Interface())
-				}
-				Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-			}
-		default:
-			{
-				for ColIndex, ItemPara := range column {
-					UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-					if !Valid {
-						return errors.New(fmt.Sprintf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, t.String()))
-					}
-					values[ColIndex] = u.Elem().FieldByName(UniField.AttriName).Addr().Interface()
-				}
-
-				eror = rows.Scan(values...)
-				if eror != nil {
-					return eror
-				}
-
-				var MapUnique string
-				if f != nil {
-					MapUnique = f(u.Elem().Interface())
-				}
-				Result.SetMapIndex(reflect.ValueOf(MapUnique), u.Elem())
-			}
+	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value) error {
+		var MapUnique string
+		if f != nil {
+			MapUnique = f(row.Interface())
 		}
-	}
-
-	return nil
+		Result.SetMapIndex(reflect.ValueOf(MapUnique), row)
+		return nil
+	}, args...)
 }
 
-func (self *TUniEngine) SaveIt(i interface{}, args ...interface{}) error {
+// ---------------------------------------------------------------------------
+// 写入公共前置
+// ---------------------------------------------------------------------------
 
-	var eror error
-	var mrok bool
+// resolveTarget 统一写方法的公共前置：解析可选的表名参数(TableName[0],空切片时用
+// 注册表中的默认表名)、反射取元素类型并查注册表、标识符校验。
+// wantKind 指定期望的容器种类(Insert 传 Struct,InsertL/CopyInL 传 Slice,
+// 无需检查传 reflect.Invalid);needPkeys 要求类已注册主键。
+func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []string, wantKind reflect.Kind, needPkeys bool) (*TUniTable, reflect.Value, string, error) {
+
 	var TablName string
-
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [SaveIt] the second paramter need a string value.")
-		}
+	if len(TableName) > 0 {
+		TablName = TableName[0]
 	}
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
+
+	//#typed nil 指针:Indirect 返回零值 Value,后续反射取值会 panic,此处显式拒绝
+	if rv := reflect.ValueOf(i); rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] got a nil pointer param; check your code;", Method)
 	}
-	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+
+	if wantKind == reflect.Slice {
+		if t.Kind() != reflect.Slice {
+			return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] needs a slice param; check your code;", Method)
+		}
+		t = t.Elem()
+	} else if wantKind == reflect.Struct && t.Kind() != reflect.Struct {
+		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] only returns a struct; may be you should try [InsertL]", Method)
+	}
+
+	UniTable := this.tableByType(t.String())
+	if UniTable == nil {
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrUnregisteredClass, t.String())
+	}
+	if needPkeys && len(UniTable.HashPkeys) == 0 {
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrNoPkeys, t.String())
 	}
 
 	if TablName == "" {
 		TablName = UniTable.TableName
 	}
 
-	v := reflect.Indirect(reflect.ValueOf(i))
-
-	ColIndex := 1
-	//@UniField := ""
-	SqlWhere := ""
-
-	SqlQuery := ""
-	SqlValue := make([]interface{}, 0)
-
-	//@SaveIt方法不需要这一组
-	/*
-		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-			cQuery = x.GetSqlUpdate(UniTableName)
-		}
-
-		if x, ok := v.Interface().(HasSetSqlValues); ok {
-			x.SetSqlValues(EtUpdate, &SqlValue)
-		}
-	*/
-
-	if SqlQuery == "" && len(SqlValue) == 0 {
-
-		for _, ItemPara := range UniTable.HashField {
-
-			if ItemPara.ReadOnly {
-				continue
-			}
-
-			if _, valid := UniTable.HashPkeys[ItemPara.FieldName]; valid {
-				//@SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", ColIndex)
-				SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
-				SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
-				ColIndex = ColIndex + 1
-			}
-		}
-
-		//@UniField = string(UniField[1:])
-		SqlWhere = string(SqlWhere[4:])
-
-		SqlQuery = fmt.Sprintf("select count(1) from %s where %s", TablName, SqlWhere)
+	if !validIdent(TablName) {
+		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrInvalidTableName, TablName)
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", SqlValue)
-	}
-
-	cCount, eror := self.SelectD(SqlQuery, SqlValue...)
-	if eror != nil {
-		return eror
-	}
-
-	if self.runDebug {
-		fmt.Println("UniEngine: select.cnt", cCount)
-	}
-
-	if cCount == 1 {
-		return self.Update(i, args...)
-	} else {
-		return self.Insert(i, args...)
-	}
-
-	return nil
+	return UniTable, reflect.Indirect(reflect.ValueOf(i)), TablName, nil
 }
 
-func (self *TUniEngine) SaveItWhenNotExist(i interface{}, args ...interface{}) error {
+// ---------------------------------------------------------------------------
+// SaveIt / SaveItWhenNotExist:方言原生 UPSERT + count-then-dispatch 回退
+// ---------------------------------------------------------------------------
 
-	var eror error
-	var mrok bool
-	var TablName string
+const (
+	upsertModeUpdate = iota //#存在则更新,否则插入(SaveIt)
+	upsertModeSkip          //#存在则跳过,否则插入(SaveItWhenNotExist)
+)
 
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [SaveItWhenNotExist] the second paramter need a string value.")
+// upsertStmt 按方言生成原生 UPSERT 语句,消除 SaveIt 两步(count 后写入)之间的并发窗口。
+// 参数只传一遍(列序:keys 在前,cols 在后)。返回 ok=false 表示当前方言不支持,
+// 调用方回退 count-then-dispatch。
+//
+// 注意:MySQL 不在此列——ON DUPLICATE KEY UPDATE 由任一唯一键触发而非仅主键,
+// 与 SaveIt 的主键语义不等价,故 MySQL 一律回退旧路径。
+func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniField) (string, bool) {
+
+	if len(keys) == 0 {
+		return "", false
+	}
+
+	var colList []string
+	var paramList []string
+	ColIndex := 1
+	for _, list := range [][]TUniField{keys, cols} {
+		for _, ItemPara := range list {
+			colList = append(colList, this.getColParam(ItemPara.FieldName))
+			paramList = append(paramList, this.getValParam(ColIndex))
+			ColIndex++
 		}
 	}
 
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
+	var keyList []string
+	for _, ItemPara := range keys {
+		keyList = append(keyList, this.getColParam(ItemPara.FieldName))
 	}
 
-	if TablName == "" {
-		TablName = UniTable.TableName
+	updateMode := Mode == upsertModeUpdate && len(cols) > 0
+
+	switch this.dbFamily() {
+
+	case FmPOSTGR:
+		{
+			//#PG:excluded 伪表复用本次插入值,无需重复传参
+			if !updateMode {
+				return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do nothing",
+					TablName, strings.Join(colList, ","), strings.Join(paramList, ","), strings.Join(keyList, ",")), true
+			}
+
+			var setList []string
+			for _, ItemPara := range cols {
+				SqlCol := this.getColParam(ItemPara.FieldName)
+				setList = append(setList, SqlCol+"=excluded."+SqlCol)
+			}
+
+			return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do update set %s",
+				TablName, strings.Join(colList, ","), strings.Join(paramList, ","), strings.Join(keyList, ","), strings.Join(setList, ",")), true
+		}
+
+	case FmORACLE:
+		{
+			//#Oracle:MERGE,源数据放 dual 子查询,参数只传一遍
+			var selectList []string
+			ColIndex = 1
+			for _, list := range [][]TUniField{keys, cols} {
+				for _, ItemPara := range list {
+					selectList = append(selectList, fmt.Sprintf("%s %s", this.getValParam(ColIndex), ItemPara.FieldName))
+					ColIndex++
+				}
+			}
+
+			var onList []string
+			for _, ItemPara := range keys {
+				onList = append(onList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
+			}
+
+			var insertVals []string
+			for _, list := range [][]TUniField{keys, cols} {
+				for _, ItemPara := range list {
+					insertVals = append(insertVals, "src."+ItemPara.FieldName)
+				}
+			}
+
+			cSQL := fmt.Sprintf("merge into %s t using (select %s from dual) src on (%s)",
+				TablName, strings.Join(selectList, ","), strings.Join(onList, " and "))
+
+			if updateMode {
+				var setList []string
+				for _, ItemPara := range cols {
+					setList = append(setList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
+				}
+				cSQL = cSQL + " when matched then update set " + strings.Join(setList, ",")
+			}
+
+			return cSQL + " when not matched then insert ( " + strings.Join(colList, ",") + " ) values ( " + strings.Join(insertVals, ",") + " )", true
+		}
+
+	case FmSQLSRV:
+		{
+			//#SQLServer:MERGE + HOLDLOCK,表值构造器传参一遍
+			var onList []string
+			for _, ItemPara := range keys {
+				SqlCol := this.getColParam(ItemPara.FieldName)
+				onList = append(onList, "t."+SqlCol+"=src."+SqlCol)
+			}
+
+			var insertVals []string
+			for _, list := range [][]TUniField{keys, cols} {
+				for _, ItemPara := range list {
+					insertVals = append(insertVals, "src."+this.getColParam(ItemPara.FieldName))
+				}
+			}
+
+			cSQL := fmt.Sprintf("merge into %s with (holdlock) as t using (values ( %s )) as src ( %s ) on (%s)",
+				TablName, strings.Join(paramList, ","), strings.Join(colList, ","), strings.Join(onList, " and "))
+
+			if updateMode {
+				var setList []string
+				for _, ItemPara := range cols {
+					SqlCol := this.getColParam(ItemPara.FieldName)
+					setList = append(setList, "t."+SqlCol+"=src."+SqlCol)
+				}
+				cSQL = cSQL + " when matched then update set " + strings.Join(setList, ",")
+			}
+
+			return cSQL + " when not matched then insert ( " + strings.Join(colList, ",") + " ) values ( " + strings.Join(insertVals, ",") + " );", true
+		}
 	}
 
-	v := reflect.Indirect(reflect.ValueOf(i))
+	return "", false
+}
 
-	ColIndex := 1
-	//@UniField := ""
-	SqlWhere := ""
+// canNativeSave 判断该类是否可走方言原生 UPSERT:任一自定义 SQL 钩子
+// (GetSqlUpdate/GetSqlInsert/SetSqlValues)存在时,自定义语句无法转为 UPSERT,回退旧路径。
+func canNativeSave(v reflect.Value) bool {
 
-	SqlQuery := ""
+	if _, ok := v.Interface().(HasGetSqlUpdate); ok {
+		return false
+	}
+	if _, ok := v.Interface().(HasGetSqlInsert); ok {
+		return false
+	}
+	if _, ok := v.Interface().(HasSetSqlValues); ok {
+		return false
+	}
+
+	return true
+}
+
+// saveUpsert 方言原生 UPSERT 执行(keys/cols 按确定序收集,参数只传一遍)。
+// 返回 done=false 表示方言不支持,调用方回退 count-then-dispatch。
+func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string, Mode int) (bool, error) {
+
+	keys := UniTable.pkeyFields()
+
+	var cols []TUniField
+	for _, ItemPara := range UniTable.writableFields() {
+		if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
+			continue
+		}
+		cols = append(cols, ItemPara)
+	}
+
+	if len(keys) == 0 {
+		return false, nil
+	}
+
+	cSQL, ok := this.upsertStmt(Mode, TablName, keys, cols)
+	if !ok {
+		return false, nil
+	}
+
+	//#主键值一律明文(on conflict 的匹配即 WHERE 语义);仅数据列参与应用加密
+	values := make([]interface{}, 0, len(keys)+len(cols))
+	for _, ItemPara := range keys {
+		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+	}
+	for _, ItemPara := range cols {
+		if UniTable.secretColumn(ItemPara) {
+			Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+			if eror != nil {
+				return false, eror
+			}
+			values = append(values, Value)
+			continue
+		}
+		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+	}
+
+	this.debugSQL("upsert", cSQL, values)
+
+	st, eror := this.prepareCtx(ctx, cSQL)
+	if eror != nil {
+		return false, eror
+	}
+	defer st.Close()
+
+	if _, eror := st.ExecContext(ctx, values...); eror != nil {
+		return false, fmt.Errorf("UniEngine: upsert fail: %w", eror)
+	}
+
+	return true, nil
+}
+
+// countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
+func (this *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string) (int64, error) {
+
+	var keyCols []string
 	SqlValue := make([]interface{}, 0)
 
-	//@SaveIt方法不需要这一组
-	/*
-		if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-			cQuery = x.GetSqlUpdate(UniTableName)
-		}
-
-		if x, ok := v.Interface().(HasSetSqlValues); ok {
-			x.SetSqlValues(EtUpdate, &SqlValue)
-		}
-	*/
-
-	if SqlQuery == "" && len(SqlValue) == 0 {
-		for _, item := range UniTable.HashField {
-
-			if item.ReadOnly {
-				continue
-			}
-
-			if _, valid := UniTable.HashPkeys[item.FieldName]; valid {
-				//@SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("$%d", ColIndex)
-				SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-				SqlValue = append(SqlValue, v.FieldByName(item.AttriName).Interface())
-				ColIndex = ColIndex + 1
-			}
-		}
-
-		//@UniField = string(UniField[1:])
-		SqlWhere = string(SqlWhere[4:])
-
-		SqlQuery = fmt.Sprintf("select count(1) from %s where %s", TablName, SqlWhere)
+	ColIndex := 1
+	for _, ItemPara := range UniTable.pkeyFields() {
+		keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+		SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
+		ColIndex = ColIndex + 1
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: select.sql", SqlQuery)
-		fmt.Println("UniEngine: select.val", SqlValue)
+	if len(keyCols) == 0 {
+		return 0, fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
-	cCount, eror := self.SelectD(SqlQuery, SqlValue...)
+	SqlQuery := fmt.Sprintf("select count(1) from %s where %s", TablName, strings.Join(keyCols, " and "))
+
+	return this.SelectDCtx(ctx, SqlQuery, SqlValue...)
+}
+
+// saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
+func (this *TUniEngine) saveByCount(ctx context.Context, i interface{}, UniTable *TUniTable, v reflect.Value, TablName string, TableName []string, updateWhenExist bool) error {
+
+	cCount, eror := this.countByPkeys(ctx, UniTable, v, TablName)
 	if eror != nil {
 		return eror
 	}
 
-	if self.runDebug {
+	if this.debugging() {
 		fmt.Println("UniEngine: select.cnt", cCount)
+	}
+
+	if updateWhenExist {
+		if cCount == 1 {
+			return this.UpdateCtx(ctx, i, TableName...)
+		}
+		return this.InsertCtx(ctx, i, TableName...)
 	}
 
 	if cCount == 0 {
-		return self.Insert(i, args...)
+		return this.InsertCtx(ctx, i, TableName...)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) Update(i interface{}, args ...interface{}) error {
+func (this *TUniEngine) SaveIt(i interface{}, TableName ...string) error {
+	return this.SaveItCtx(context.Background(), i, TableName...)
+}
 
-	var eror error
-	var mrok bool
-	var TablName string
+func (this *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, TableName ...string) error {
 
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [Update] the second paramter need a string value.")
+	UniTable, v, TablName, eror := this.resolveTarget("SaveIt", i, TableName, reflect.Invalid, true)
+	if eror != nil {
+		return eror
+	}
+
+	//#默认路径走方言原生 UPSERT,消除 count 与写入之间的并发窗口;
+	//#钩子类/不支持的方言回退旧的 count-then-dispatch
+	if canNativeSave(v) {
+		done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeUpdate)
+		if eror != nil {
+			return eror
+		}
+		if done {
+			return nil
 		}
 	}
 
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
-	}
-	if TablName == "" {
-		TablName = UniTable.TableName
+	return this.saveByCount(ctx, i, UniTable, v, TablName, TableName, true)
+}
+
+func (this *TUniEngine) SaveItWhenNotExist(i interface{}, TableName ...string) error {
+	return this.SaveItWhenNotExistCtx(context.Background(), i, TableName...)
+}
+
+func (this *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}, TableName ...string) error {
+
+	UniTable, v, TablName, eror := this.resolveTarget("SaveItWhenNotExist", i, TableName, reflect.Invalid, true)
+	if eror != nil {
+		return eror
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: try update table:%s", UniTable))
+	if canNativeSave(v) {
+		done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeSkip)
+		if eror != nil {
+			return eror
+		}
+		if done {
+			return nil
+		}
 	}
 
-	v := reflect.Indirect(reflect.ValueOf(i))
+	return this.saveByCount(ctx, i, UniTable, v, TablName, TableName, false)
+}
 
-	ColIndex := 1
-	UniField := ""
-	SqlWhere := ""
+// ---------------------------------------------------------------------------
+// Update / Insert / InsertL / CopyInL / Delete
+// ---------------------------------------------------------------------------
+
+func (this *TUniEngine) Update(i interface{}, TableName ...string) error {
+	return this.UpdateCtx(context.Background(), i, TableName...)
+}
+
+func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName ...string) error {
+
+	UniTable, v, TablName, eror := this.resolveTarget("Update", i, TableName, reflect.Invalid, true)
+	if eror != nil {
+		return eror
+	}
 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
-	xValue := make([]interface{}, 0)
-	zValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
-		SqlQuery = x.GetSqlUpdate(*self, TablName)
+		SqlQuery = x.GetSqlUpdate(this, TablName)
 	}
-	/*
-		if x, ok := v.Interface().(HasGetSqlValues); ok {
-			SqlValue = x.GetSqlValues(EtUpdate)
-		}
-	*/
 	if x, ok := v.Interface().(HasSetSqlValues); ok {
-		x.SetSqlValues(*self, EtUpdate, &SqlValue)
+		x.SetSqlValues(this, EtUpdate, &SqlValue)
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
-		for _, ItemPara := range UniTable.HashField {
 
-			if ItemPara.ReadOnly {
-				continue
-			}
+		var setCols []string
+		var keyCols []string
+		xValue := make([]interface{}, 0)
+		zValue := make([]interface{}, 0)
 
-			/*
-				if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-					SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-				} else {
-					UniField = UniField + "," + fmt.Sprintf(`"`+item.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-				}
-			*/
-
-			/*
-				if _, valid := UniTable.HashPkeys[strings.ToLower(item.FieldName)]; valid {
-					SqlWhere = SqlWhere + " and " + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-					zValue = append(zValue, v.FieldByName(item.AttriName).Interface())
-				} else {
-					UniField = UniField + "," + self.getColParam(item.FieldName) + "=" + self.getValParam(ColIndex)
-					xValue = append(xValue, v.FieldByName(item.AttriName).Interface())
-				}
-			*/
+		ColIndex := 1
+		for _, ItemPara := range UniTable.writableFields() {
 
 			if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
 				continue
 			}
 
-			UniField = UniField + "," + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
-			xValue = append(xValue, v.FieldByName(ItemPara.AttriName).Interface())
+			setCols = append(setCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 
+			if ItemPara.Encrypt {
+				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+				if eror != nil {
+					return eror
+				}
+				xValue = append(xValue, Value)
+			} else {
+				xValue = append(xValue, v.FieldByName(ItemPara.AttriName).Interface())
+			}
 			ColIndex = ColIndex + 1
 		}
 
-		for _, ItemPara := range UniTable.HashPkeys {
-
-			SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
+		for _, ItemPara := range UniTable.pkeyFields() {
+			keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 			zValue = append(zValue, v.FieldByName(ItemPara.AttriName).Interface())
 			ColIndex = ColIndex + 1
 		}
 
-		UniField = string(UniField[1:])
-		SqlWhere = string(SqlWhere[1:])
+		if len(setCols) == 0 {
+			return fmt.Errorf("UniEngine: no updatable column in class registered: %s", UniTable.TableName)
+		}
+		if len(keyCols) == 0 {
+			return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
+		}
 
-		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 %s", TablName, UniField, SqlWhere)
-
+		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 and %s", TablName, strings.Join(setCols, ","), strings.Join(keyCols, " and "))
 		SqlValue = append(xValue, zValue...)
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: update.sql:", SqlQuery)
-		fmt.Println("UniEngine: update.val:", SqlValue)
-	}
+	this.debugSQL("update", SqlQuery, SqlValue)
 
-	eror = self.prepare(SqlQuery)
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer self.release()
+	defer st.Close()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+		return fmt.Errorf("UniEngine: update fail: %w", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) Insert(i interface{}, args ...interface{}) error {
+func (this *TUniEngine) Insert(i interface{}, TableName ...string) error {
+	return this.InsertCtx(context.Background(), i, TableName...)
+}
 
-	var eror error
-	var mrok bool
-	var TablName string
+func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName ...string) error {
 
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [Insert] the second paramter need a string value.")
-		}
+	UniTable, v, TablName, eror := this.resolveTarget("Insert", i, TableName, reflect.Struct, false)
+	if eror != nil {
+		return eror
 	}
-
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-
-	if t.Kind() != reflect.Struct {
-		//TO DO:
-		return errors.New("UniEngine: method [Insert] only retun a struct; may be you should try [InsertL]")
-	}
-
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if TablName == "" {
-		TablName = UniTable.TableName
-	}
-
-	v := reflect.Indirect(reflect.ValueOf(i))
-
-	ColIndex := 1
-	UniField := ""
-	SqlParam := ""
 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
 	if x, ok := v.Interface().(HasGetSqlInsert); ok {
-		SqlQuery = x.GetSqlInsert(*self, TablName)
+		SqlQuery = x.GetSqlInsert(this, TablName)
 	}
-	/*
-		if x, ok := v.Interface().(HasGetSqlValues); ok {
-			SqlValue = x.GetSqlValues(EtInsert)
-		}
-	*/
 	if x, ok := v.Interface().(HasSetSqlValues); ok {
-		x.SetSqlValues(*self, EtInsert, &SqlValue)
+		x.SetSqlValues(this, EtInsert, &SqlValue)
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		for _, ItemPara := range UniTable.HashField {
+		fields := UniTable.writableFields()
+		if len(fields) == 0 {
+			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
+		}
 
-			if ItemPara.ReadOnly {
-				continue
-			}
+		var colList []string
+		var paramList []string
+		ColIndex := 1
+		for _, ItemPara := range fields {
 
-			/*
-				UniField = UniField + "," + fmt.Sprintf(`"`+ItemPara.FieldName+`"`)
-				SqlParam = SqlParam + "," + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-			*/
-
-			UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-			SqlParam = SqlParam + "," + self.getValParam(ColIndex)
+			colList = append(colList, this.getColParam(ItemPara.FieldName))
+			paramList = append(paramList, this.getValParam(ColIndex))
 			ColIndex = ColIndex + 1
 
+			if UniTable.secretColumn(ItemPara) {
+				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
+				if eror != nil {
+					return eror
+				}
+				SqlValue = append(SqlValue, Value)
+				continue
+			}
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
-		UniField = string(UniField[1:])
-		SqlParam = string(SqlParam[1:])
-
-		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, UniField, SqlParam)
+		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(colList, ","), strings.Join(paramList, ","))
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: insert.sql", SqlQuery)
-		fmt.Println("UniEngine: insert.val", SqlValue)
-	}
+	this.debugSQL("insert", SqlQuery, SqlValue)
 
-	eror = self.prepare(SqlQuery)
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer self.release()
+	defer st.Close()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+		return fmt.Errorf("UniEngine: insert fail: %w", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) InsertL(i interface{}, args ...interface{}) error {
+func (this *TUniEngine) InsertL(i interface{}, TableName ...string) error {
+	return this.InsertLCtx(context.Background(), i, TableName...)
+}
 
-	var eror error
-	var mrok bool
-	var TablName string
+func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName ...string) error {
 
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [InsertL] the second paramter need a string value.")
-		}
+	UniTable, v, TablName, eror := this.resolveTarget("InsertL", i, TableName, reflect.Slice, false)
+	if eror != nil {
+		return eror
 	}
-
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [InsertL] need a slice params; check your code;")
-	}
-	t = t.Elem()
-
-	if self.runDebug {
-		fmt.Println(t)
-	}
-
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if TablName == "" {
-		TablName = UniTable.TableName
-	}
-
-	v := reflect.Indirect(reflect.ValueOf(i))
 
 	if v.Len() == 0 {
 		return nil
 	}
-
-	ColIndex := 1
-	UniField := ""
-	SqlParam := ""
-	EndParam := ""
 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
 	if x, ok := v.Index(0).Interface().(HasGetSqlInsertL); ok {
-		SqlQuery = x.GetSqlInsertL(*self, TablName, int64(v.Len()))
+		SqlQuery = x.GetSqlInsertL(this, TablName, int64(v.Len()))
 	}
 
 	if x, ok := v.Index(0).Interface().(HasSetSqlValuesL); ok {
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
-			x.SetSqlValuesL(*self, EtInsert, f, &SqlValue)
+			x.SetSqlValuesL(this, EtInsert, f, &SqlValue)
 		}
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		//#先设置TablName,UniField
-		//#switch map to slice
-		var HashField = make([]TUniField, 0)
-		for _, ItemPara := range UniTable.HashField {
-			if ItemPara.ReadOnly {
-				continue
-			}
-			HashField = append(HashField, ItemPara)
+		fields := UniTable.writableFields()
+		if len(fields) == 0 {
+			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
 		}
 
-		for _, ItemPara := range HashField {
-			UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
+		var colList []string
+		for _, ItemPara := range fields {
+			colList = append(colList, this.getColParam(ItemPara.FieldName))
 		}
-		UniField = UniField[1:]
 
-		switch self.Provider {
-		case DtORACLE:
-			{
-				//#先设置TablName,UniField,再设置SqlParam,SqlValue
-				for m := 0; m < v.Len(); m++ {
+		var rowList []string
+		ColIndex := 1
+		for m := 0; m < v.Len(); m++ {
 
-					f := v.Index(m)
+			f := v.Index(m)
 
-					SqlParam = ""
-					for _, ItemPara := range HashField {
+			var paramList []string
+			for _, ItemPara := range fields {
 
-						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-						ColIndex = ColIndex + 1
-						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
+				paramList = append(paramList, this.getValParam(ColIndex))
+				ColIndex = ColIndex + 1
+
+				if UniTable.secretColumn(ItemPara) {
+					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
+					if eror != nil {
+						return eror
 					}
-
-					SqlParam = SqlParam[1:]
-					EndParam = EndParam + " " + fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, UniField, SqlParam)
+					SqlValue = append(SqlValue, Value)
+					continue
 				}
-
-				EndParam = EndParam[1:]
-				SqlQuery = fmt.Sprintf("insert all %s select 1 from dual", EndParam)
+				SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
 			}
-		default:
-			{
-				//#先设置TablName,UniField,再设置SqlParam,SqlValue
-				for m := 0; m < v.Len(); m++ {
 
-					f := v.Index(m)
-
-					SqlParam = ""
-					for _, ItemPara := range HashField {
-
-						SqlParam = SqlParam + "," + self.getValParam(ColIndex)
-						ColIndex = ColIndex + 1
-						SqlValue = append(SqlValue, f.FieldByName(ItemPara.AttriName).Interface())
-					}
-
-					SqlParam = SqlParam[1:]
-					EndParam = EndParam + "," + fmt.Sprintf("( %s )", SqlParam)
-				}
-
-				EndParam = EndParam[1:]
-				SqlQuery = fmt.Sprintf("insert into %s ( %s ) values %s", TablName, UniField, EndParam)
+			if this.dbFamily() == FmORACLE {
+				//#Oracle:INSERT ALL 多行语法
+				rowList = append(rowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(colList, ","), strings.Join(paramList, ",")))
+			} else {
+				rowList = append(rowList, fmt.Sprintf("( %s )", strings.Join(paramList, ",")))
 			}
+		}
+
+		if this.dbFamily() == FmORACLE {
+			SqlQuery = fmt.Sprintf("insert all %s select 1 from dual", strings.Join(rowList, " "))
+		} else {
+			SqlQuery = fmt.Sprintf("insert into %s ( %s ) values %s", TablName, strings.Join(colList, ","), strings.Join(rowList, ","))
 		}
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: insert.sql:", SqlQuery)
-		fmt.Println("UniEngine: insert.val:", SqlValue)
-	}
+	this.debugSQL("insert", SqlQuery, SqlValue)
 
-	eror = self.prepare(SqlQuery)
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer self.release()
+	defer st.Close()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [InsertP(PageSize)] method;", eror.Error()))
+	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+		return fmt.Errorf("UniEngine: insert fail: %w (hint: too many parameters? try [InsertP])", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) SpecialInsertL(i interface{}, args ...interface{}) error {
+func (this *TUniEngine) CopyInL(i interface{}, TableName ...string) error {
+	return this.CopyInLCtx(context.Background(), i, TableName...)
+}
 
-	var eror error
-	var mrok bool
-	var TablName string
+// #已废弃:旧版命名,新代码请用 CopyInL;仅为源码兼容保留
+func (this *TUniEngine) SpecialInsertL(i interface{}, TableName ...string) error {
+	return this.CopyInLCtx(context.Background(), i, TableName...)
+}
 
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [SpecialInsertL] the second paramter need a string value.")
-		}
-	}
+// #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
+func (this *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, TableName ...string) error {
+	return this.CopyInLCtx(ctx, i, TableName...)
+}
 
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [SpecialInsertL] need a slice params; check your code;")
-	}
-	t = t.Elem()
+func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName ...string) error {
 
-	if self.runDebug {
-		fmt.Println(t)
+	UniTable, v, TablName, eror := this.resolveTarget("CopyInL", i, TableName, reflect.Slice, false)
+	if eror != nil {
+		return eror
 	}
-
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if TablName == "" {
-		TablName = UniTable.TableName
-	}
-
-	v := reflect.Indirect(reflect.ValueOf(i))
 
 	if v.Len() == 0 {
 		return nil
 	}
 
-	UniField := ""
-
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
-	if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
-		SqlQuery = x.SpecialGetSqlInsertL(*self, TablName, int64(v.Len()))
+	if x, ok := v.Index(0).Interface().(HasGetSqlCopyInL); ok {
+		SqlQuery = x.GetSqlCopyInL(this, TablName, int64(v.Len()))
+	} else if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
+		//#兼容旧版接口
+		SqlQuery = x.SpecialGetSqlInsertL(this, TablName, int64(v.Len()))
 	}
 
-	if x, ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); ok {
+	if x, ok := v.Index(0).Interface().(HasCopyInSetSqlValuesL); ok {
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
-			x.SpecialSetSqlValuesL(*self, EtInsert, f, &SqlValue)
+			x.CopyInSetSqlValuesL(this, EtInsert, f, &SqlValue)
+		}
+	} else if x, ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); ok {
+		//#兼容旧版接口
+		for m := 0; m < v.Len(); m++ {
+			f := v.Index(m)
+			x.SpecialSetSqlValuesL(this, EtInsert, f, &SqlValue)
 		}
 	}
 
 	if len(SqlQuery) == 0 && len(SqlValue) == 0 {
 
-		//#先设置TablName,UniField
-		//#switch map to slice
-		var HashField = make([]TUniField, 0)
-		for _, ItemPara := range UniTable.HashField {
-			if ItemPara.ReadOnly {
-				continue
-			}
-			HashField = append(HashField, ItemPara)
+		fields := UniTable.writableFields()
+		if len(fields) == 0 {
+			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
 		}
 
-		for _, ItemPara := range HashField {
-			UniField = UniField + "," + self.getColParam(ItemPara.FieldName)
-			//SqlQuery=append(SqlQuery,self.getColParam(ItemPara.FieldName))
+		for _, ItemPara := range fields {
 			SqlQuery = append(SqlQuery, ItemPara.FieldName)
 		}
-		//UniField = UniField[1:]
 
-		//#先设置TablName,UniField,再设置SqlParam,SqlValue
 		for m := 0; m < v.Len(); m++ {
 
 			f := v.Index(m)
 
 			var row = make([]interface{}, 0)
 
-			for _, ItemPara := range HashField {
+			for _, ItemPara := range fields {
 
+				if UniTable.secretColumn(ItemPara) {
+					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
+					if eror != nil {
+						return eror
+					}
+					row = append(row, Value)
+					continue
+				}
 				row = append(row, f.FieldByName(ItemPara.AttriName).Interface())
 			}
 
 			SqlValue = append(SqlValue, row)
 		}
-
-		//SqlQuery = append(SqlQuery, fmt.Sprintf("%s", UniField))
-		//SqlQuery = append(SqlQuery, UniField)
 	}
 
-	//#打印语句
-	if self.runDebug {
-		fmt.Println("UniEngine: insert.sql:", SqlQuery)
-		fmt.Println("UniEngine: insert.val:", SqlValue)
+	this.debugSQL("copyin", SqlQuery, SqlValue)
+
+	//#COPY 仅 PostgreSQL 协议族可用;其余方言显式报错,不再发送必然失败的语句
+	if this.dbFamily() != FmPOSTGR {
+		return fmt.Errorf("UniEngine: CopyInL requires a PostgreSQL-family provider (DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB), got [%d]", this.Provider)
 	}
 
-	//#PolarDB
-	Sql4Text := strings.ToLower(pq.CopyIn(TablName, SqlQuery...))
-	//#fmt.Println(Sql4Text)
+	//#应用钩子优先(pgx 等驱动用 contrib/pgxcopy 接管原生 CopyFrom);
+	//#未处理(handled=false)时回退内置 pq 风格逐行协议
+	if this.CopyInHook != nil {
 
-	self.st, eror = self.tx.Prepare(Sql4Text)
+		//#钩子从连接池取连接,无法路由到 *sql.Tx;事务期间显式拒绝,避免数据落到事务外
+		if this.currentTx() != nil {
+			return errors.New("UniEngine: CopyInHook can not run inside a transaction (pool connection, not tx-routed); commit or cancel first")
+		}
+
+		handled, eror := this.CopyInHook(ctx, this.Db, TablName, SqlQuery, SqlValue)
+		if eror != nil {
+			return fmt.Errorf("UniEngine: copyin fail: %w", eror)
+		}
+		if handled {
+			return nil
+		}
+	}
+
+	Sql4Text := copyInStmt(TablName, SqlQuery)
+
+	st, eror := this.prepareCtx(ctx, Sql4Text)
 	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
-	defer self.st.Close()
+	defer st.Close()
 
 	// 执行所有行
 	for _, row := range SqlValue {
-		_, eror = self.st.Exec(row...)
+		_, eror = st.ExecContext(ctx, row...)
 		if eror != nil {
 			return eror
 		}
 	}
 
-	// 完成 COPY
-	_, eror = self.st.Exec()
+	// 完成 COPY 的收尾调用(空参数)
+	_, eror = st.ExecContext(ctx)
 	if eror != nil {
-		return errors.New(fmt.Sprintf("%s@UniEngine: if errored too many parameters; try [SpecialInsertP(PageSize)] method;", eror.Error()))
+		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface{}) error {
+func (this *TUniEngine) InsertP(i interface{}, PageSize int64, TableName ...string) error {
+	return this.InsertPCtx(context.Background(), i, PageSize, TableName...)
+}
 
-	var eror error
+func (this *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -1884,11 +1568,7 @@ func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [InsertP] need a slice params; check your code;")
-	}
-
-	if self.runDebug {
-		fmt.Println(t)
+		return errors.New("UniEngine: method [InsertP] needs a slice param; check your code;")
 	}
 
 	var All4Data = reflect.Indirect(reflect.ValueOf(i))
@@ -1896,50 +1576,44 @@ func (self *TUniEngine) InsertP(i interface{}, PageSize int64, args ...interface
 
 	for I := 0; I < All4Data.Len(); I++ {
 
-		Value := All4Data.Index(I)
-		ListData = reflect.Append(ListData, Value)
+		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {
-
-			switch self.Supplier {
-			case DtPOLODB:
-				{
-					eror = self.SpecialInsertL(ListData.Interface(), args...)
-				}
-			default:
-				{
-					eror = self.InsertL(ListData.Interface(), args...)
-				}
-			}
-
-			if eror != nil {
+			if eror := this.insertPage(ctx, ListData, TableName...); eror != nil {
 				return eror
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
 	}
 
-	switch self.Supplier {
-	case DtPOLODB:
-		{
-			eror = self.SpecialInsertL(ListData.Interface(), args...)
-		}
-	default:
-		{
-			eror = self.InsertL(ListData.Interface(), args...)
-		}
-	}
-
-	if eror != nil {
-		return eror
-	}
-
-	return nil
+	return this.insertPage(ctx, ListData, TableName...)
 }
 
-func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...interface{}) error {
+// insertPage 按方言路由单页批量写入(PolarDB 走 COPY 协议,其余走 INSERT)。
+func (this *TUniEngine) insertPage(ctx context.Context, ListData reflect.Value, TableName ...string) error {
 
-	var eror error
+	if this.Supplier == DtPOLODB {
+		return this.CopyInLCtx(ctx, ListData.Interface(), TableName...)
+	}
+
+	return this.InsertLCtx(ctx, ListData.Interface(), TableName...)
+}
+
+func (this *TUniEngine) CopyInP(i interface{}, PageSize int64, TableName ...string) error {
+	return this.CopyInPCtx(context.Background(), i, PageSize, TableName...)
+}
+
+// #已废弃:旧版命名,新代码请用 CopyInP;仅为源码兼容保留
+func (this *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, TableName ...string) error {
+	return this.CopyInPCtx(context.Background(), i, PageSize, TableName...)
+}
+
+// #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
+func (this *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
+	return this.CopyInPCtx(ctx, i, PageSize, TableName...)
+}
+
+func (this *TUniEngine) CopyInPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -1950,11 +1624,7 @@ func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...in
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice {
-		return errors.New("UniEngine: method [SpecialInsertP] need a slice params; check your code;")
-	}
-
-	if self.runDebug {
-		fmt.Println(t)
+		return errors.New("UniEngine: method [CopyInP] needs a slice param; check your code;")
 	}
 
 	var All4Data = reflect.Indirect(reflect.ValueOf(i))
@@ -1962,139 +1632,107 @@ func (self *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, args ...in
 
 	for I := 0; I < All4Data.Len(); I++ {
 
-		Value := All4Data.Index(I)
-		ListData = reflect.Append(ListData, Value)
+		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {
-			eror = self.SpecialInsertL(ListData.Interface(), args...)
-			if eror != nil {
+			if eror := this.CopyInLCtx(ctx, ListData.Interface(), TableName...); eror != nil {
 				return eror
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
 	}
 
-	eror = self.SpecialInsertL(ListData.Interface(), args...)
+	return this.CopyInLCtx(ctx, ListData.Interface(), TableName...)
+}
+
+func (this *TUniEngine) Delete(i interface{}, TableName ...string) error {
+	return this.DeleteCtx(context.Background(), i, TableName...)
+}
+
+func (this *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName ...string) error {
+
+	UniTable, v, TablName, eror := this.resolveTarget("Delete", i, TableName, reflect.Invalid, true)
 	if eror != nil {
 		return eror
 	}
 
-	return nil
-}
-
-func (self *TUniEngine) Delete(i interface{}, args ...interface{}) error {
-
-	var eror error
-	var mrok bool
-	var TablName string
-
-	if len(args) > 0 {
-		TablName, mrok = args[0].(string)
-		if !mrok {
-			return errors.New("UniEngine: method [Delete] the second paramter need a string value.")
-		}
-	}
-
-	t := reflect.TypeOf(i)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	UniTable, Valid := self.HashTabl[t.String()]
-	if !Valid {
-		return errors.New(fmt.Sprintf("UniEngine: no such class registered:", t.String()))
-	}
-	if len(UniTable.HashPkeys) == 0 {
-		return errors.New(fmt.Sprintf("UniEngine: no pkeys column in class registered:", t.String()))
-	}
-
-	if TablName == "" {
-		TablName = UniTable.TableName
-	}
-
-	v := reflect.Indirect(reflect.ValueOf(i))
-
-	ColIndex := 1
-	SqlWhere := ""
+	var keyCols []string
 	SqlValue := make([]interface{}, 0)
 
-	for _, ItemPara := range UniTable.HashPkeys {
-
-		//SqlWhere = SqlWhere + " and " + fmt.Sprintf(`"`+ItemPara.FieldName+`"`) + "=" + fmt.Sprintf("%s%d", self.ColParam, ColIndex)
-		SqlWhere = SqlWhere + " and " + self.getColParam(ItemPara.FieldName) + "=" + self.getValParam(ColIndex)
-		ColIndex = ColIndex + 1
-
+	ColIndex := 1
+	for _, ItemPara := range UniTable.pkeyFields() {
+		keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 		SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
+		ColIndex = ColIndex + 1
 	}
 
-	SqlWhere = string(SqlWhere[4:])
-
-	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, SqlWhere)
-
-	if self.runDebug {
-		fmt.Println("UniEngine: delete.sql:", SqlQuery)
-		fmt.Println("UniEngine: delete.val:", SqlValue)
+	if len(keyCols) == 0 {
+		return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
-	eror = self.prepare(SqlQuery)
+	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, strings.Join(keyCols, " and "))
+
+	this.debugSQL("delete", SqlQuery, SqlValue)
+
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer self.release()
+	defer st.Close()
 
-	_, eror = self.st.Exec(SqlValue...)
-	if eror != nil {
-		return eror
+	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+		return fmt.Errorf("UniEngine: delete fail: %w", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
+// ---------------------------------------------------------------------------
+// Execute / 元数据探测
+// ---------------------------------------------------------------------------
 
-	var eror error
+func (this *TUniEngine) Execute(SqlQuery string, args ...interface{}) error {
+	return this.ExecuteCtx(context.Background(), SqlQuery, args...)
+}
 
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
+func (this *TUniEngine) ExecuteCtx(ctx context.Context, SqlQuery string, args ...interface{}) error {
 
-	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: execute.sql:%s", SqlQuery))
-	}
+	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
-	}
+	this.debugSQL("execute", SqlQuery, args)
 
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	_, eror = self.st.Exec(args...)
-	if eror != nil {
-		return eror
+	defer st.Close()
+
+	if _, eror := st.ExecContext(ctx, args...); eror != nil {
+		return fmt.Errorf("UniEngine: execute fail: %w", eror)
 	}
 
 	return nil
 }
 
-func (self *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error {
+func (this *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error {
+	return this.ExecuteMustCtx(context.Background(), SqlQuery, args...)
+}
 
-	var eror error
+func (this *TUniEngine) ExecuteMustCtx(ctx context.Context, SqlQuery string, args ...interface{}) error {
 
-	SqlQuery = self.getSqlQuery(SqlQuery, args)
+	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	if self.canClose {
-		self.st, eror = self.Db.Prepare(SqlQuery)
-	} else {
-		self.st, eror = self.tx.Prepare(SqlQuery)
-	}
+	this.debugSQL("execute", SqlQuery, args)
 
+	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
+	defer st.Close()
 
-	result, eror := self.st.Exec(args...)
+	result, eror := st.ExecContext(ctx, args...)
 	if eror != nil {
-		return eror
+		return fmt.Errorf("UniEngine: execute fail: %w", eror)
 	}
 
 	size, eror := result.RowsAffected()
@@ -2109,341 +1747,266 @@ func (self *TUniEngine) ExecuteMust(SqlQuery string, args ...interface{}) error 
 	return nil
 }
 
-func (self *TUniEngine) IfDropView(TableName string) (bool, error) {
+func (this *TUniEngine) IfDropView(TableName string) (bool, error) {
+	return this.IfDropViewCtx(context.Background(), TableName)
+}
 
-	var eror error
-	var cSQL string
+func (this *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bool, error) {
 
-	mrok, eror := self.ExistViews(TableName)
+	if !validIdent(TableName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
+	}
+
+	mrok, eror := this.ExistViewsCtx(ctx, TableName)
 	if eror != nil {
 		return false, eror
 	}
 
-	switch mrok {
-	case true:
-		{
-			cSQL = fmt.Sprintf("DROP VIEW %s", TableName)
-			eror = self.Execute(cSQL)
-			if eror != nil {
-				return false, eror
-			}
-		}
-	default:
-		{
+	if mrok {
+		cSQL := fmt.Sprintf("DROP VIEW %s", TableName)
+		if eror = this.ExecuteCtx(ctx, cSQL); eror != nil {
+			return false, eror
 		}
 	}
 
 	return true, nil
 }
 
-func (self *TUniEngine) ExistTable(TableName string) (bool, error) {
+// existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
+func (this *TUniEngine) existCount(ctx context.Context, Kind string, cSQL string) (bool, error) {
 
-	var eror error
-	cSQL := ""
-
-	/*
-		if len(GetSqlExistTable) > 0 {
-
-			if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
-				cSQL = x.GetSqlExistTable(TableName)
-			}
-
-		} else {
-
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistTable(TableName)
-
-		}
-	*/
-
-	switch self.Provider {
-	case DtPOSTGR:
-		{
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistTable(*self, TableName)
-		}
-	case DtSQLSRV:
-		{
-			var ExistTable4SQLSRV = TExistTable4SQLSRV{}
-			cSQL = ExistTable4SQLSRV.GetSqlExistTable(*self, TableName)
-		}
-	case DtORACLE:
-		{
-			var ExistTable4ORACLE = TExistTable4ORACLE{}
-			cSQL = ExistTable4ORACLE.GetSqlExistTable(*self, TableName)
-		}
-	case DtMYSQLN:
-		{
-			if self.DataBase == "" {
-				return false, errors.New("UniEngine: database is not specified")
-			}
-			var ExistTable4MYSQLN = TExistTable4MYSQLN{}
-			cSQL = ExistTable4MYSQLN.GetSqlExistTable(*self, TableName, self.DataBase)
-		}
-	}
-
-	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: existtable.sql:%s", cSQL))
-	}
+	this.debugSQL(Kind, cSQL, nil)
 
 	if cSQL == "" {
-		return false, errors.New("UniEngine: no sql for existtable")
+		return false, fmt.Errorf("UniEngine: no sql for %s", Kind)
 	}
 
-	Size, eror := self.SelectD(cSQL)
+	Size, eror := this.SelectDCtx(ctx, cSQL)
 	if eror != nil {
 		return false, eror
 	}
-	if Size == 0 {
-		return false, nil
-	}
 
-	return true, eror
+	return Size > 0, nil
 }
 
-func (self *TUniEngine) ExistViews(TableName string) (bool, error) {
-
-	var eror error
-	cSQL := ""
-
-	/*
-		if len(GetSqlExistTable) > 0 {
-
-			if x, ok := GetSqlExistTable[0].(HasGetSqlExistTable); ok {
-				cSQL = x.GetSqlExistTable(TableName)
-			}
-
-		} else {
-
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistTable(TableName)
-
-		}
-	*/
-
-	switch self.Provider {
-	case DtPOSTGR:
-		{
-			var ExistTable4POSTGR = TExistTable4POSTGR{}
-			cSQL = ExistTable4POSTGR.GetSqlExistViews(*self, TableName)
-		}
-	case DtSQLSRV:
-		{
-			var ExistTable4SQLSRV = TExistTable4SQLSRV{}
-			cSQL = ExistTable4SQLSRV.GetSqlExistViews(*self, TableName)
-		}
-	case DtORACLE:
-		{
-			var ExistTable4ORACLE = TExistTable4ORACLE{}
-			cSQL = ExistTable4ORACLE.GetSqlExistViews(*self, TableName)
-		}
-	case DtMYSQLN:
-		{
-			if self.DataBase == "" {
-				return false, errors.New("UniEngine: database is not specified")
-			}
-			var ExistTable4MYSQLN = TExistTable4MYSQLN{}
-			cSQL = ExistTable4MYSQLN.GetSqlExistViews(*self, TableName, self.DataBase)
-		}
-	}
-
-	if self.runDebug {
-		fmt.Println(fmt.Sprintf("UniEngine: existtable.sql:%s", cSQL))
-	}
-
-	if cSQL == "" {
-		return false, errors.New("UniEngine: no sql for existtable")
-	}
-
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
-	}
-	if Size == 0 {
-		return false, nil
-	}
-
-	return true, eror
+func (this *TUniEngine) ExistTable(TableName string) (bool, error) {
+	return this.ExistTableCtx(context.Background(), TableName)
 }
 
-func (self *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
+func (this *TUniEngine) ExistTableCtx(ctx context.Context, TableName string) (bool, error) {
 
-	var eror error
-	cSQL := ""
-
-	/*
-		if len(GetSqlExistField) > 0 {
-
-			if x, ok := GetSqlExistField[0].(HasGetSqlExistField); ok {
-				cSQL = x.GetSqlExistField(TableName, FieldName)
-			}
-
-		} else {
-
-			var ExistField4POSTGR = TExistField4POSTGR{}
-			cSQL = ExistField4POSTGR.GetSqlExistField(TableName, FieldName)
-
-		}
-	*/
-
-	switch self.Provider {
-	case DtPOSTGR:
-		{
-			var ExistField4POSTGR = TExistField4POSTGR{}
-			cSQL = ExistField4POSTGR.GetSqlExistField(*self, TableName, FieldName)
-		}
-	case DtSQLSRV:
-		{
-			var ExistField4SQLSRV = TExistField4SQLSRV{}
-			cSQL = ExistField4SQLSRV.GetSqlExistField(*self, TableName, FieldName)
-		}
-	case DtORACLE:
-		{
-			var ExistField4ORACLE = TExistField4ORACLE{}
-			cSQL = ExistField4ORACLE.GetSqlExistField(*self, TableName, FieldName)
-		}
-	case DtMYSQLN:
-		{
-			if self.DataBase == "" {
-				return false, errors.New("UniEngine: database is not specified")
-			}
-			var ExistField4MYSQLN = TExistField4MYSQLN{}
-			cSQL = ExistField4MYSQLN.GetSqlExistField(*self, TableName, FieldName, self.DataBase)
-		}
+	if !validIdent(TableName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 
-	if cSQL == "" {
-		return false, errors.New("UniEngine: no sql for existfield")
+	var cSQL string
+
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		cSQL = TExistTable4POSTGR{}.GetSqlExistTable(this, TableName)
+	case FmSQLSRV:
+		cSQL = TExistTable4SQLSRV{}.GetSqlExistTable(this, TableName)
+	case FmORACLE:
+		cSQL = TExistTable4ORACLE{}.GetSqlExistTable(this, TableName)
+	case FmMYSQLN:
+		if this.DataBase == "" {
+			return false, errors.New("UniEngine: database is not specified")
+		}
+		cSQL = TExistTable4MYSQLN{}.GetSqlExistTable(this, TableName, this.DataBase)
 	}
 
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
-	}
-	if Size == 0 {
-		return false, nil
-	}
-
-	return true, eror
+	return this.existCount(ctx, "existtable", cSQL)
 }
 
-func (self *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
-
-	var eror error
-
-	cSQL := ""
-	Size, eror := self.SelectD(cSQL)
-	if eror != nil {
-		return false, eror
-	}
-	if Size == 0 {
-		return false, nil
-	}
-
-	return true, eror
+func (this *TUniEngine) ExistViews(TableName string) (bool, error) {
+	return this.ExistViewsCtx(context.Background(), TableName)
 }
 
-func (self *TUniEngine) prepare(SqlQuery string) error {
+func (this *TUniEngine) ExistViewsCtx(ctx context.Context, TableName string) (bool, error) {
 
-	var eror error
+	if !validIdent(TableName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
+	}
 
-	switch self.canClose {
-	case true:
-		{
-			self.st, eror = self.Db.Prepare(SqlQuery)
+	var cSQL string
+
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		cSQL = TExistTable4POSTGR{}.GetSqlExistViews(this, TableName)
+	case FmSQLSRV:
+		cSQL = TExistTable4SQLSRV{}.GetSqlExistViews(this, TableName)
+	case FmORACLE:
+		cSQL = TExistTable4ORACLE{}.GetSqlExistViews(this, TableName)
+	case FmMYSQLN:
+		if this.DataBase == "" {
+			return false, errors.New("UniEngine: database is not specified")
 		}
-	default:
-		{
-			self.st, eror = self.tx.Prepare(SqlQuery)
+		cSQL = TExistTable4MYSQLN{}.GetSqlExistViews(this, TableName, this.DataBase)
+	}
+
+	return this.existCount(ctx, "existviews", cSQL)
+}
+
+func (this *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
+	return this.ExistFieldCtx(context.Background(), TableName, FieldName)
+}
+
+func (this *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName string) (bool, error) {
+
+	if !validIdent(TableName) || !validIdent(FieldName) {
+		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
+	}
+
+	var cSQL string
+
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		cSQL = TExistField4POSTGR{}.GetSqlExistField(this, TableName, FieldName)
+	case FmSQLSRV:
+		cSQL = TExistField4SQLSRV{}.GetSqlExistField(this, TableName, FieldName)
+	case FmORACLE:
+		cSQL = TExistField4ORACLE{}.GetSqlExistField(this, TableName, FieldName)
+	case FmMYSQLN:
+		if this.DataBase == "" {
+			return false, errors.New("UniEngine: database is not specified")
 		}
-	}
-	//if self.canClose {
-	//	self.st, eror = self.Db.Prepare(SqlQuery)
-	//} else {
-	//	self.st, eror = self.tx.Prepare(SqlQuery)
-	//}
-	return eror
-}
-
-func (self *TUniEngine) release() error {
-
-	var eror error
-
-	eror = self.st.Close()
-
-	return eror
-}
-
-func (self *TUniEngine) Begin() error {
-
-	var eror error
-
-	self.tx, eror = self.Db.Begin()
-	if eror != nil {
-		return eror
-	}
-	self.canClose = false
-
-	return nil
-}
-
-func (self *TUniEngine) Cancel() error {
-
-	var eror error
-
-	if self.canClose {
-		return errors.New("UniEngine: no transaction")
+		cSQL = TExistField4MYSQLN{}.GetSqlExistField(this, TableName, FieldName, this.DataBase)
 	}
 
-	eror = self.tx.Rollback()
+	return this.existCount(ctx, "existfield", cSQL)
+}
+
+// #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
+func (this *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
+	return this.ExistConstCtx(context.Background(), aConstType, aConstName)
+}
+
+func (this *TUniEngine) ExistConstCtx(ctx context.Context, aConstType TConstType, aConstName string) (bool, error) {
+
+	if !validIdent(aConstName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, aConstName)
+	}
+
+	var cSQL string
+
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		cSQL = TExistConst4POSTGR{}.GetSqlExistConst(this, aConstType, aConstName)
+	case FmSQLSRV:
+		cSQL = TExistConst4SQLSRV{}.GetSqlExistConst(this, aConstType, aConstName)
+	case FmORACLE:
+		cSQL = TExistConst4ORACLE{}.GetSqlExistConst(this, aConstType, aConstName)
+	case FmMYSQLN:
+		if this.DataBase == "" {
+			return false, errors.New("UniEngine: database is not specified")
+		}
+		cSQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, aConstType, aConstName, this.DataBase)
+	}
+
+	return this.existCount(ctx, "existconst", cSQL)
+}
+
+// ---------------------------------------------------------------------------
+// 语句/事务管理
+// ---------------------------------------------------------------------------
+
+// prepareCtx 在当前事务(若有)或连接池上预备语句。
+// 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
+// 返回的语句由调用方负责 Close。
+func (this *TUniEngine) prepareCtx(ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
+
+	if tx := this.currentTx(); tx != nil {
+		return tx.PrepareContext(ctx, SqlQuery)
+	}
+
+	return this.Db.PrepareContext(ctx, SqlQuery)
+}
+
+func (this *TUniEngine) Begin() error {
+	return this.BeginCtx(context.Background())
+}
+
+func (this *TUniEngine) BeginCtx(ctx context.Context) error {
+
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	// 重复 Begin 会让上一个事务失去引用(悬挂/泄漏),此处显式拒绝
+	if this.inTx || this.tx != nil {
+		return ErrAlreadyInTransaction
+	}
+
+	tx, eror := this.Db.BeginTx(ctx, nil)
 	if eror != nil {
 		return eror
 	}
 
-	self.canClose = true
+	this.tx = tx
+	this.inTx = true
 
 	return nil
 }
 
-func (self *TUniEngine) Commit() error {
+func (this *TUniEngine) Cancel() error {
 
-	var eror error
+	this.lockTables()
+	defer this.mu.Unlock()
 
-	if self.canClose {
-		return errors.New("UniEngine: no transaction")
+	if !this.inTx || this.tx == nil {
+		return ErrNoTransaction
 	}
 
-	eror = self.tx.Commit()
-	if eror != nil {
+	if eror := this.tx.Rollback(); eror != nil {
 		return eror
 	}
 
-	self.canClose = true
+	this.tx = nil
+	this.inTx = false
 
 	return nil
 }
 
-func (self *TUniEngine) CanClose() error {
+func (this *TUniEngine) Commit() error {
 
-	fmt.Println("canclose:", self.canClose)
+	this.lockTables()
+	defer this.mu.Unlock()
+
+	if !this.inTx || this.tx == nil {
+		return ErrNoTransaction
+	}
+
+	if eror := this.tx.Commit(); eror != nil {
+		return eror
+	}
+
+	this.tx = nil
+	this.inTx = false
 
 	return nil
 }
 
-func (self *TUniEngine) RunDebug(Value bool) error {
+func (this *TUniEngine) RunDebug(Value bool) error {
 
-	self.runDebug = Value
+	if Value {
+		atomic.StoreInt32(&this.runDebug, 1)
+	} else {
+		atomic.StoreInt32(&this.runDebug, 0)
+	}
 
 	return nil
 }
 
-func (self *TUniEngine) Initialize() error {
+func (this *TUniEngine) Initialize() error {
 
-	self.RegisterClass(TUniTable{}, "github.com/kazarus/uniengine/unitable")
-	self.RegisterClass(TUniField{}, "github.com/kazarus/uniengine/unifield")
+	//#并发契约:表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)
+	//#与配置字段(ColLabel/ColParam/Provider/SecretOn 等)须在并发查询开始前完成;
+	//#注册(RegisterClass/RegisterTable/...)与查询可并发
+	this.initLock()
 
-	self.canClose = true
-	self.runDebug = false
+	this.RegisterClass(TUniTable{}, "github.com/kazarus/uniengine/unitable")
+	this.RegisterClass(TUniField{}, "github.com/kazarus/uniengine/unifield")
+
+	this.inTx = false
 
 	return nil
 }

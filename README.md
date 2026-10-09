@@ -1,0 +1,214 @@
+#### 0.项目简介
+
+UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
+
+> 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
+> 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
+> 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
+
+##### 0.0.驱动安装
+
+Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等动态库放入系统库路径(如 `/usr/local/lib`)。
+
+##### 0.1.驱动标识与协议族
+
+引擎行为(占位符/标识符引用/元数据目录/UPSERT/INSERT ALL/COPY)按**协议族**判断,新增兼容数据库按族归入:
+
+| 协议族   | 驱动标识                                                  | 连接符 | 占位符 | 标识符引用 |
+| -------- | --------------------------------------------------------- | ------ | ------ | ---------- |
+| Postgre  | DtPOSTGR / DtKINGES(金仓) / DtOPENGS / DtPOLODB | $      | $1     | "name"     |
+| Oracle   | DtORACLE / DtDAMENG(达梦)                                 | :      | :1     | name(裸)   |
+| MySQL    | DtMYSQLN / DtTAURUS(华为)                                 | ?      | ?      | name(裸)   |
+| SQLServer| DtSQLSRV                                                  | $      | $1     | "name"     |
+
+#### 1.安装方式
+
+```sh
+go get github.com/kazarus/UniEngine
+```
+
+```go
+import "github.com/kazarus/UniEngine" //包名仍为 UniEngine
+```
+
+> 模块路径为 `github.com/kazarus/UniEngine`;相对旧版(master 基线)的破坏性变更与新增见 CHANGELOG。
+
+#### 2.使用方法
+
+##### 1.mysql 下使用
+
+```go
+import _ "github.com/go-sql-driver/mysql"
+
+DbSource := fmt.Sprintf("%s:%s@tcp(%s:3306)/%s", "<user>", "<pswd>", "<server>", "<database>")
+
+db, eror := sql.Open("mysql", DbSource)
+if eror != nil {
+  fmt.Println(eror.Error())
+}
+
+db.SetConnMaxLifetime(time.Minute * 3)
+db.SetMaxOpenConns(100)
+db.SetMaxIdleConns(10)
+
+//#初始化
+UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provider: UniEngine.DtMYSQLN}
+UniEngineEx.Initialize()
+
+//#根据数据库元数据,主动获取主键
+var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
+AutoKeys.DataBase = "kz2020_gcgl_demo"
+
+//#注册数据库操作类(AutoKeys 接收 *TUniEngine,返回 error,需处理)
+if eror := UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(&UniEngineEx, AutoKeys); eror != nil {
+  panic(eror)
+}
+if eror := UniEngineEx.RegisterClass(mock.TDATA{}, "mock_data").AutoKeys(&UniEngineEx, AutoKeys); eror != nil {
+  panic(eror)
+}
+```
+
+##### 2.context.Context 支持
+
+每个查询/写入方法都有对应的 `*Ctx` 变体(如 `SelectCtx` / `InsertCtx` / `ExecuteCtx` / `BeginCtx`),接受 `context.Context` 作为首参,可用于超时/取消。原方法(`Select` / `Insert` / ...)等价于以 `context.Background()` 调用对应 `*Ctx` 方法。
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+eror = UniEngineEx.InsertCtx(ctx, &row)
+```
+
+##### 3.应用加密(敏感字段)
+
+UniEngine 提供应用层加密 hook,敏感字段(密码/证件号/手机号等)写入时自动加密,读取时自动解密。
+
+```go
+//#1.注册类时,给敏感字段打上 encrypt 标记(结构体 tag)
+UniEngineEx.RegisterClass(mock.TUSER{}, "mock_user")
+//# 字段声明示例:Password string `db:"password,encrypt"`
+
+//#2.开启加密,并设置密钥
+UniEngineEx.SecretOn = 1
+UniEngineEx.SecretBy = "your-secret-key"
+
+//#3.可选:自定义加密钩子(默认内置 AES-256-GCM)
+UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
+    if Encrypt {
+        return myEncrypt(Value) //#业务密钥/国密/加密机
+    }
+    return myDecrypt(Value)
+}
+```
+
+- 写入:Insert / Update / InsertL / CopyInL 对标记字段自动加密
+- 读取:Select / SelectL / SelectM / SelectH 对标记字段自动解密
+- SecretOn=0(默认)时一切直通,不改变原有行为
+- 手工注册的字段可用 `.SetSecret("password")` 标记加密
+- 主键字段请勿标记 encrypt(密文含随机nonce,无法用于匹配)
+- **encrypt 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
+- **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调;派生密钥按"盐+迭代数"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
+- 密文格式:`ENC2:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
+
+##### 3.1.存量数据鉴别与迁移
+
+开启加密后,库中会存在三类数据:加密前的存量明文、旧格式密文(`ENC:`)、现行格式密文(`ENC2:`)。
+读取时自动鉴别:
+
+- 带 `ENC2:` 标签 → 现行密文,解密后返回
+- 带 `ENC:` 标签 → 旧格式密文(单次 SHA-256 派生密钥时代写入),仍可解密读取;重新保存后自动落为 `ENC2:`
+- 无标签 → 存量明文,直通返回(不报错、不解密)
+
+```go
+//# 迁移脚本:逐行读出存量明文,重新保存后即落为加密密文
+UniEngineEx.IsEncrypted(value) //# true=密文 false=存量明文
+
+//# 示例:读取全量用户,让 SaveIt/Update 自动把存量明文加密
+var users []mock.TUSER
+UniEngineEx.SelectL(&users, "select * from mock_user")
+for i := range users {
+    UniEngineEx.SaveIt(&users[i], "mock_user") //# 或 Update
+}
+```
+
+注意:存量明文若恰好以 `ENC:` 或 `ENC2:` 开头会被误判为密文(真实敏感数据概率极低);
+带标签但密钥错误的密文会解密报错(不静默,便于发现密钥轮换问题)。
+
+##### 4.从旧版本迁移(SpecialInsert → CopyIn)
+
+`SpecialInsert*` 系列方法更名为 `CopyIn*`(语义即 PostgreSQL 的 COPY IN 协议):
+
+| 旧名称              | 新名称    |
+| ------------------- | --------- |
+| SpecialInsertL      | CopyInL   |
+| SpecialInsertLCtx   | CopyInLCtx|
+| SpecialInsertP      | CopyInP   |
+| SpecialInsertPCtx   | CopyInPCtx|
+| HasSpecialGetSqlInsertL | HasGetSqlCopyInL |
+| HasSpecialSetSqlValuesL | HasCopyInSetSqlValuesL |
+
+- 旧方法名保留为**废弃包装**,直接委托到新实现,源码兼容无需改动;
+- 旧接口仍被引擎探测:已实现 `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` 的类**无需改动即可继续工作**,建议尽快迁移到新接口。
+
+同版本其他行为变化:
+
+- **SaveIt / SaveItWhenNotExist 默认走方言原生 UPSERT**(PG `on conflict`、Oracle/SQLServer `merge`),消除 count 与写入两步之间的并发窗口;实现自定义 SQL 钩子的类与 MySQL(唯一键语义不等价)自动回退旧的 count-then-dispatch;
+- **查询补 `rows.Err()` 检查**:读取中途出错不再被静默吞掉(此前表现为"正常返回但数据截断");
+- **SQL 生成确定性**:CRUD 列序按类声明序(手工注册字段按字段名排序补齐),同一输入不再产生不同 SQL 文本,利于数据库端语句缓存;
+- **表名/字段名白名单校验**:所有拼入 SQL 的表名/字段名仅允许字母/数字/下划线/点,非法字符直接报错(防注入);
+- **ExistViews 修正**:PostgreSQL(补 `relkind='v'`)/ SQLServer(补 `xtype='V'`)/ MySQL(改查 `information_schema.views`)不再把同名普通表误判为视图;
+- **SQLServer 主键探测**改用 `sys.indexes` 目录视图(替代老旧的 syscolumns/sysindexes 联查);
+- **RegisterClass 双 key 注册**:类同时以"小写表名"和"类全名"注册(统一 GetTable 与 SaveIt 路径的可见性)。注意:两个类注册同一表名时,小写表名 key 以后注册者为准;
+- Oracle 下 `$` 替换收窄到参数占位符(`$1`),不再误伤 SQL 文本中其它 `$` 字符;
+- **CopyInL 保持表名原大小写**,不再整句转小写;全部字段只读时写入方法返回明确错误而非 panic;
+- **(第二阶段)引擎并发安全**:预备语句移出结构体,查询/注册可并发;事务期间仍须串行;
+- **(第二阶段)写方法表名参数类型安全化**:`args ...interface{}` → `TableName ...string`,传非字符串由运行期报错变为编译期报错,已有调用点语法不变;
+- **(第二阶段)钩子接口引擎参数改 `*TUniEngine`**(消除逐行拷贝);`AutoKeys` 同步改指针;实现方需同步修改签名;
+- **(第二阶段)`Select` 多行时报错**(旧版静默保留最后一行),多行请用 `SelectL`;
+- **(第二阶段)移除 `github.com/lib/pq` 依赖**,COPY 语句由包内 `copyInStmt` 自实现,输出逐字一致;
+- **(第二阶段)`CopyInL` 仅 PG 协议族可用**(DtPOSTGR/DtKINGES/DtOPENGS/DtPOLODB),其余方言直接报错。
+
+#### 5.性能基准
+
+```sh
+go test -bench . -benchmem -run '^$'
+```
+
+- **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
+- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(ENC2 稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
+- **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。
+
+#### 6.真实数据库集成测试
+
+`integration/` 是**独立 Go 模块**(自带 go.mod),用真实 PostgreSQL(pgx 驱动)验证
+COPY 协议、原生 UPSERT、应用加密、元数据探测与事务的真实驱动行为——库本体保持零第三方依赖不受影响。
+
+```sh
+# 本地运行(需要可达的 PostgreSQL;连不上时自动跳过)
+UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" \
+  go test ./integration/ -v
+
+# 不可达时强制失败而非跳过(CI 即如此)
+UNIENGINE_PG_REQUIRED=1 go test ./integration/ -v
+```
+
+CI 中由 `integration-pg` job 提供 `postgres:16-alpine` service 容器自动执行;
+覆盖用例见 `integration/pg_test.go`(CRUD / on conflict UPSERT / CopyInL+CopyInP /
+ENC2 密文落库与读取还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚)。
+
+#### 7.pgx 驱动与 COPY 协议
+
+pgx(当前主流 PG 驱动)的 `database/sql` 适配层**不模拟** lib/pq 的逐行 COPY 约定
+( COPY 语句 `NumInput()=0`,逐行传参被 `database/sql` 拒绝),因此不接钩子时
+`CopyInL/CopyInP` 在 pgx 下会报 `expected 0 arguments`。解决方式——接 `CopyInHook`
+走 pgx 原生 `CopyFrom`:
+
+```go
+import "github.com/kazarus/UniEngine/contrib/pgxcopy"
+
+UniEngineEx.CopyInHook = pgxcopy.Hook // 一次性设置,之后 CopyInL/CopyInP 正常可用
+```
+
+`contrib/pgxcopy` 为独立模块(自带 go.mod),不引入则库本体保持零第三方依赖;
+非 pgx 驱动(如 lib/pq)下钩子返回未接管,自动回退内置协议。
+注意:钩子经由连接池取连接,无法路由到 `*sql.Tx`,**事务期间** `CopyInL` 会被引擎显式拒绝。
