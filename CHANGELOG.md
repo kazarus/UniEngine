@@ -162,6 +162,22 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 - **`contrib/pgxcopy`（独立模块）**：经 `*sql.Conn.Raw` 取 pgx 原生连接执行 `CopyFrom`，`UniEngineEx.CopyInHook = pgxcopy.Hook` 一行接入；支持 `schema.table` 限定名；非 pgx 驱动返回未接管自动回退。
 - 集成测试同步钉住两种行为：接钩子后 `CopyInL`（120 行）/`CopyInP`（PageSize 分页）真实写入且内容正确；**不接钩子**时 pgx 下报 `expected 0 arguments` 且零写入（文档化限制，防未来静默漂移）。
 
+### 文件重组（纯物理移动，无行为变化）
+
+`UniEngine.go`（2012 行）按既有逻辑分节拆为 7 个同包文件，**未改动任何签名、标识符与注释**，公开 API 与调用方零感知：
+
+| 文件 | 行数 | 内容 |
+|------|-----:|------|
+| `UniEngine.go` | ~395 | 引擎核心：`TUniEngine` 定义与并发契约、锁/注册表查找、`currentTx`、`validIdent`、SQL 记号生成、`prepareCtx`（语句路由）、事务/Initialize |
+| `UniRegister.go` | ~271 | RegisterClass/Table/Field/Pkeys、PrepareTables、PrepareRunSQL |
+| `UniQuery.go` | ~332 | queryScalarCtx/queryRowsCtx 行扫描核心 + SelectD/F/S/L/M/H 全家 |
+| `UniSave.go` | ~333 | 原生 UPSERT 机制 + SaveIt/SaveItWhenNotExist |
+| `UniWrite.go` | ~358 | resolveTarget + Update/Insert/InsertL/Delete |
+| `UniCopyIn.go` | ~245 | CopyInL/CopyInP、废弃包装、insertPage 方言路由 |
+| `UniMeta.go` | ~240 | Execute/ExecuteMust/IfDropView + Exist* 四兄弟 |
+
+等价性验证：拆分前后顶层声明签名集合完全一致（93 个），函数数一致（89），全量测试/`-race`/真实 PG 集成/基准冒烟全绿。
+
 ### 已知限制
 
 - **pgx 驱动下 `CopyIn*` 需接 `CopyInHook`**（`contrib/pgxcopy.Hook`）：pgx stdlib 不模拟 lib/pq 逐行 COPY 约定，不接钩子报 `expected 0 arguments`；lib/pq 兼容驱动不受影响。事务期间 `CopyIn*`（钩子路径）被显式拒绝。
