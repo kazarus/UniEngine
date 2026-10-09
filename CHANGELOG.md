@@ -137,6 +137,10 @@
 - **`BenchmarkSecretDecryptLegacyENC` / `BenchmarkSecretDecryptPlaintext`**：旧格式读取与存量明文直通（后者零分配，约 2ns）。
 - **`BenchmarkSecretPBKDF2DeriveCold`**：一次性冷派生开销（缺省 600000 次迭代，实测约 53ms）——生产中每进程每份盐只付一次，行级吞吐不受影响。
 
+### CI（.github/workflows/ci.yml）
+
+push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.x`，1.24 为 go.mod 下限）× ubuntu-latest，依次执行 build → vet → gofmt 检查 → `go test -race -count=1` → 基准冒烟（`-benchtime=1x` 编译并各执行一次，防基准代码随重构腐化）。新 Go 版本发布后在矩阵追加一行即可。仓库零第三方依赖（无 go.sum），故关闭 setup-go 依赖缓存。
+
 ### 已知限制
 
 - **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。

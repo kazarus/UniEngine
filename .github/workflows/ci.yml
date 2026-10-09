@@ -1,0 +1,46 @@
+# CI: build + vet + gofmt + test -race 的 Go 版本矩阵
+# go.mod 下限 1.24;矩阵覆盖下限与后续各版本,新增 Go 版本时在此追加
+name: CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.24.x', '1.25.x', '1.26.x', '1.27.x']
+    name: go${{ matrix.go }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false # 本库零第三方依赖,无 go.sum 可缓存
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Gofmt
+        run: |
+          out=$(gofmt -l .)
+          [ -z "$out" ] || { echo "以下文件需要 gofmt:"; echo "$out"; exit 1; }
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      # 基准代码也在 CI 里编译并各执行一次,防止其随重构腐化
+      - name: Benchmark smoke
+        run: go test -run '^$' -bench . -benchtime=1x .
