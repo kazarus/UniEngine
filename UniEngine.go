@@ -37,8 +37,9 @@ type TUniEngine struct {
 	ColParam string        //#参数符号
 	HashTabl map[string]*TUniTable
 
-	SecretOn int64  //#开启敏感信息加密
-	SecretBy string //#敏感信息加密密钥
+	SecretOn   int64  //#开启敏感信息加密
+	SecretBy   string //#敏感信息加密密钥
+	SecretIter int    //#PBKDF2迭代次数#0用缺省(UniSecretIter);仅影响新写入,读取以密文内嵌值为准
 
 	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
 
@@ -51,6 +52,8 @@ type TUniEngine struct {
 	tx       *sql.Tx //#当前事务(Begin 之后非 nil)
 	inTx     bool    //#事务进行中(期间调用须串行)
 	runDebug int32   //#SQL调试输出开关#原子读写,可运行中切换
+
+	secret *secretState //#派生密钥缓存与本进程写盐(懒初始化,详见UniSecret.go)
 }
 
 // muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）

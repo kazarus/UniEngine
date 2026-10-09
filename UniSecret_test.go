@@ -4,8 +4,14 @@ package UniEngine
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"reflect"
@@ -120,7 +126,7 @@ type TTestUser struct {
 func newSecretTestEngine(d *mockDriver) *TUniEngine {
 	db := sql.OpenDB(mockConnector{d: d})
 	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		SecretOn: 1, SecretBy: "test-secret-key"}
+		SecretOn: 1, SecretBy: "test-secret-key", SecretIter: 4096} //#小迭代数加速测试;KDF行为另有专项测试
 	eng.Initialize()
 	eng.RegisterClass(TTestUser{}, "test_user")
 	return eng
@@ -156,7 +162,7 @@ func TestSecretOffPassthrough(t *testing.T) {
 
 // #测试3:内置AES-256-GCM 加密/解密 往返
 func TestSecretDefaultRoundTrip(t *testing.T) {
-	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key"}
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key", SecretIter: 2048}
 
 	cipherText, eror := eng.Secret("p@ssw0rd", true)
 	if eror != nil {
@@ -320,16 +326,19 @@ func TestSetSecret(t *testing.T) {
 	}
 }
 
-// #测试10:加密结果带明文标签 ENC:
+// #测试10:加密结果带明文标签 ENC2(新写入不产出旧标签 ENC:)
 func TestSecretTagPrefix(t *testing.T) {
-	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key"}
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "test-secret-key", SecretIter: 2048}
 
 	cipherText, eror := eng.Secret("p@ssw0rd", true)
 	if eror != nil {
 		t.Fatal(eror)
 	}
-	if !strings.HasPrefix(cipherText, UniSecretTag) {
-		t.Fatalf("cipher text should carry tag %s, got %s", UniSecretTag, cipherText)
+	if !strings.HasPrefix(cipherText, UniSecretTagV2) {
+		t.Fatalf("cipher text should carry tag %s, got %s", UniSecretTagV2, cipherText)
+	}
+	if strings.HasPrefix(cipherText, UniSecretTag) {
+		t.Fatalf("new cipher text should not use legacy tag %s", UniSecretTag)
 	}
 	if !eng.IsEncrypted(cipherText) {
 		t.Fatal("IsEncrypted should be true for tagged cipher text")
@@ -357,7 +366,7 @@ func TestSecretLegacyPassthrough(t *testing.T) {
 
 // #测试12:带标签但密钥错误的密文,解密报错(不静默)
 func TestSecretWrongKey(t *testing.T) {
-	eng := &TUniEngine{SecretOn: 1, SecretBy: "key-a"}
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "key-a", SecretIter: 2048}
 	eng2 := &TUniEngine{SecretOn: 1, SecretBy: "key-b"}
 
 	cipherText, eror := eng.Secret("secret", true)
@@ -582,7 +591,7 @@ type tPkeySecretRow struct {
 func newPkeySecretEngine(d *mockDriver) *TUniEngine {
 	db := sql.OpenDB(mockConnector{d: d})
 	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		SecretOn: 1, SecretBy: "test-secret-key"}
+		SecretOn: 1, SecretBy: "test-secret-key", SecretIter: 4096} //#小迭代数加速测试;KDF行为另有专项测试
 	eng.Initialize()
 	tbl := eng.RegisterClass(tPkeySecretRow{}, "t_pkey_secret")
 	fld := tbl.HashField["user_name"]
@@ -607,7 +616,7 @@ func TestInsertPkeyPlaintext(t *testing.T) {
 	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
 		t.Fatalf("pkey value should stay plaintext, got %q", got)
 	}
-	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC:") {
+	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC2:") {
 		t.Fatalf("data column should be encrypted, got %q", got)
 	}
 }
@@ -629,7 +638,7 @@ func TestSaveItPkeyPlaintext(t *testing.T) {
 	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
 		t.Fatalf("upsert pkey value should stay plaintext, got %q", got)
 	}
-	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC:") {
+	if got := fmt.Sprintf("%v", d.insertValues[0][1]); !strings.HasPrefix(got, "ENC2:") {
 		t.Fatalf("upsert data column should be encrypted, got %q", got)
 	}
 }
@@ -644,7 +653,7 @@ func TestUpdatePkeyPlaintext(t *testing.T) {
 		t.Fatalf("update: %v", eror)
 	}
 
-	if got := fmt.Sprintf("%v", d.insertValues[0][0]); !strings.HasPrefix(got, "ENC:") {
+	if got := fmt.Sprintf("%v", d.insertValues[0][0]); !strings.HasPrefix(got, "ENC2:") {
 		t.Fatalf("update set column should be encrypted, got %q", got)
 	}
 	if got := fmt.Sprintf("%v", d.insertValues[0][1]); got != "UID001" {
@@ -665,4 +674,125 @@ func TestDeletePkeyPlaintext(t *testing.T) {
 	if got := fmt.Sprintf("%v", d.insertValues[0][0]); got != "UID001" {
 		t.Fatalf("delete where pkey should stay plaintext, got %q", got)
 	}
+}
+
+// ----------------------------------------
+// #PBKDF2 派生与 ENC2 密文格式
+// ----------------------------------------
+
+// #parseV2Payload 解出 ENC2 密文的 盐/迭代数/剩余体,供断言与构造
+func parseV2Payload(t *testing.T, Value string) (salt []byte, iter int, body []byte) {
+	t.Helper()
+	data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTagV2))
+	if eror != nil {
+		t.Fatalf("decode v2 payload: %v", eror)
+	}
+	if len(data) < secretHeadLen {
+		t.Fatalf("payload too short: %d", len(data))
+	}
+	return data[:secretSaltLen], int(binary.BigEndian.Uint32(data[secretSaltLen : secretSaltLen+4])), data[secretSaltLen+4:]
+}
+
+// #测试25:盐内嵌密文,读取自包含——另一引擎实例(模拟另一进程)可直接解密
+func TestSecretV2SaltSelfContained(t *testing.T) {
+	engA := &TUniEngine{SecretOn: 1, SecretBy: "shared-key", SecretIter: 2048}
+	engB := &TUniEngine{SecretOn: 1, SecretBy: "shared-key", SecretIter: 999999} //#迭代数不同也不影响:读取以密文内嵌值为准
+
+	cipherText, eror := engA.Secret("cross-process", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	_, iter, _ := parseV2Payload(t, cipherText)
+	if iter != 2048 {
+		t.Fatalf("embedded iterations should honor writer's SecretIter, got %d", iter)
+	}
+
+	plainText, eror := engB.Secret(cipherText, false)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if plainText != "cross-process" {
+		t.Fatalf("self-contained decrypt fail: %s", plainText)
+	}
+}
+
+// #测试26:SecretIter 未设置时使用缺省值(密文内嵌验证)
+func TestSecretDefaultIterations(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "k"} //#SecretIter=0 → 缺省
+
+	cipherText, eror := eng.Secret("v", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	if _, iter, _ := parseV2Payload(t, cipherText); iter != UniSecretIter {
+		t.Fatalf("default iterations should be %d, got %d", UniSecretIter, iter)
+	}
+}
+
+// #测试27:旧格式 ENC:(单次SHA-256派生)存量密文仍可读取
+func TestSecretLegacyFormatReadable(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "legacy-key", SecretIter: 2048}
+
+	//#按旧算法手工构造:ENC: + base64(nonce + GCM密文),密钥=SHA-256(SecretBy)
+	sum := sha256.Sum256([]byte("legacy-key"))
+	block, _ := aes.NewCipher(sum[:])
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, gcm.NonceSize())
+	io.ReadFull(rand.Reader, nonce)
+	ct := gcm.Seal(nil, nonce, []byte("legacy-secret"), nil)
+	legacy := UniSecretTag + base64.StdEncoding.EncodeToString(append(nonce, ct...))
+
+	if !eng.IsEncrypted(legacy) {
+		t.Fatal("IsEncrypted should recognize legacy tag")
+	}
+
+	plainText, eror := eng.Secret(legacy, false)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if plainText != "legacy-secret" {
+		t.Fatalf("legacy decrypt fail: %s", plainText)
+	}
+}
+
+// #测试28:密文内嵌迭代数异常(0/超上限)时拒绝派生,防损坏或恶意密文触发高开销
+func TestSecretV2RejectsAbsurdIterations(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "k", SecretIter: 2048}
+
+	for _, iter := range []uint32{0, 99999999} {
+		payload := make([]byte, secretHeadLen)
+		binary.BigEndian.PutUint32(payload[secretSaltLen:secretSaltLen+4], iter)
+		bad := UniSecretTagV2 + base64.StdEncoding.EncodeToString(payload)
+		if _, eror := eng.Secret(bad, false); eror == nil {
+			t.Fatalf("iterations %d should be rejected", iter)
+		}
+	}
+}
+
+// #测试29:并发加解密(冷缓存下多 goroutine 竞争首次派生;验证缓存与锁的正确性)
+func TestSecretConcurrentAccess(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "race-key", SecretIter: 8192}
+
+	cipherText, eror := eng.Secret("hot-value", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			plain, eror := eng.Secret(cipherText, false)
+			if eror != nil || plain != "hot-value" {
+				t.Errorf("concurrent decrypt fail: %v %q", eror, plain)
+			}
+			if _, eror := eng.Secret("re-encrypt", true); eror != nil {
+				t.Errorf("concurrent encrypt fail: %v", eror)
+			}
+		}()
+	}
+	wg.Wait()
 }
