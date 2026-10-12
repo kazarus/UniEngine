@@ -17,9 +17,9 @@ type TUniField struct {
 	PkeyOnly bool   `db:"pkey_only" json:"pkeyOnly"` //#是否主键#数据同步时用到,其他地方不要用,未初始化;
 }
 
-func (this *TUniField) initialize(aValue string) {
+func (this *TUniField) initialize(Value string) {
 
-	Arguments := strings.Split(aValue, ",")
+	Arguments := strings.Split(Value, ",")
 	this.FieldName = Arguments[0]
 	if this.FieldName == "-" || this.FieldName == "_" {
 		this.ReadOnly = true
