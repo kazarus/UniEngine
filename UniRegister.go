@@ -302,4 +302,4 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 // 查询公共核心
 // ---------------------------------------------------------------------------
 
-// queryScalarCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
+// selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
