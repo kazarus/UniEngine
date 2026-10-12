@@ -202,30 +202,30 @@ func (this *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName 
 // #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
 
 // #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
-func (this *TUniEngine) ExistConst(aConstType TConstType, aConstName string) (bool, error) {
-	return this.ExistConstCtx(context.Background(), aConstType, aConstName)
+func (this *TUniEngine) ExistConst(ConstType TConstType, ConstName string) (bool, error) {
+	return this.ExistConstCtx(context.Background(), ConstType, ConstName)
 }
 
-func (this *TUniEngine) ExistConstCtx(ctx context.Context, aConstType TConstType, aConstName string) (bool, error) {
+func (this *TUniEngine) ExistConstCtx(ctx context.Context, ConstType TConstType, ConstName string) (bool, error) {
 
-	if !validIdent(aConstName) {
-		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, aConstName)
+	if !validIdent(ConstName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, ConstName)
 	}
 
 	var cSQL string
 
 	switch this.dbFamily() {
 	case FmPOSTGR:
-		cSQL = TExistConst4POSTGR{}.GetSqlExistConst(this, aConstType, aConstName)
+		cSQL = TExistConst4POSTGR{}.GetSqlExistConst(this, ConstType, ConstName)
 	case FmSQLSRV:
-		cSQL = TExistConst4SQLSRV{}.GetSqlExistConst(this, aConstType, aConstName)
+		cSQL = TExistConst4SQLSRV{}.GetSqlExistConst(this, ConstType, ConstName)
 	case FmORACLE:
-		cSQL = TExistConst4ORACLE{}.GetSqlExistConst(this, aConstType, aConstName)
+		cSQL = TExistConst4ORACLE{}.GetSqlExistConst(this, ConstType, ConstName)
 	case FmMYSQLN:
 		if this.DataBase == "" {
 			return false, errors.New("UniEngine: database is not specified")
 		}
-		cSQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, aConstType, aConstName, this.DataBase)
+		cSQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, ConstType, ConstName, this.DataBase)
 	}
 
 	return this.existCount(ctx, "existconst", cSQL)

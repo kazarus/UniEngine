@@ -19,13 +19,13 @@ type TUniField struct {
 
 func (this *TUniField) initialize(aValue string) {
 
-	cArguments := strings.Split(aValue, ",")
-	this.FieldName = cArguments[0]
+	Arguments := strings.Split(aValue, ",")
+	this.FieldName = Arguments[0]
 	if this.FieldName == "-" || this.FieldName == "_" {
 		this.ReadOnly = true
 	}
 
-	for _, item := range cArguments[1:] {
+	for _, item := range Arguments[1:] {
 		item := strings.TrimSpace(item)
 		switch item {
 		case "readonly":

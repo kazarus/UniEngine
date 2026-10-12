@@ -255,23 +255,23 @@ func (this *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v
 // saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
 func (this *TUniEngine) saveByCount(ctx context.Context, i interface{}, UniTable *TUniTable, v reflect.Value, TablName string, TableName []string, updateWhenExist bool) error {
 
-	cCount, eror := this.countByPkeys(ctx, UniTable, v, TablName)
+	Count, eror := this.countByPkeys(ctx, UniTable, v, TablName)
 	if eror != nil {
 		return eror
 	}
 
 	if this.debugging() {
-		fmt.Println("UniEngine: select.cnt", cCount)
+		fmt.Println("UniEngine: select.cnt", Count)
 	}
 
 	if updateWhenExist {
-		if cCount == 1 {
+		if Count == 1 {
 			return this.UpdateCtx(ctx, i, TableName...)
 		}
 		return this.InsertCtx(ctx, i, TableName...)
 	}
 
-	if cCount == 0 {
+	if Count == 0 {
 		return this.InsertCtx(ctx, i, TableName...)
 	}
 
