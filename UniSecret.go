@@ -247,7 +247,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 	return string(plainText), nil
 }
 
-// #查询结果解密:把标记了 encrypt 的字段,从密文还原为明文
+// #查询结果解密:把标记了 secreton 的字段,从密文还原为明文
 func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable, column []string) error {
 
 	if this.SecretOn == 0 {
@@ -303,12 +303,12 @@ func (this *TUniEngine) decryptRow(Result reflect.Value, encryptIdx []int) error
 	return nil
 }
 
-// #加密写入值:encrypt 仅支持 string 字段,非 string 字段直接报错
+// #加密写入值:secreton 仅支持 string 字段,非 string 字段直接报错
 // #(读取侧 DecryptResult 只还原 string 字段;写入侧若放行其它类型,会出现写入密文/读取不解密的不对称,故 fast-fail)
 func (this *TUniEngine) secretEncrypt(FieldValue reflect.Value) (interface{}, error) {
 
 	if !FieldValue.IsValid() || FieldValue.Kind() != reflect.String {
-		return nil, fmt.Errorf("UniEngine: encrypt only supports string field, but got [%s]", FieldValue.Kind().String())
+		return nil, fmt.Errorf("UniEngine: secreton only supports string field, but got [%s]", FieldValue.Kind().String())
 	}
 
 	return this.Secret(FieldValue.String(), true)

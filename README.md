@@ -84,9 +84,9 @@ eror = UniEngineEx.InsertCtx(ctx, &row)
 UniEngine 提供应用层加密 hook,敏感字段(密码/证件号/手机号等)写入时自动加密,读取时自动解密。
 
 ```go
-//#1.注册类时,给敏感字段打上 encrypt 标记(结构体 tag)
+//#1.注册类时,给敏感字段打上 secreton 标记(结构体 tag)
 UniEngineEx.RegisterClass(mock.TUSER{}, "mock_user")
-//# 字段声明示例:Password string `db:"password,encrypt"`
+//# 字段声明示例:Password string `db:"password,secreton"`
 
 //#2.开启加密,并设置密钥
 UniEngineEx.SecretOn = 1
@@ -105,8 +105,8 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - 读取:Select / SelectL / SelectM / SelectH 对标记字段自动解密
 - SecretOn=0(默认)时一切直通,不改变原有行为
 - 手工注册的字段可用 `.SetSecret("password")` 标记加密
-- 主键字段请勿标记 encrypt(密文含随机nonce,无法用于匹配)
-- **encrypt 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
+- 主键字段请勿标记 secreton(密文含随机nonce,无法用于匹配)
+- **secreton 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
 - **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调;派生密钥按"盐+迭代数"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
 - 密文格式:`ENC:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
 
