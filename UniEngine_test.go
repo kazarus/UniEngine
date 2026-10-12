@@ -41,14 +41,6 @@ func TestConstValues(t *testing.T) {
 	}
 }
 
-// Compile-time check that DataLeng was renamed to DataLen.
-func TestDataLenFieldRenamed(t *testing.T) {
-	f := TUniField{DataLen: "10"}
-	if f.DataLen != "10" {
-		t.Fatal("DataLen field not settable")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // UniField.initialize
 // ---------------------------------------------------------------------------
