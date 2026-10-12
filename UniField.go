@@ -13,7 +13,7 @@ type TUniField struct {
 	DataLeng string `db:"data_leng" json:"dataLeng"` //#字段长度
 	DataSize int    `db:"data_size" json:"dataSize"` //#字段精度
 	ReadOnly bool   `db:"read_only" json:"readOnly"` //#是否只读
-	SecretOn bool   `db:"secret_on" json:"secreton"` //#是否加密#应用加密,敏感字段(密码/证件号等)#命名对齐TUniEngine.SecretOn;用户类标记加密列的tag选项关键字仍为encrypt
+	SecretOn bool   `db:"secret_on" json:"secretOn"` //#是否加密#应用加密,敏感字段(密码/证件号等)#命名对齐TUniEngine.SecretOn;用户类标记加密列的tag选项关键字仍为encrypt
 	PkeyOnly bool   `db:"pkey_only" json:"pkeyOnly"` //#是否主键#数据同步时用到,其他地方不要用,未初始化;
 }
 
