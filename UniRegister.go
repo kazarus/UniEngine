@@ -5,6 +5,7 @@ package UniEngine
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -24,6 +25,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 	UniTable.HashField = make(map[string]TUniField, 0)
 	UniTable.HashPkeys = make(map[string]TUniField, 0)
 	UniTable.TableName = TableName
+	UniTable.ClassType = t
 
 	for i := 0; i < n; i++ {
 
@@ -141,6 +143,33 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 func (this *TUniEngine) GetTable(TableName string) *TUniTable {
 
 	return this.tableByName(TableName)
+}
+
+// #ListSecretTable 返回全部含加密列的注册表(读锁,按表名去重排序)
+// #HashTabl 同时以表名与类全名双键登记且指向同一表,须按 TableName 去重;
+// #供存量加解密迁移等注册表驱动场景遍历,新增 SetSecret/secreton 登记即自动纳入
+func (this *TUniEngine) ListSecretTable() []*TUniTable {
+
+	this.rlockTables()
+	defer this.mu.RUnlock()
+
+	var HashSeen = make(map[string]bool, len(this.HashTabl))
+	var ListTable = make([]*TUniTable, 0, 4)
+
+	for _, UniTable := range this.HashTabl {
+		if UniTable == nil || !UniTable.SecretOn {
+			continue
+		}
+		if HashSeen[UniTable.TableName] {
+			continue
+		}
+		HashSeen[UniTable.TableName] = true
+		ListTable = append(ListTable, UniTable)
+	}
+
+	sort.Slice(ListTable, func(i, j int) bool { return ListTable[i].TableName < ListTable[j].TableName })
+
+	return ListTable
 }
 
 func (this *TUniEngine) PrepareTables(TableName string) error {

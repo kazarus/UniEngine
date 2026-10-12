@@ -796,3 +796,67 @@ func TestTableSecretOnFlag(t *testing.T) {
 		t.Fatal("registry entry should reflect the SecretOn flag")
 	}
 }
+
+// #测试N:ListSecretTable 注册表驱动遍历——仅含加密列的表,双键去重,按表名排序
+func TestListSecretTable(t *testing.T) {
+
+	eng := newSecretTestEngine(&mockDriver{})
+
+	//#user_name 作定位键(password 为加密列,不能作键)
+	eng.RegisterClass(TTestUser{}, "test_user").SetKeys("user_name").SetSecret("password")
+	type tOther struct {
+		ID   int64  `db:"id"`
+		Name string `db:"name"`
+	}
+	eng.RegisterClass(tOther{}, "test_other").SetKeys("id") //#无加密列,不应出现
+
+	ListTable := eng.ListSecretTable()
+	if len(ListTable) != 1 {
+		t.Fatalf("expect 1 secret table, got %d: %+v", len(ListTable), ListTable)
+	}
+	tab := ListTable[0]
+	if tab.TableName != "test_user" {
+		t.Fatalf("expect test_user, got %s", tab.TableName)
+	}
+	if tab.ClassType != reflect.TypeOf(TTestUser{}) {
+		t.Fatalf("ClassType should be registered, got %v", tab.ClassType)
+	}
+	if len(tab.ListPkeys) != 1 || tab.ListPkeys[0].FieldName != "user_name" {
+		t.Fatalf("pkeys should be [user_name], got %+v", tab.ListPkeys)
+	}
+}
+
+// #测试N:按 ClassType 反射构造切片走 SelectL,密文读入即自动解密(注册表驱动读路径)
+func TestSelectLByClassType(t *testing.T) {
+
+	eng := newSecretTestEngine(&mockDriver{})
+
+	cipherText, eror := eng.Secret("p@ssw0rd", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	eng.RegisterClass(TTestUser{}, "test_user").SetKeys("user_name").SetSecret("password")
+	tab := eng.GetTable("test_user")
+
+	eng.Db = sql.OpenDB(mockConnector{d: &mockDriver{
+		columns:   []string{"user_name", "password"},
+		queryRows: [][]driver.Value{{"kazarus", cipherText}},
+	}})
+
+	ListData := reflect.New(reflect.SliceOf(tab.ClassType))
+	if eror := eng.SelectL(ListData.Interface(), "SELECT user_name,password FROM test_user"); eror != nil {
+		t.Fatal(eror)
+	}
+
+	if ListData.Elem().Len() != 1 {
+		t.Fatalf("expect 1 row, got %d", ListData.Elem().Len())
+	}
+	ItemData := ListData.Elem().Index(0)
+	if ItemData.FieldByName("UserName").String() != "kazarus" {
+		t.Fatalf("key field mismatch: %v", ItemData)
+	}
+	if ItemData.FieldByName("Password").String() != "p@ssw0rd" {
+		t.Fatalf("secret field should auto-decrypt, got %q", ItemData.FieldByName("Password").String())
+	}
+}
