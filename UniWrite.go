@@ -107,7 +107,7 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 
 			setCols = append(setCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 
-			if ItemPara.Encrypt {
+			if ItemPara.SecretOn {
 				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
 				if eror != nil {
 					return eror

@@ -102,7 +102,7 @@ func (this *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 			}
 			fieldIdx[ColIndex] = sf.Index[0]
 
-			if UniField.Encrypt {
+			if UniField.SecretOn {
 				encryptIdx = append(encryptIdx, sf.Index[0])
 			}
 		}
