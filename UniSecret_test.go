@@ -139,10 +139,10 @@ func TestEncryptTagParse(t *testing.T) {
 	if !ok {
 		t.Fatal("field password not registered")
 	}
-	if !field.Encrypt {
+	if !field.SecretOn {
 		t.Fatal("field password should be marked Encrypt")
 	}
-	if tab.HashField["user_name"].Encrypt {
+	if tab.HashField["user_name"].SecretOn {
 		t.Fatal("field user_name should NOT be marked Encrypt")
 	}
 }
@@ -317,7 +317,7 @@ func TestSetSecret(t *testing.T) {
 	eng.RegisterClass(TTestUser{}, "test_user").SetSecret("password")
 
 	tab, _ := eng.HashTabl["UniEngine.TTestUser"]
-	if !tab.HashField["password"].Encrypt {
+	if !tab.HashField["password"].SecretOn {
 		t.Fatal("SetSecret should mark password Encrypt")
 	}
 }
@@ -513,7 +513,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 		t.Fatal(eror)
 	}
 
-	if !tb.HashField["password"].Encrypt {
+	if !tb.HashField["password"].SecretOn {
 		t.Fatal("HashField copy should be marked")
 	}
 
@@ -521,7 +521,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 	for _, f := range tb.ListField {
 		if f.FieldName == "password" {
 			found = true
-			if !f.Encrypt {
+			if !f.SecretOn {
 				t.Fatal("ListField copy should be marked too (PrepareRunSQL path)")
 			}
 		}

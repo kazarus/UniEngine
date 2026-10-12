@@ -137,7 +137,7 @@ func (this *TUniTable) pkeyFields() []TUniField {
 // 此处对绕过守卫直接改注册表的用法兜底。
 func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
 
-	if !ItemPara.Encrypt {
+	if !ItemPara.SecretOn {
 		return false
 	}
 
@@ -161,7 +161,7 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) error {
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 encrypt 互斥
-		if Field.Encrypt {
+		if Field.SecretOn {
 			return fmt.Errorf("UniEngine: field[%s.%s] is encrypt-marked; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
 		}
 
@@ -196,13 +196,13 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) error {
 			return fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, lowerName)
 		}
 
-		Field.Encrypt = true
+		Field.SecretOn = true
 		this.HashField[lowerName] = Field
 
 		//#ListField 是 HashField 的另一份副本,须同步标记,否则 PrepareRunSQL 路径会读到旧值
 		for i := range this.ListField {
 			if strings.ToLower(this.ListField[i].FieldName) == lowerName {
-				this.ListField[i].Encrypt = true
+				this.ListField[i].SecretOn = true
 			}
 		}
 	}
@@ -260,7 +260,7 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 encrypt 互斥
-		if ItemCopy.Encrypt {
+		if ItemCopy.SecretOn {
 			return fmt.Errorf("UniEngine: field[%s.%s] is encrypt-marked; pkey values stay plaintext for WHERE matching, encrypt does not apply to pkeys", this.TableName, ItemPara.FieldName)
 		}
 

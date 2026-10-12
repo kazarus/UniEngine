@@ -257,7 +257,7 @@ func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable
 	for _, ItemPara := range column {
 
 		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-		if !Valid || !UniField.Encrypt {
+		if !Valid || !UniField.SecretOn {
 			continue
 		}
 
