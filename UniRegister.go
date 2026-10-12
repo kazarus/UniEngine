@@ -47,6 +47,11 @@ func (this *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
 		// 保留 struct 声明顺序，供 INSERT/UPDATE 列序生成
 		UniTable.ListField = append(UniTable.ListField, UniField)
+
+		//#tag 标记的加密列(db:"...,encrypt")同步置位表级 SecretOn,与 SetSecret 路径一致
+		if UniField.SecretOn {
+			UniTable.SecretOn = true
+		}
 	}
 
 	// 同时以小写表名（PrepareTables/PrepareRunSQL 路径）与类全名（SaveIt/Insert/Delete/Select* 路径）注册，

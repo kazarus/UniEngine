@@ -763,3 +763,36 @@ func TestSecretConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// #测试30:表级 SecretOn 标记——SetSecret 与 tag 两条路径都要置位
+func TestTableSecretOnFlag(t *testing.T) {
+	d := &mockDriver{}
+	eng := newSecretTestEngine(d)
+
+	//#tag 路径:TTestUser.Password 带 encrypt 标记,RegisterClass 即置位
+	tblTag := eng.RegisterClass(TTestUser{}, "test_user_tag")
+	if !tblTag.SecretOn {
+		t.Fatal("RegisterClass should set table SecretOn when a field carries the encrypt tag")
+	}
+
+	//#SetSecret 路径:无 tag 的类,手工标记后置位
+	type tPlainUser struct {
+		UserName string `db:"user_name"`
+		Password string `db:"password"`
+	}
+	tblPlain := eng.RegisterClass(tPlainUser{}, "t_plain_user")
+	if tblPlain.SecretOn {
+		t.Fatal("table without any secret field should not be marked")
+	}
+	if eror := tblPlain.SetSecret("password"); eror != nil {
+		t.Fatalf("SetSecret: %v", eror)
+	}
+	if !tblPlain.SecretOn {
+		t.Fatal("SetSecret should set table SecretOn")
+	}
+
+	//#注册表内同一指针,GetTable 取到的也是置位后的状态
+	if tab := eng.GetTable("t_plain_user"); tab == nil || !tab.SecretOn {
+		t.Fatal("registry entry should reflect the SecretOn flag")
+	}
+}
