@@ -3,6 +3,7 @@ package UniEngine
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -11,6 +12,8 @@ type TUniTable struct {
 	IPriority int64  `db:"i_priority" json:"iPriority"`
 	ParentTab string `db:"parent_tab" json:"parentTab"`
 	TableName string `db:"table_name" json:"tableName"`
+
+	ClassType reflect.Type `db:"-" json:"-"` //#注册类类型(RegisterClass 登记;RegisterTable/RegisterField 路径为空)#供注册表驱动的反射构造读行切片
 
 	SqlSelect string `db:"sql_select" json:"sqlSelect"`
 	SqlInsert string `db:"sql_insert" json:"sqlInsert"`
