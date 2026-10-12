@@ -44,12 +44,12 @@ func (this *TUniEngine) selectColsCtx(ctx context.Context, SqlQuery string, dst 
 	return rows.Err()
 }
 
-// queryRowsCtx 行查询公共核心：逐行解码后交给 sink 写入目标容器
+// selectRowsCtx 行查询公共核心,Select/L/M/H 共用：逐行解码后交给 sink 写入目标容器
 // （单个 struct / 切片 / map 由调用方决定）。HasSetSqlResult 钩子类的探测结果由
 // 调用方传入,保持各方法原有的钩子识别语义。
 // sink 第二参数为列→字段下标(热路径预计算结果,钩子路径传原始空切片)——
 // 单 struct 目标用它做按列合并,其余容器目标忽略即可。
-func (this *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type, hasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, args ...interface{}) error {
+func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type, hasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, args ...interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
@@ -224,7 +224,7 @@ func (this *TUniEngine) SelectCtx(ctx context.Context, i interface{}, SqlQuery s
 	//#VerifyDX 的 FROM_WHO_BUILD);钩子类仍整结构体替换,填充范围由类自身
 	//#SetSqlResult 决定;零行结果不触发 sink,目标原样保留
 	rowCount := 0
-	return this.queryRowsCtx(ctx, t, hasHook, SqlQuery, func(row reflect.Value, fieldIdx []int) error {
+	return this.selectRowsCtx(ctx, t, hasHook, SqlQuery, func(row reflect.Value, fieldIdx []int) error {
 		rowCount++
 		if rowCount > 1 {
 			return errors.New("UniEngine: method [Select] expects a single row, but the query returned more; use [SelectL]")
@@ -261,7 +261,7 @@ func (this *TUniEngine) SelectLCtx(ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
 		Result.Set(reflect.Append(Result, row))
 		return nil
 	}, args...)
@@ -292,7 +292,7 @@ func (this *TUniEngine) SelectMCtx(ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
 		MapUnique := row.Interface().(HasGetMapUnique).GetMapUnique()
 		Result.SetMapIndex(reflect.ValueOf(MapUnique), row)
 		return nil
@@ -320,7 +320,7 @@ func (this *TUniEngine) SelectHCtx(ctx context.Context, i interface{}, f GetMapU
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.queryRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(row reflect.Value, _ []int) error {
 		var MapUnique string
 		if f != nil {
 			MapUnique = f(row.Interface())
