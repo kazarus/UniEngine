@@ -264,13 +264,13 @@ func (this *TUniEngine) ProviderName() string {
 // SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
 
 // SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
-func (this *TUniEngine) SpecialPageSize(aPageSize int64) int64 {
+func (this *TUniEngine) SpecialPageSize(PageSize int64) int64 {
 
-	if aPageSize <= 0 {
+	if PageSize <= 0 {
 		return this.DefaultPageSize()
 	}
 
-	return aPageSize
+	return PageSize
 }
 
 func (this *TUniEngine) DefaultPageSize() int64 {

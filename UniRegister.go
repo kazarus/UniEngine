@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func (this *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUniTable {
+func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUniTable {
 
 	this.lockTables()
 	defer this.mu.Unlock()
@@ -17,7 +17,7 @@ func (this *TUniEngine) RegisterClass(aClass interface{}, TableName string) *TUn
 		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
-	t := reflect.TypeOf(aClass)
+	t := reflect.TypeOf(Class)
 	n := t.NumField()
 
 	var UniTable = &TUniTable{}

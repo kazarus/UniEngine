@@ -338,17 +338,17 @@ type HasGetSqlExistConst interface {
 type TExistConst4POSTGR struct{}
 
 // #PG:主键/外键/唯一 走 pg_constraint(contype:p/f/u);默认值挂在 pg_attrdef,按列名查
-func (this TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, ConstName string) string {
 
 	switch ConstType {
 	case CtPK:
-		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='p'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='p'", strings.ToLower(ConstName))
 	case CtFK:
-		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='f'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='f'", strings.ToLower(ConstName))
 	case CtUK:
-		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='u'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from pg_constraint where conname='%s' and contype='u'", strings.ToLower(ConstName))
 	case CtDF:
-		return fmt.Sprintf("select count(*) from pg_attrdef d join pg_class c on c.oid=d.adrelid join pg_attribute a on a.attrelid=c.oid and a.attnum=d.adnum where a.attname='%s'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from pg_attrdef d join pg_class c on c.oid=d.adrelid join pg_attribute a on a.attrelid=c.oid and a.attnum=d.adnum where a.attname='%s'", strings.ToLower(ConstName))
 	}
 
 	return ""
@@ -357,17 +357,17 @@ func (this TExistConst4POSTGR) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4SQLSRV struct{}
 
 // #SQLServer:约束对象都在 sys.objects,type:PK/F/UQ/D
-func (this TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, ConstName string) string {
 
 	switch ConstType {
 	case CtPK:
-		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='PK'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='PK'", strings.ToLower(ConstName))
 	case CtFK:
-		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='F'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='F'", strings.ToLower(ConstName))
 	case CtUK:
-		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='UQ'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='UQ'", strings.ToLower(ConstName))
 	case CtDF:
-		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='D'", strings.ToLower(aConstName))
+		return fmt.Sprintf("select count(*) from sys.objects where name='%s' and type='D'", strings.ToLower(ConstName))
 	}
 
 	return ""
@@ -376,17 +376,17 @@ func (this TExistConst4SQLSRV) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4ORACLE struct{}
 
 // #Oracle:主键 P、外键 R(引用)、唯一 U 在 user_constraints;默认值在 user_tab_cols.data_default,按列名查
-func (this TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string) string {
+func (this TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, ConstName string) string {
 
 	switch ConstType {
 	case CtPK:
-		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='P'", aConstName)
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='P'", ConstName)
 	case CtFK:
-		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='R'", aConstName)
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='R'", ConstName)
 	case CtUK:
-		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='U'", aConstName)
+		return fmt.Sprintf("select count(*) from user_constraints where constraint_name=upper('%s') and constraint_type='U'", ConstName)
 	case CtDF:
-		return fmt.Sprintf("select count(*) from user_tab_cols where column_name=upper('%s') and data_default is not null", aConstName)
+		return fmt.Sprintf("select count(*) from user_tab_cols where column_name=upper('%s') and data_default is not null", ConstName)
 	}
 
 	return ""
@@ -395,17 +395,17 @@ func (this TExistConst4ORACLE) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 type TExistConst4MYSQLN struct{}
 
 // #MySQL:命名约束在 information_schema.table_constraints;默认值在 information_schema.columns,按列名查
-func (this TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, aConstName string, DataBase string) string {
+func (this TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, ConstName string, DataBase string) string {
 
 	switch ConstType {
 	case CtPK:
-		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='PRIMARY KEY' and table_schema='%s'", aConstName, DataBase)
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='PRIMARY KEY' and table_schema='%s'", ConstName, DataBase)
 	case CtFK:
-		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='FOREIGN KEY' and table_schema='%s'", aConstName, DataBase)
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='FOREIGN KEY' and table_schema='%s'", ConstName, DataBase)
 	case CtUK:
-		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='UNIQUE' and table_schema='%s'", aConstName, DataBase)
+		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='UNIQUE' and table_schema='%s'", ConstName, DataBase)
 	case CtDF:
-		return fmt.Sprintf("select count(*) from information_schema.columns where column_name='%s' and table_schema='%s' and column_default is not null", aConstName, DataBase)
+		return fmt.Sprintf("select count(*) from information_schema.columns where column_name='%s' and table_schema='%s' and column_default is not null", ConstName, DataBase)
 	}
 
 	return ""
