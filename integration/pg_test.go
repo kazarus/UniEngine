@@ -64,7 +64,7 @@ type itUser struct {
 // #加密列变体:走 ENC 应用加密路径
 type itSecretUser struct {
 	UserName string `db:"user_name"`
-	Password string `db:"password,encrypt"`
+	Password string `db:"password,secreton"`
 }
 
 func newSecretEngine(t *testing.T) *UniEngine.TUniEngine {

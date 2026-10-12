@@ -61,11 +61,11 @@
 
 - **`context.Context` 支持**：每个查询/写入方法新增 `*Ctx` 变体（`SelectCtx`/`InsertCtx`/`ExecuteCtx`/`BeginCtx` 等），首参接收 `context.Context`；原方法等价于以 `context.Background()` 调用对应 `*Ctx`。
 - **应用层加密**：
-  - 结构体 tag `db:"field,encrypt"` 或 `.SetSecret("field")` 标记敏感字段；
+  - 结构体 tag `db:"field,secreton"` 或 `.SetSecret("field")` 标记敏感字段；
   - `TUniEngine.SecretOn` / `SecretBy` 控制开关与密钥；
   - `SecretHook` 自定义加密钩子，默认内置 AES-256-GCM（密文带 `ENC:` 标签）；
   - 读取自动解密、存量明文（无标签）自动鉴别直通；
-  - 非 `string` 字段标记 `encrypt` 时写入 `fast-fail` 报错；
+  - 非 `string` 字段标记 `secreton` 时写入 `fast-fail` 报错；
   - **`TUniTable.SecretOn`**（表级加密标记）：`SetSecret` 或 `RegisterClass` 检测到 tag 标记的加密列时置位，形成 `TUniEngine.SecretOn`（引擎级）→ `TUniTable.SecretOn`（表级）→ `TUniField.SecretOn`（列级）三级标记。
 - **`ExistConst` 约束存在性检查**：支持 `CtPK`/`CtFK`/`CtUK`/`CtDF` 四类约束，按数据库方言查询系统目录（PG `pg_constraint`/`pg_attrdef`、SQLServer `sys.objects`、Oracle `user_constraints`/`user_tab_cols`、MySQL `information_schema`），并对约束名做 `validIdent` 防注入校验。
 - **加固**：
@@ -116,7 +116,7 @@
 - **注册过滤**：`RegisterClass` 跳过**未导出字段**（避免 `FieldByName().Interface()` 反射 panic）与**无 `db` tag 字段**（避免以 `""` 键污染注册表并生成空列名 SQL）。
 - **`Begin` 重复守卫**：重复 `Begin` 返回新增哨兵 `ErrAlreadyInTransaction`，不再覆盖并泄漏上一个事务；检查与设置改为持锁原子。
 - **内嵌结构体防御**：行扫描预计算下，字段解析到提升字段（`reflect.Index` 长度 > 1）时返回明确错误，而非按 `[0]` 错绑到内嵌结构体本身。
-- **主键值一律明文（encrypt×主键互斥）**：主键是 WHERE 定位行的标识，值保持明文才能与库中存量匹配。`SetSecret` 对已登记主键的字段返回错误，`SetKeys`/`AutoKeys` 对已标记 `encrypt` 的字段返回错误（双向守卫）；写入路径（`Insert`/`InsertL`/`CopyInL`/`saveUpsert`）经 `secretColumn` 对主键列跳过应用加密，兜底防御绕过守卫直接改注册表的用法——`SaveIt` 与 `Update` 对同一行的定位语义从此一致。
+- **主键值一律明文（secreton×主键互斥）**：主键是 WHERE 定位行的标识，值保持明文才能与库中存量匹配。`SetSecret` 对已登记主键的字段返回错误，`SetKeys`/`AutoKeys` 对已标记 `secreton` 的字段返回错误（双向守卫）；写入路径（`Insert`/`InsertL`/`CopyInL`/`saveUpsert`）经 `secretColumn` 对主键列跳过应用加密，兜底防御绕过守卫直接改注册表的用法——`SaveIt` 与 `Update` 对同一行的定位语义从此一致。
 - **写方法 nil 指针守卫**：`SaveIt`/`Update`/`Insert`/`Delete`/`SaveItWhenNotExist`（含 `*Ctx` 变体）传入 typed nil 指针时返回明确错误（此前反射对零值 Value 取 `Interface()` 直接 panic）。
 
 ### 密钥派生加固（评审加固）
@@ -183,5 +183,5 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 - **pgx 驱动下 `CopyIn*` 需接 `CopyInHook`**（`contrib/pgxcopy.Hook`）：pgx stdlib 不模拟 lib/pq 逐行 COPY 约定，不接钩子报 `expected 0 arguments`；lib/pq 兼容驱动不受影响。事务期间 `CopyIn*`（钩子路径）被显式拒绝。
 - **事务期间调用须串行**（`Begin` 与 `Commit`/`Cancel` 之间）：底层 `*sql.Tx` 非并发安全，期间所有语句都路由到该事务。
 - 配置字段（`ColLabel`/`ColParam`/`Provider`/`SecretOn`/`SecretBy` 等）与表结构变更（`SetKeys`/`SetSecret`/`AutoKeys`/`PrepareTables`/`PrepareRunSQL`）应在并发查询开始前完成。
-- **`encrypt` 不适用于主键字段**：主键值必须明文才能参与 WHERE 定位与冲突匹配；`SetSecret`/`SetKeys`/`AutoKeys` 会显式拒绝该组合，请勿对主键字段标记 `encrypt`。
+- **`secreton` 不适用于主键字段**：主键值必须明文才能参与 WHERE 定位与冲突匹配；`SetSecret`/`SetKeys`/`AutoKeys` 会显式拒绝该组合，请勿对主键字段标记 `secreton`。
 - `CopyIn*` 的 COPY 协议由包内 `copyInStmt` 自实现，**不再依赖已停维护的 `github.com/lib/pq`**。

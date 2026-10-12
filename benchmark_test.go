@@ -31,7 +31,7 @@ type benchWideRow struct {
 	F10 string `db:"f10"`
 }
 
-// #benchSecretRow 同宽表,末列标记 encrypt(行扫描+解密联合路径用)
+// #benchSecretRow 同宽表,末列标记 secreton(行扫描+解密联合路径用)
 type benchSecretRow struct {
 	F1  string `db:"f1"`
 	F2  string `db:"f2"`
@@ -42,7 +42,7 @@ type benchSecretRow struct {
 	F7  string `db:"f7"`
 	F8  string `db:"f8"`
 	F9  string `db:"f9"`
-	F10 string `db:"f10,encrypt"`
+	F10 string `db:"f10,secreton"`
 }
 
 // #newBenchEngine 构造带预置查询结果的引擎(secret=true 时末列预置密文)

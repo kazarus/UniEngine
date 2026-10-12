@@ -111,12 +111,12 @@ func (r *mockRows) Next(dest []driver.Value) error {
 }
 
 // ----------------------------------------
-// #测试类:password 标记了 encrypt
+// #测试类:password 标记了 secreton
 // ----------------------------------------
 
 type TTestUser struct {
 	UserName string `db:"user_name"`
-	Password string `db:"password,encrypt"`
+	Password string `db:"password,secreton"`
 }
 
 func newSecretTestEngine(d *mockDriver) *TUniEngine {
@@ -128,7 +128,7 @@ func newSecretTestEngine(d *mockDriver) *TUniEngine {
 	return eng
 }
 
-// #测试1:encrypt tag 被解析
+// #测试1:secreton tag 被解析
 func TestEncryptTagParse(t *testing.T) {
 	eng := newSecretTestEngine(&mockDriver{})
 	tab, ok := eng.HashTabl["UniEngine.TTestUser"]
@@ -477,10 +477,10 @@ func TestCopyInLegacyInterface(t *testing.T) {
 	}
 }
 
-// #测试16:非 string 字段标记 encrypt,写入时报错(fast-fail,不产生读不回的密文)
+// #测试16:非 string 字段标记 secreton,写入时报错(fast-fail,不产生读不回的密文)
 type tIntSecret struct {
 	Name string `db:"name"`
-	Age  int64  `db:"age,encrypt"`
+	Age  int64  `db:"age,secreton"`
 }
 
 func TestEncryptNonStringFieldErrors(t *testing.T) {
@@ -492,14 +492,14 @@ func TestEncryptNonStringFieldErrors(t *testing.T) {
 	if eror == nil {
 		t.Fatal("insert with non-string encrypt field should fail")
 	}
-	if !strings.Contains(eror.Error(), "encrypt only supports string field") {
+	if !strings.Contains(eror.Error(), "secreton only supports string field") {
 		t.Fatalf("unexpected error: %v", eror)
 	}
 
 	//#Update 路径同样报错
 	eng.RegisterClass(tIntSecret{}, "t_int_secret").SetKeys("name")
 	eror = eng.Update(&row)
-	if eror == nil || !strings.Contains(eror.Error(), "encrypt only supports string field") {
+	if eror == nil || !strings.Contains(eror.Error(), "secreton only supports string field") {
 		t.Fatalf("update should fail with string-only error, got: %v", eror)
 	}
 }
@@ -537,7 +537,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 }
 
 // ----------------------------------------
-// #encrypt×主键互斥与主键值明文(WHERE 定位语义)
+// #secreton×主键互斥与主键值明文(WHERE 定位语义)
 // ----------------------------------------
 
 // #测试18:SetSecret 拒绝已登记为主键的字段
@@ -553,7 +553,7 @@ func TestSetSecretRejectsPkey(t *testing.T) {
 	}
 }
 
-// #测试19:SetKeys 拒绝已标记 encrypt 的字段(与测试18构成双向守卫)
+// #测试19:SetKeys 拒绝已标记 secreton 的字段(与测试18构成双向守卫)
 func TestSetKeysRejectsEncrypt(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
@@ -563,22 +563,22 @@ func TestSetKeysRejectsEncrypt(t *testing.T) {
 	}
 }
 
-// #测试20:AutoKeys 发现的主键若已标记 encrypt,同样拒绝
+// #测试20:AutoKeys 发现的主键若已标记 secreton,同样拒绝
 func TestAutoKeysRejectsEncrypt(t *testing.T) {
 	d := &mockDriver{columns: []string{"field_name"}, queryRows: [][]driver.Value{{"password"}}}
 	eng := newSecretTestEngine(d)
 	tbl := eng.RegisterClass(TTestUser{}, "test_user")
 	eror := tbl.AutoKeys(eng)
-	if eror == nil || !strings.Contains(eror.Error(), "encrypt") {
+	if eror == nil || !strings.Contains(eror.Error(), "secreton") {
 		t.Fatalf("AutoKeys on encrypt-marked pkey should return error, got: %v", eror)
 	}
 }
 
-// #tPkeySecretRow 两列均标记 encrypt;user_name 经直接改注册表强制成为主键,
+// #tPkeySecretRow 两列均标记 secreton;user_name 经直接改注册表强制成为主键,
 // #绕过 SetKeys/SetSecret 守卫,验证写入路径的兜底行为:主键值明文,数据列密文
 type tPkeySecretRow struct {
-	UserName string `db:"user_name,encrypt"`
-	Password string `db:"password,encrypt"`
+	UserName string `db:"user_name,secreton"`
+	Password string `db:"password,secreton"`
 }
 
 func newPkeySecretEngine(d *mockDriver) *TUniEngine {
@@ -769,10 +769,10 @@ func TestTableSecretOnFlag(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 
-	//#tag 路径:TTestUser.Password 带 encrypt 标记,RegisterClass 即置位
+	//#tag 路径:TTestUser.Password 带 secreton 标记,RegisterClass 即置位
 	tblTag := eng.RegisterClass(TTestUser{}, "test_user_tag")
 	if !tblTag.SecretOn {
-		t.Fatal("RegisterClass should set table SecretOn when a field carries the encrypt tag")
+		t.Fatal("RegisterClass should set table SecretOn when a field carries the secreton tag")
 	}
 
 	//#SetSecret 路径:无 tag 的类,手工标记后置位
