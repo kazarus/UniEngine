@@ -10,7 +10,7 @@ type TUniField struct {
 
 	//#字段元数据(以下字段当前未被引擎使用,仅作登记)
 	TypeName string `db:"type_name" json:"typeName"` //#字段类型
-	DataLen  string `db:"data_leng" json:"dataLeng"` //#字段长度
+	DataLeng string `db:"data_leng" json:"dataLeng"` //#字段长度
 	DataSize int    `db:"data_size" json:"dataSize"` //#字段精度
 	ReadOnly bool   `db:"read_only" json:"readOnly"` //#是否只读
 	Encrypt  bool   `db:"encrypt" json:"encrypt"`    //#是否加密#应用加密,敏感字段(密码/证件号等)
