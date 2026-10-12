@@ -12,12 +12,12 @@ type TUniTable struct {
 	ParentTab string `db:"parent_tab" json:"parentTab"`
 	TableName string `db:"table_name" json:"tableName"`
 
-	SecretOn bool `db:"secret_on" json:"secretOn"` //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
-
 	SqlSelect string `db:"sql_select" json:"sqlSelect"`
 	SqlInsert string `db:"sql_insert" json:"sqlInsert"`
 	SqlUpdate string `db:"sql_update" json:"sqlUpdate"`
 	SqlDelete string `db:"sql_delete" json:"sqlDelete"`
+
+	SecretOn bool `db:"secret_on" json:"secretOn"` //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
 
 	HashField map[string]TUniField //ToLower
 	HashPkeys map[string]TUniField //ToLower
