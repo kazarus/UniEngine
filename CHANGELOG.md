@@ -45,6 +45,7 @@
 | `EtDelele` | `EtDelete` | 常量拼写修正 |
 | `CONST_PRIVIDER_NAME_TO_*` / `CONST_PRIVIDER_CODE_TO_*` | `CONST_PROVIDER_NAME_TO_*` / `CONST_PROVIDER_CODE_TO_*` | 常量拼写修正（`PRIVIDER` → `PROVIDER`） |
 | `GetSqlAutoKeys(TUniEngine, string) string` | `GetSqlAutoKeys(TUniEngine, string) (string, error)` | `HasGetSqlAutoKeys` 接口及实现返回值增加 `error` |
+| `SetKeys` / `SetSecret` 返回 `error` | 返回 `*TUniTable`（链式） | 错误改记入 `TUniTable.Err`（首错短路后续登记），链尾 `if tbl.Err != nil` 检查：`RegisterClass(...).SetKeys(...).SetSecret(...)` |
 | `SpecialInsertL` / `SpecialInsertLCtx` | `CopyInL` / `CopyInLCtx` | 旧名保留为 `deprecated` 转发 |
 | `SpecialInsertP` / `SpecialInsertPCtx` | `CopyInP` / `CopyInPCtx` | 旧名保留为 `deprecated` 转发 |
 | `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasGetSqlCopyInL` / `GetSqlCopyInL` | 旧接口仍被引擎探测（向后兼容） |

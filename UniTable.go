@@ -24,6 +24,8 @@ type TUniTable struct {
 
 	ListField []TUniField //ToLower
 	ListPkeys []TUniField //ToLower
+
+	Err error //#链式登记(SetKeys/SetSecret)的首个错误#置位后短路后续登记,链尾检查
 }
 
 func (this *TUniTable) HasField(FieldName string) (bool, error) {
@@ -148,23 +150,33 @@ func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
 	return !isPkey
 }
 
-func (this *TUniTable) SetKeys(Fields ...interface{}) error {
+// #SetKeys 登记主键并返回本表,支持链式:
+// #  UniEngineEx.RegisterClass(core.TSYSPATH{}, "sys_path").SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").SetSecret("MAST_NAME")
+// #链中首个错误记入 Err 并短路后续登记,链尾以 if tbl.Err != nil 检查
+func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
+
+	if this.Err != nil {
+		return this
+	}
 
 	for _, ItemPara := range Fields {
 
 		fieldName, ok := ItemPara.(string)
 		if !ok {
-			return fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
+			this.Err = fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
+			return this
 		}
 
 		Field, Valid := this.HashField[strings.ToLower(fieldName)]
 		if !Valid {
-			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(fieldName))
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(fieldName))
+			return this
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if Field.SecretOn {
-			return fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
+			return this
 		}
 
 		lowerName := strings.ToLower(fieldName)
@@ -174,28 +186,36 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) error {
 		}
 	}
 
-	return nil
+	return this
 }
 
-func (this *TUniTable) SetSecret(Fields ...interface{}) error {
+// #SetSecret 标记加密列并返回本表,支持链式(错误处理同 SetKeys:记入 Err 并短路)
+func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
+
+	if this.Err != nil {
+		return this
+	}
 
 	for _, ItemPara := range Fields {
 
 		fieldName, ok := ItemPara.(string)
 		if !ok {
-			return fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
+			this.Err = fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
+			return this
 		}
 
 		lowerName := strings.ToLower(fieldName)
 
 		Field, Valid := this.HashField[lowerName]
 		if !Valid {
-			return fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			return this
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if _, isPkey := this.HashPkeys[lowerName]; isPkey {
-			return fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, lowerName)
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, lowerName)
+			return this
 		}
 
 		Field.SecretOn = true
@@ -212,7 +232,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) error {
 		}
 	}
 
-	return nil
+	return this
 }
 
 // AutoKeys 按数据库元数据自动登记主键。UniEngineEx 为引擎指针(第二阶段起不再按值拷贝)。
