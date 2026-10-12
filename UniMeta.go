@@ -20,7 +20,7 @@ func (this *TUniEngine) ExecuteCtx(ctx context.Context, SqlQuery string, args ..
 
 	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	this.debugSQL("execute", SqlQuery, args)
+	this.sqlDebug("execute", SqlQuery, args)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -43,7 +43,7 @@ func (this *TUniEngine) ExecuteMustCtx(ctx context.Context, SqlQuery string, arg
 
 	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	this.debugSQL("execute", SqlQuery, args)
+	this.sqlDebug("execute", SqlQuery, args)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -98,7 +98,7 @@ func (this *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bo
 // existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
 func (this *TUniEngine) existCount(ctx context.Context, Kind string, cSQL string) (bool, error) {
 
-	this.debugSQL(Kind, cSQL, nil)
+	this.sqlDebug(Kind, cSQL, nil)
 
 	if cSQL == "" {
 		return false, fmt.Errorf("UniEngine: no sql for %s", Kind)

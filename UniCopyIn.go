@@ -95,7 +95,7 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 		}
 	}
 
-	this.debugSQL("copyin", SqlQuery, SqlValue)
+	this.sqlDebug("copyin", SqlQuery, SqlValue)
 
 	//#COPY 仅 PostgreSQL 协议族可用;其余方言显式报错,不再发送必然失败的语句
 	if this.dbFamily() != FmPOSTGR {
