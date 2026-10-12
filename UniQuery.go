@@ -15,8 +15,8 @@ import (
 // 查询公共核心
 // ---------------------------------------------------------------------------
 
-// queryScalarCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
-func (this *TUniEngine) queryScalarCtx(ctx context.Context, SqlQuery string, dst sql.Scanner, args []interface{}) error {
+// selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
+func (this *TUniEngine) selectColsCtx(ctx context.Context, SqlQuery string, dst sql.Scanner, args []interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
@@ -155,7 +155,7 @@ func (this *TUniEngine) SelectD(SqlQuery string, args ...interface{}) (int64, er
 func (this *TUniEngine) SelectDCtx(ctx context.Context, SqlQuery string, args ...interface{}) (int64, error) {
 
 	var size sql.NullInt64
-	if eror := this.queryScalarCtx(ctx, SqlQuery, &size, args); eror != nil {
+	if eror := this.selectColsCtx(ctx, SqlQuery, &size, args); eror != nil {
 		return 0, eror
 	}
 
@@ -172,7 +172,7 @@ func (this *TUniEngine) SelectF(SqlQuery string, args ...interface{}) (float64, 
 func (this *TUniEngine) SelectFCtx(ctx context.Context, SqlQuery string, args ...interface{}) (float64, error) {
 
 	var size sql.NullFloat64
-	if eror := this.queryScalarCtx(ctx, SqlQuery, &size, args); eror != nil {
+	if eror := this.selectColsCtx(ctx, SqlQuery, &size, args); eror != nil {
 		return 0, eror
 	}
 
@@ -189,7 +189,7 @@ func (this *TUniEngine) SelectS(SqlQuery string, args ...interface{}) (string, e
 func (this *TUniEngine) SelectSCtx(ctx context.Context, SqlQuery string, args ...interface{}) (string, error) {
 
 	var text sql.NullString
-	if eror := this.queryScalarCtx(ctx, SqlQuery, &text, args); eror != nil {
+	if eror := this.selectColsCtx(ctx, SqlQuery, &text, args); eror != nil {
 		return "", eror
 	}
 
