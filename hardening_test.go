@@ -67,10 +67,10 @@ func TestSetKeysDedupAndOrder(t *testing.T) {
 	engine := newHardeningEngine(DtPOSTGR)
 	tb := engine.RegisterClass(hardeningUser{}, "test_user")
 
-	if err := tb.SetKeys("name", "id"); err != nil {
+	if err := tb.SetKeys("name", "id").Err; err != nil {
 		t.Fatalf("SetKeys: %v", err)
 	}
-	if err := tb.SetKeys("id"); err != nil {
+	if err := tb.SetKeys("id").Err; err != nil {
 		t.Fatalf("SetKeys dup: %v", err)
 	}
 	if len(tb.ListPkeys) != 2 {
@@ -80,7 +80,7 @@ func TestSetKeysDedupAndOrder(t *testing.T) {
 		t.Errorf("pkey order[0] = %q, want name", tb.ListPkeys[0].FieldName)
 	}
 
-	if err := tb.SetKeys("not_exist"); err == nil {
+	if err := tb.SetKeys("not_exist").Err; err == nil {
 		t.Error("SetKeys on unregistered field should return error")
 	}
 }
@@ -196,7 +196,7 @@ func TestWriteMethodsRejectNilPointer(t *testing.T) {
 	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
 	eng.Initialize()
 	tbl := eng.RegisterClass(hardeningUser{}, "hardening_user")
-	if err := tbl.SetKeys("id"); err != nil {
+	if err := tbl.SetKeys("id").Err; err != nil {
 		t.Fatalf("SetKeys: %v", err)
 	}
 
@@ -218,5 +218,52 @@ func TestWriteMethodsRejectNilPointer(t *testing.T) {
 		if !strings.Contains(err.Error(), "nil pointer") {
 			t.Errorf("%s error should mention nil pointer, got: %v", name, err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 链式语法:RegisterClass().SetKeys().SetSecret()
+// ---------------------------------------------------------------------------
+
+type chainUser struct {
+	WhoBuild string `db:"who_build"`
+	UserIndx int64  `db:"user_indx"`
+	SysPathc string `db:"sys_pathc"`
+	MastName string `db:"mast_name"`
+}
+
+func TestChainRegisterKeysSecret(t *testing.T) {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+
+	//#链式:与用户实际调用形态一致(大写字段名,链尾不再接收返回值)
+	tbl := eng.RegisterClass(chainUser{}, "sys_path").
+		SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").
+		SetSecret("MAST_NAME")
+
+	//#主键三列齐(大小写不敏感),加密列标记,表级 SecretOn 置位
+	if len(tbl.HashPkeys) != 3 {
+		t.Fatalf("expect 3 pkeys, got %d", len(tbl.HashPkeys))
+	}
+	for _, k := range []string{"who_build", "user_indx", "sys_pathc"} {
+		if _, Valid := tbl.HashPkeys[k]; !Valid {
+			t.Fatalf("pkey %s not registered", k)
+		}
+	}
+	if !tbl.HashField["mast_name"].SecretOn {
+		t.Fatal("mast_name should be marked secreton")
+	}
+	if !tbl.SecretOn {
+		t.Fatal("table SecretOn should be set")
+	}
+
+	//#链中出错记入 Err 并短路:MAST_NAME 先成为主键,再 SetSecret 被互斥守卫拒绝
+	tbl2 := eng.RegisterClass(chainUser{}, "sys_path2").
+		SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").
+		SetKeys("MAST_NAME"). //#非加密列,可作主键
+		SetSecret("MAST_NAME")
+	if tbl2.Err == nil {
+		t.Fatal("SetSecret on a pkey inside chain should record Err")
 	}
 }

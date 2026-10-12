@@ -509,7 +509,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 	eng := newSecretTestEngine(&mockDriver{})
 	tb := eng.RegisterClass(TTestUser{}, "test_user")
 
-	if eror := tb.SetSecret("password"); eror != nil {
+	if eror := tb.SetSecret("password").Err; eror != nil {
 		t.Fatal(eror)
 	}
 
@@ -531,7 +531,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 	}
 
 	//#非字符串参数报错而非 panic
-	if eror := tb.SetSecret(123); eror == nil {
+	if eror := tb.SetSecret(123).Err; eror == nil {
 		t.Fatal("non-string argument should return error")
 	}
 }
@@ -545,10 +545,10 @@ func TestSetSecretRejectsPkey(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 	tbl := eng.RegisterClass(TTestUser{}, "test_user2")
-	if eror := tbl.SetKeys("user_name"); eror != nil {
+	if eror := tbl.SetKeys("user_name").Err; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
-	if eror := tbl.SetSecret("user_name"); eror == nil {
+	if eror := tbl.SetSecret("user_name").Err; eror == nil {
 		t.Fatal("SetSecret on a pkey field should return error")
 	}
 }
@@ -558,7 +558,7 @@ func TestSetKeysRejectsEncrypt(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 	tbl := eng.RegisterClass(TTestUser{}, "test_user3")
-	if eror := tbl.SetKeys("password"); eror == nil {
+	if eror := tbl.SetKeys("password").Err; eror == nil {
 		t.Fatal("SetKeys on an encrypt-marked field should return error")
 	}
 }
@@ -784,7 +784,7 @@ func TestTableSecretOnFlag(t *testing.T) {
 	if tblPlain.SecretOn {
 		t.Fatal("table without any secret field should not be marked")
 	}
-	if eror := tblPlain.SetSecret("password"); eror != nil {
+	if eror := tblPlain.SetSecret("password").Err; eror != nil {
 		t.Fatalf("SetSecret: %v", eror)
 	}
 	if !tblPlain.SecretOn {
