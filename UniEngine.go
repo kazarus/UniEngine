@@ -202,10 +202,10 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string
 	return SqlQuery
 }
 
-// debugSQL 统一的 SQL 调试输出（runDebug 开启时）
+// sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
 
-// debugSQL 统一的 SQL 调试输出（runDebug 开启时）
-func (this *TUniEngine) debugSQL(Kind string, SqlQuery interface{}, args interface{}) {
+// sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
+func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, args interface{}) {
 
 	if !this.debugging() {
 		return

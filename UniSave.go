@@ -211,7 +211,7 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
 	}
 
-	this.debugSQL("upsert", cSQL, values)
+	this.sqlDebug("upsert", cSQL, values)
 
 	st, eror := this.prepareCtx(ctx, cSQL)
 	if eror != nil {

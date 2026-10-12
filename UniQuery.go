@@ -20,7 +20,7 @@ func (this *TUniEngine) queryScalarCtx(ctx context.Context, SqlQuery string, dst
 
 	SqlQuery = this.getSqlQuery(SqlQuery, args...)
 
-	this.debugSQL("select", SqlQuery, args)
+	this.sqlDebug("select", SqlQuery, args)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -61,7 +61,7 @@ func (this *TUniEngine) queryRowsCtx(ctx context.Context, elemType reflect.Type,
 		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
 
-	this.debugSQL("select", SqlQuery, args)
+	this.sqlDebug("select", SqlQuery, args)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {

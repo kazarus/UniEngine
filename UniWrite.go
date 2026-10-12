@@ -136,7 +136,7 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 		SqlValue = append(xValue, zValue...)
 	}
 
-	this.debugSQL("update", SqlQuery, SqlValue)
+	this.sqlDebug("update", SqlQuery, SqlValue)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -202,7 +202,7 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(colList, ","), strings.Join(paramList, ","))
 	}
 
-	this.debugSQL("insert", SqlQuery, SqlValue)
+	this.sqlDebug("insert", SqlQuery, SqlValue)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -296,7 +296,7 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 		}
 	}
 
-	this.debugSQL("insert", SqlQuery, SqlValue)
+	this.sqlDebug("insert", SqlQuery, SqlValue)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
@@ -338,7 +338,7 @@ func (this *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName 
 
 	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, strings.Join(keyCols, " and "))
 
-	this.debugSQL("delete", SqlQuery, SqlValue)
+	this.sqlDebug("delete", SqlQuery, SqlValue)
 
 	st, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
