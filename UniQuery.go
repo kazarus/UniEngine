@@ -77,12 +77,12 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 	if eror != nil {
 		return eror
 	}
-	Count := len(column)
-	fields := make([]interface{}, Count)
-	values := make([]interface{}, Count)
+	length := len(column)
+	fields := make([]interface{}, length)
+	values := make([]interface{}, length)
 
 	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
-	fieldIdx := make([]int, Count)
+	fieldIdx := make([]int, length)
 	encryptIdx := make([]int, 0, 2)
 	if !hasHook {
 		for ColIndex, ItemPara := range column {
@@ -111,7 +111,7 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 		u := reflect.New(elemType)
 
 		if hasHook {
-			for i := 0; i < Count; i++ {
+			for i := 0; i < length; i++ {
 				values[i] = &fields[i]
 			}
 
