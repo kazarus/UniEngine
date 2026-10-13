@@ -83,7 +83,7 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 
 	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
 	fieldIdx := make([]int, length)
-	encryptIdx := make([]int, 0, 2)
+	encryIdx := make([]int, 0, 2)
 	if !hasHook {
 		for ColIndex, ItemPara := range column {
 			UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
@@ -101,7 +101,7 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 			fieldIdx[ColIndex] = sf.Index[0]
 
 			if UniField.SecretOn {
-				encryptIdx = append(encryptIdx, sf.Index[0])
+				encryIdx = append(encryIdx, sf.Index[0])
 			}
 		}
 	}
@@ -131,7 +131,7 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 				return eror
 			}
 
-			if eror = this.decryptRow(elem, encryptIdx); eror != nil {
+			if eror = this.decryptRow(elem, encryIdx); eror != nil {
 				return eror
 			}
 		}
