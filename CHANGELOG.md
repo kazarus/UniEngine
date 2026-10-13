@@ -181,6 +181,8 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 
 ### 行为修复（随 downstream 侧改动同步）
 
+- **`SelectS` 标量路径自动解密**：返回前经 `Secret` 走与列路径同一套语义——`SecretOn=0` 直通、带 `ENC:` 标签的密文还原、存量明文（无标签）直通；查加密列的标量查询不再返回密文（存储形态断言请绕过引擎用原生 query）。`SelectD/F` 为数值不涉及。
+
 - **单 struct `Select` 改为按列合并**：`queryRowsCtx` 的 sink 增加 `fieldIdx` 参数（列→字段下标预计算结果），非钩子类的单 struct 目标仅用 SELECT 返回列覆盖目标字段，**未出现在结果列里的字段保留调用方原值**——修复"SELECT 少量列灌回业务结构体把其余字段清零"的问题（如 VerifyDX 的 `FROM_WHO_BUILD` 被清零）；钩子类仍整结构体替换（填充范围由类自身 `SetSqlResult` 决定）；零行结果不触发 sink，目标原样保留。`SelectL/M/H` 行为不变（sink 忽略新增参数）。新增 `UniQuery_test.go` 回归测试（3 例：未选列保留/零行保留/全零基线）。
 
 ### 已知限制

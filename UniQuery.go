@@ -193,7 +193,9 @@ func (this *TUniEngine) SelectSCtx(ctx context.Context, SqlQuery string, args ..
 		return "", eror
 	}
 
-	return text.String, nil
+	//#标量路径同步支持应用解密,与列路径(selectRowsCtx/decryptRow)同一套语义:
+	//#SecretOn=0 直通;带 ENC: 标签的密文还原;存量明文(无标签)直通
+	return this.Secret(text.String, false)
 }
 
 // return struct;查询返回多行时报错(旧版静默保留最后一行),需要多行请用 SelectL。
