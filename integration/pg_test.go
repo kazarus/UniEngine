@@ -104,6 +104,8 @@ func countUser(t *testing.T, eng *UniEngine.TUniEngine) int64 {
 	return n
 }
 
+// #passwordOf 走 SelectS——引擎开启加密时该路径自动解密,拿到的是明文;
+// #检查库中存储形态(应为 ENC: 密文)用 rawPasswordOf
 func passwordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
 
 	t.Helper()
@@ -111,6 +113,18 @@ func passwordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
 	v, eror := eng.SelectS("select password from it_user where user_name=$1", user)
 	if eror != nil {
 		t.Fatalf("select password(%s): %v", user, eror)
+	}
+	return v
+}
+
+// #rawPasswordOf 绕过引擎(原生 query)读存储原值,专供存储形态断言
+func rawPasswordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
+
+	t.Helper()
+
+	var v string
+	if eror := eng.Db.QueryRow("select password from it_user where user_name=$1", user).Scan(&v); eror != nil {
+		t.Fatalf("raw select password(%s): %v", user, eror)
 	}
 	return v
 }
@@ -291,11 +305,11 @@ func TestIntegrationSecret(t *testing.T) {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
-	//#Insert:库中落为 ENC 密文(SelectS 标量路径不解密,恰好用于断言存储形态)
+	//#Insert:库中落为 ENC 密文(rawPasswordOf 绕过引擎断言存储形态)
 	if eror := eng.Insert(&itSecretUser{"sec-1", "s3cret中文"}); eror != nil {
 		t.Fatalf("insert: %v", eror)
 	}
-	raw1 := passwordOf(t, eng, "sec-1")
+	raw1 := rawPasswordOf(t, eng, "sec-1")
 	if !strings.HasPrefix(raw1, "ENC:") || raw1 == "s3cret中文" {
 		t.Fatalf("stored value should be ENC cipher, got %.40s", raw1)
 	}
@@ -304,8 +318,13 @@ func TestIntegrationSecret(t *testing.T) {
 	if eror := eng.Insert(&itSecretUser{"sec-2", "s3cret中文"}); eror != nil {
 		t.Fatalf("insert: %v", eror)
 	}
-	if raw2 := passwordOf(t, eng, "sec-2"); raw2 == raw1 {
+	if raw2 := rawPasswordOf(t, eng, "sec-2"); raw2 == raw1 {
 		t.Fatal("same plain text should produce different cipher text")
+	}
+
+	//#SelectS 标量路径同样自动解密(与 SelectL 一致)
+	if v := passwordOf(t, eng, "sec-1"); v != "s3cret中文" {
+		t.Fatalf("selectS should decrypt, got %q", v)
 	}
 
 	//#SelectL:自动解密还原(含中文)
@@ -321,8 +340,11 @@ func TestIntegrationSecret(t *testing.T) {
 	if eror := eng.Update(&itSecretUser{"sec-1", "rotated"}); eror != nil {
 		t.Fatalf("update: %v", eror)
 	}
-	if raw := passwordOf(t, eng, "sec-1"); !strings.HasPrefix(raw, "ENC:") {
+	if raw := rawPasswordOf(t, eng, "sec-1"); !strings.HasPrefix(raw, "ENC:") {
 		t.Fatalf("update should store cipher, got %.40s", raw)
+	}
+	if v := passwordOf(t, eng, "sec-1"); v != "rotated" {
+		t.Fatalf("selectS should decrypt updated value, got %q", v)
 	}
 	var one itSecretUser
 	if eror := eng.Select(&one, "select * from it_user where user_name=$1", "sec-1"); eror != nil {
@@ -336,7 +358,7 @@ func TestIntegrationSecret(t *testing.T) {
 	if eror := eng.SaveIt(&itSecretUser{"sec-2", "v9"}); eror != nil {
 		t.Fatalf("saveit: %v", eror)
 	}
-	if v := passwordOf(t, eng, "sec-2"); !strings.HasPrefix(v, "ENC:") {
+	if v := rawPasswordOf(t, eng, "sec-2"); !strings.HasPrefix(v, "ENC:") {
 		t.Fatalf("saveit should store cipher, got %.40s", v)
 	}
 	var two itSecretUser
@@ -369,7 +391,7 @@ func TestIntegrationSecret(t *testing.T) {
 	if n := countUser(t, eng); n != 3 {
 		t.Fatalf("copyinl secret count: %d", n)
 	}
-	if raw := passwordOf(t, eng, "cp-2"); !strings.HasPrefix(raw, "ENC:") {
+	if raw := rawPasswordOf(t, eng, "cp-2"); !strings.HasPrefix(raw, "ENC:") {
 		t.Fatalf("copyin should store cipher, got %.40s", raw)
 	}
 	var cps []itSecretUser

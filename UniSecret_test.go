@@ -860,3 +860,39 @@ func TestSelectLByClassType(t *testing.T) {
 		t.Fatalf("secret field should auto-decrypt, got %q", ItemData.FieldByName("Password").String())
 	}
 }
+
+// #测试31:SelectS 标量路径解密——带标签密文还原,存量明文直通
+func TestSelectSDecrypt(t *testing.T) {
+	eng := newSecretTestEngine(&mockDriver{})
+
+	cipherText, eror := eng.Secret("p@ssw0rd", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	d := &mockDriver{
+		columns:   []string{"password"},
+		queryRows: [][]driver.Value{{cipherText}},
+	}
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+
+	//#密文 → 还原
+	got, eror := eng.SelectS("select password from test_user")
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if got != "p@ssw0rd" {
+		t.Fatalf("SelectS should decrypt cipher, got %q", got)
+	}
+
+	//#存量明文(无标签) → 直通
+	d2 := &mockDriver{columns: []string{"password"}, queryRows: [][]driver.Value{{"old-plain"}}}
+	eng.Db = sql.OpenDB(mockConnector{d: d2})
+	got, eror = eng.SelectS("select password from test_user")
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if got != "old-plain" {
+		t.Fatalf("legacy plaintext should pass through, got %q", got)
+	}
+}
