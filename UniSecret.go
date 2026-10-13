@@ -278,14 +278,14 @@ func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable
 }
 
 // #decryptRow 按预解析的字段下标解密(热路径;DecryptResult 的无查找版本,
-// #encryptIdx 由 selectRowsCtx 在行循环前一次性算好)
-func (this *TUniEngine) decryptRow(Result reflect.Value, encryptIdx []int) error {
+// #encryIdx 由 selectRowsCtx 在行循环前一次性算好)
+func (this *TUniEngine) decryptRow(Result reflect.Value, encryIdx []int) error {
 
 	if this.SecretOn == 0 {
 		return nil
 	}
 
-	for _, idx := range encryptIdx {
+	for _, idx := range encryIdx {
 
 		FieldValue := Result.Field(idx)
 		if FieldValue.Kind() != reflect.String {
