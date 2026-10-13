@@ -84,6 +84,11 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
 	fieldIdx := make([]int, length)
 	encryIdx := make([]int, 0, 2)
+
+	//#完整性验签预解析:SELECT 列覆盖全部保护列与 MAC 列时返回上下文,
+	//#否则为 nil(partial select 无法还原载荷,该行跳过验签)
+	var RowVerify *verifyRowCtx
+
 	if !hasHook {
 		for ColIndex, ItemPara := range column {
 			UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
@@ -104,6 +109,8 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 				encryIdx = append(encryIdx, sf.Index[0])
 			}
 		}
+
+		RowVerify = this.verifyCtxOf(UniTable, column, fieldIdx)
 	}
 
 	for rows.Next() {
@@ -132,6 +139,11 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 			}
 
 			if eror = this.decryptRow(elem, encryIdx); eror != nil {
+				return eror
+			}
+
+			//#完整性验签:先解密后验签(secreton 列参与载荷的是明文)
+			if eror = this.verifyRow(elem, RowVerify); eror != nil {
 				return eror
 			}
 		}

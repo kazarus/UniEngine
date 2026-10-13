@@ -22,6 +22,10 @@ type TUniTable struct {
 
 	SecretOn bool `db:"secret_on" json:"secretOn"` //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
 
+	VerifyOn   bool        //#是否含完整性保护字段#SetVerify登记时置位
+	VerifyAt string      //#MAC伴随列(字段名,小写)#如 mac_text,建议建列 varchar(64) NOT NULL DEFAULT ''
+	ListVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
+
 	HashField map[string]TUniField //ToLower
 	HashPkeys map[string]TUniField //ToLower
 
@@ -234,6 +238,88 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 			}
 		}
 	}
+
+	return this
+}
+
+// #SetVerify 登记存储完整性保护并返回本表,支持链式(错误处理同 SetKeys:记入 Err 并短路):
+// #  UniEngineEx.RegisterClass(core.TUSERPART{}, "tbl_user_part").SetKeys(...).SetVerify("mac_text", "who_build", "user_indx", "data_stat")
+// #MacField 为 MAC 伴随列(须为已登记的 string 字段,建议建列 varchar(64) NOT NULL DEFAULT ”,
+// #NOT NULL 缺省空串——存量行扫描 NULL 会报错),Fields 为保护列(登记顺序=载荷顺序);
+// #写路径自动重算 MacField 回填,读路径逐行验签(平台:等保/密评 访问控制信息存储完整性)
+// #载荷含注册表名做域分隔,MAC 不可跨表移植;保护列可含主键列与 secreton 列
+// #(secreton 列参与载荷的是解密后的明文,与读路径先解密后验签的顺序一致)
+func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
+
+	if this.Err != nil {
+		return this
+	}
+
+	lowerMac := strings.ToLower(MacField)
+
+	MacCol, Valid := this.HashField[lowerMac]
+	if !Valid {
+		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerMac)
+		return this
+	}
+	if MacCol.AttriName == "" {
+		this.Err = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; mac column needs a writable string field", this.TableName, lowerMac)
+		return this
+	}
+	if MacCol.ReadOnly {
+		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is readonly; mac column must be writable", this.TableName, lowerMac)
+		return this
+	}
+	if _, isPkey := this.HashPkeys[lowerMac]; isPkey {
+		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; mac column is engine-computed and can not be a pkey", this.TableName, lowerMac)
+		return this
+	}
+	//#MAC 值写入 string 字段;其它类型无法回填,登记期直接拒绝
+	if this.ClassType != nil {
+		if sf, ok := this.ClassType.FieldByName(MacCol.AttriName); !ok || sf.Type.Kind() != reflect.String {
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; mac column must be string", this.TableName, lowerMac)
+			return this
+		}
+	}
+
+	if len(Fields) == 0 {
+		this.Err = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, lowerMac)
+		return this
+	}
+
+	var ListProtected = make([]TUniField, 0, len(Fields))
+	var HashSeen = make(map[string]bool, len(Fields))
+
+	for _, ItemPara := range Fields {
+
+		lowerName := strings.ToLower(ItemPara)
+
+		if lowerName == lowerMac {
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is the mac column itself; it can not protect itself", this.TableName, lowerName)
+			return this
+		}
+
+		Field, Valid := this.HashField[lowerName]
+		if !Valid {
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			return this
+		}
+		if Field.AttriName == "" {
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected fields must map to class attributes", this.TableName, lowerName)
+			return this
+		}
+		if HashSeen[lowerName] {
+			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, lowerName)
+			return this
+		}
+
+		HashSeen[lowerName] = true
+		ListProtected = append(ListProtected, Field)
+	}
+
+	this.VerifyOn = true
+	this.VerifyAt = lowerMac
+	this.ListVerify = ListProtected
 
 	return this
 }

@@ -2,6 +2,19 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
+## master-20261013
+
+### 存储完整性校验（UniVerify）
+
+面向等保/密评"访问控制信息存储完整性"要求：对注册类的保护列做**写时签名、读时验签**（HMAC 伴随列方案）。
+
+- **登记**：`RegisterClass(T, "tbl").SetKeys(...).SetVerify("mac_text", "col1", "col2", ...)`。`mac_text` 为 MAC 伴随列（string 字段，建议 `varchar(64) NOT NULL DEFAULT ''`），保护列按登记顺序参与载荷；载荷以注册表名做域分隔（跨表同值 MAC 互异），格式 `MAC1:` + base64。
+- **写路径**：`Insert`/`Update`/`InsertL`/`CopyInL`/`SaveIt`（含 `SaveItWhenNotExist`；`CopyInP`/`SpecialInsertL*`/PolarDB `InsertP` 分页均汇入 `CopyInLCtx`/`InsertLCtx`）组装 SQL/COPY 数据前按结构体当前值重算 MAC 回填伴随字段；幂等，`SaveIt` 回退链重复调用无副作用。注意 `Update` 是整行语义，更新前须先读后改（与本引擎既有契约一致）。
+- **读路径**：`Select`/`SelectL`/`SelectM`/`SelectH` 在解密后逐行验签（secreton 列参与载荷的是明文）；SELECT 未覆盖全部保护列+MAC 列时该行跳过验签；比对用 `crypto/hmac.Equal` 常量时间比较，失败即报错（文案不含载荷与行值）。
+- **算法**：内置 HMAC-SHA256（密钥 `VerifyBy`）；赋值 `VerifyHook` 可接管为 HMAC-SM3/密码机等应用实现。
+- **模式**：`VerifyOn` 引擎级总开关（0=关）；`VerifyMode` 1=宽容（无标签存量行直通，回填期用）→ 2=严格（无标签行报错，回填完成后切换）；非空但无标签的值一律报错。
+- **范围外**（与 secreton 同口径）：自定义 SQL 钩子类（`HasGetSqlUpdate`/`HasGetSqlInsert`/`HasSetSqlValues[L]`/`HasSetSqlResult`）与裸 `Execute` 语句不经签名/验签。
+
 ## ai-dev-20260904
 
 三线融合：`context.Context` 支持 + 应用层加密 + 加固（第一阶段/第二阶段）。
