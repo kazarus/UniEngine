@@ -81,6 +81,11 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 		return eror
 	}
 
+	//#完整性:组装 SQL 前按结构体当前值重算 MAC 回填伴随字段
+	if eror := this.verifySignRow(v, UniTable); eror != nil {
+		return eror
+	}
+
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
@@ -162,6 +167,11 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 		return eror
 	}
 
+	//#完整性:组装 SQL 前按结构体当前值重算 MAC 回填伴随字段
+	if eror := this.verifySignRow(v, UniTable); eror != nil {
+		return eror
+	}
+
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
@@ -230,6 +240,17 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 	if v.Len() == 0 {
 		return nil
+	}
+
+	//#完整性:保护列下标解析一次,逐行重算 MAC 回填伴随字段
+	verifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
+	if eror != nil {
+		return eror
+	}
+	for m := 0; m < v.Len(); m++ {
+		if eror := this.verifySignCols(v.Index(m), UniTable, verifyCols); eror != nil {
+			return eror
+		}
 	}
 
 	SqlQuery := ""

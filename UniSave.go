@@ -189,6 +189,11 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 		return false, nil
 	}
 
+	//#完整性:组装参数前按结构体当前值重算 MAC 回填伴随字段
+	if eror := this.verifySignRow(v, UniTable); eror != nil {
+		return false, eror
+	}
+
 	cSQL, ok := this.upsertStmt(Mode, TablName, keys, cols)
 	if !ok {
 		return false, nil

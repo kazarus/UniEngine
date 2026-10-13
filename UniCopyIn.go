@@ -38,6 +38,17 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 		return nil
 	}
 
+	//#完整性:保护列下标解析一次,逐行重算 MAC 回填伴随字段(CopyInP/SpecialInsertL* 分页均汇入本路径)
+	verifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
+	if eror != nil {
+		return eror
+	}
+	for m := 0; m < v.Len(); m++ {
+		if eror := this.verifySignCols(v.Index(m), UniTable, verifyCols); eror != nil {
+			return eror
+		}
+	}
+
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
