@@ -1,5 +1,6 @@
 // UniVerify_test
 // #存储完整性校验测试
+
 package UniEngine
 
 import (
@@ -56,7 +57,6 @@ func verifyExpect(t *testing.T, eng *TUniEngine, row TVerifyRow) string {
 
 // #测试1:SetVerify 登记(置位/顺序/错误路径)
 func TestSetVerifyRegister(t *testing.T) {
-
 	eng := newVerifyTestEngine(&mockDriver{})
 
 	tab, ok := eng.HashTabl["UniEngine.TVerifyRow"]
@@ -80,7 +80,6 @@ func TestSetVerifyRegister(t *testing.T) {
 
 // #测试2:SetVerify 校验错误路径(链式 Err 短路)
 func TestSetVerifyValidation(t *testing.T) {
-
 	cases := []struct {
 		name string
 		call func(tab *TUniTable)
@@ -94,7 +93,6 @@ func TestSetVerifyValidation(t *testing.T) {
 	}
 
 	for _, item := range cases {
-
 		eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
 		eng.Initialize()
 		tab := eng.RegisterClass(TVerifyRow{}, "tbl_case").SetKeys("who_build", "user_indx")
@@ -112,7 +110,6 @@ func TestSetVerifyValidation(t *testing.T) {
 
 // #测试3:Insert 自动签名回填 MAC 伴随列
 func TestVerifyInsertSigns(t *testing.T) {
-
 	d := &mockDriver{}
 	eng := newVerifyTestEngine(d)
 
@@ -150,7 +147,6 @@ func TestVerifyInsertSigns(t *testing.T) {
 
 // #测试4:Update/SaveIt/InsertL 全部写路径签名
 func TestVerifyAllWritePaths(t *testing.T) {
-
 	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 0, MastName: "updated"}
 
 	//#Update:参数序=SET列(data_stat,mast_name,mac_text)+主键(who_build,user_indx)
@@ -199,7 +195,6 @@ func TestVerifyAllWritePaths(t *testing.T) {
 
 // #测试4b:CopyInL 批量装载同样签名(PG COPY 路径,逐行 Exec+收尾空 Exec)
 func TestVerifyCopyInLSigns(t *testing.T) {
-
 	d := &mockDriver{}
 	eng := newVerifyTestEngine(d)
 	rows := []TVerifyRow{
@@ -227,7 +222,6 @@ func TestVerifyCopyInLSigns(t *testing.T) {
 
 // #测试5:SelectL 逐行验签(正确 MAC 通过)
 func TestVerifySelectVerifyPass(t *testing.T) {
-
 	eng := newVerifyTestEngine(&mockDriver{})
 	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "mast"}
 
@@ -248,7 +242,6 @@ func TestVerifySelectVerifyPass(t *testing.T) {
 
 // #测试6:篡改行验签失败(fail-closed)
 func TestVerifySelectTamperFails(t *testing.T) {
-
 	eng := newVerifyTestEngine(&mockDriver{})
 	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "mast"}
 
@@ -271,7 +264,6 @@ func TestVerifySelectTamperFails(t *testing.T) {
 
 // #测试7:存量无标签行——宽容模式直通/严格模式报错
 func TestVerifyLegacyRowMode(t *testing.T) {
-
 	base := []driver.Value{int64(1), int64(2), int64(1), "mast", ""}
 
 	//#宽容(缺省):回填期存量行直通
@@ -292,7 +284,6 @@ func TestVerifyLegacyRowMode(t *testing.T) {
 
 // #测试8:非空无标签值属非法,宽容模式也报错
 func TestVerifyBadPrefixFails(t *testing.T) {
-
 	d := &mockDriver{
 		columns:   verifyRowColumns(),
 		queryRows: [][]driver.Value{{int64(1), int64(2), int64(1), "mast", "not-a-mac"}},
@@ -308,7 +299,6 @@ func TestVerifyBadPrefixFails(t *testing.T) {
 
 // #测试9:partial select 不覆盖保护列时跳过验签
 func TestVerifyPartialSelectSkips(t *testing.T) {
-
 	//#查询列缺 mac_text 与部分保护列:无法还原载荷,跳过验签不报错
 	d := &mockDriver{
 		columns:   []string{"who_build", "user_indx"},
@@ -324,7 +314,6 @@ func TestVerifyPartialSelectSkips(t *testing.T) {
 
 // #测试10:VerifyOn=0 引擎级关闭,读写零影响(存量行为回归)
 func TestVerifyDisabledNoImpact(t *testing.T) {
-
 	eng := newVerifyTestEngine(&mockDriver{})
 	eng.VerifyOn = 0
 
@@ -353,7 +342,6 @@ func TestVerifyDisabledNoImpact(t *testing.T) {
 
 // #测试11:VerifyHook 应用钩子接管算法(VerifyBy 为空也可用),载荷含表名域分隔
 func TestVerifyCustomHook(t *testing.T) {
-
 	var payloads [][]byte
 	eng := newVerifyTestEngine(&mockDriver{})
 	eng.VerifyBy = ""
@@ -384,7 +372,6 @@ func TestVerifyCustomHook(t *testing.T) {
 
 // #测试12:同值跨表 MAC 不可移植(域分隔)
 func TestVerifyPayloadDomainSeparated(t *testing.T) {
-
 	type TOtherVerifyRow struct {
 		WhoBuild int64  `db:"who_build"`
 		UserIndx int64  `db:"user_indx"`
@@ -415,7 +402,6 @@ func TestVerifyPayloadDomainSeparated(t *testing.T) {
 
 // #测试13:VerifyBy 为空且无钩子时 fast-fail
 func TestVerifyMissingKeyFails(t *testing.T) {
-
 	eng := newVerifyTestEngine(&mockDriver{})
 	eng.VerifyBy = ""
 
@@ -427,7 +413,6 @@ func TestVerifyMissingKeyFails(t *testing.T) {
 
 // #测试14:secreton 列与 HMAC 共存——载荷取明文,读侧先解密后验签
 func TestVerifyWithSecretColumn(t *testing.T) {
-
 	type TSecretVerifyRow struct {
 		WhoBuild int64  `db:"who_build"`
 		UserIndx int64  `db:"user_indx"`

@@ -1,0 +1,387 @@
+// mssql_test
+// #SQL Server 真驱动集成测试(go-mssqldb)
+// #
+// #核心事实(本文件用真库固化):SQL Server 的占位符正确性取决于 **驱动名 × ColParam** 两维:
+// #
+// #  | 驱动名      | ":" | "$" | "?" | "@p" |
+// #  | ----------- | --- | --- | --- | ---- |
+// #  | "mssql"     | ✅  | ✅  | ✅  | ❌   |  已废弃但仍注册;预处理 ? / :N / $N → @pN
+// #  | "sqlserver" | ❌  | ⚠️  | ❌  | ✅   |  现代名;不预处理,只认 @pN
+// #
+// #   - "mssql"     :内部走 internal/querytext.ParseParams,把 ?、$N、:N(及 $name/:name)统一改写为 @pN,
+// #                  故三种风格都能真绑定;而 @pN 不被识别 → "expected 0 arguments"。
+// #   - "sqlserver" :不预处理。":" 与 "?" 直接被服务端判语法错误;而 "$N" 是**合法 money 字面量**,
+// #                  不报错但实参被忽略 —— 即"引擎返回 nil、数据却写错"(见缺陷用例)。
+// #   - 现代写法等价于 "mssql" 语义:sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))。
+// #
+// #运行(需可达的 SQL Server):
+// #  UNIENGINE_MSSQL_DSN="sqlserver://sa:pass@127.0.0.1:1433?database=uni&encrypt=disable" \
+// #    go test ./... -run MSSQL -v
+// #  或分量方式(口令含 @ # $ % 等字符时推荐,本文件会做 URL 转义):
+// #  UNIENGINE_MSSQL_HOST=127.0.0.1 UNIENGINE_MSSQL_PORT=1433 \
+// #  UNIENGINE_MSSQL_USER=sa UNIENGINE_MSSQL_PASS='...' \
+// #  UNIENGINE_MSSQL_DB=UNIENGINE_TESTDB go test ./... -run MSSQL -v
+// #
+// #不可达时默认跳过;设 UNIENGINE_MSSQL_REQUIRED=1 则改为失败(CI 用,与 pg_test.go 同口径)。
+// #
+// #缺陷复现用例 TestMSSQLDefectSqlserverNoAt 默认**不执行**(库未拦截该组合前必然失败),
+// #需显式设 UNIENGINE_MSSQL_DEFECT=1 开启。
+// #
+// #安全:全部用例只操作自建临时表 uni_it_mssql_probe,并在 t.Cleanup 中删除。
+
+package integration
+
+import (
+	"database/sql"
+	"fmt"
+	"net"
+	"net/url"
+	"os"
+	"testing"
+
+	UniEngine "github.com/kazarus/UniEngine"
+	_ "github.com/microsoft/go-mssqldb" //#database/sql 驱动注册:mssql(预处理)+ sqlserver(不预处理)
+)
+
+// ---------------------------------------------------------------------------
+// 驱动名与夹具
+// ---------------------------------------------------------------------------
+
+const (
+	//#现代驱动名:不预处理占位符,只接受 @pN
+	driverSQLServer = "sqlserver"
+	//#已废弃但仍注册的驱动名:预处理 ? / :N / $N → @pN(生产环境所用)
+	driverMSSQL = "mssql"
+)
+
+const mssqlProbeTable = "uni_it_mssql_probe"
+
+// mssqlDSN 组装连接串:优先整串 env,其次分量 env;两者都缺返回空(调用方据此跳过)
+func mssqlDSN() string {
+	if v := os.Getenv("UNIENGINE_MSSQL_DSN"); v != "" {
+		return v
+	}
+
+	host := os.Getenv("UNIENGINE_MSSQL_HOST")
+	if host == "" {
+		return ""
+	}
+
+	port := os.Getenv("UNIENGINE_MSSQL_PORT")
+	if port == "" {
+		port = "1433"
+	}
+
+	//#用 url.URL 组装,自动处理口令中的 @ # $ % 等特殊字符
+	u := &url.URL{
+		Scheme: "sqlserver",
+		User:   url.UserPassword(os.Getenv("UNIENGINE_MSSQL_USER"), os.Getenv("UNIENGINE_MSSQL_PASS")),
+		Host:   net.JoinHostPort(host, port),
+	}
+
+	q := u.Query()
+	q.Set("database", os.Getenv("UNIENGINE_MSSQL_DB"))
+	q.Set("encrypt", "disable") //#内网实例常见无证书;需加密时用 DSN 显式覆盖
+	q.Set("TrustServerCertificate", "true")
+	u.RawQuery = q.Encode()
+
+	return u.String()
+}
+
+// openMSSQL 按驱动名建立连接;不可达时跳过(REQUIRED=1 时失败)。
+// 连接生命周期由本函数用 t.Cleanup 接管:统一登记在**最早**位置,故按 LIFO
+// 晚于各用例后续登记的 t.Cleanup(如建表后的 DROP)执行——DROP 一定跑在连接关闭之前。
+// 若改用 defer,defer 会先于所有 t.Cleanup 执行,建表清理将落在已关闭的连接上而静默失败(表泄漏)。
+func openMSSQL(t *testing.T, driver string) *sql.DB {
+	t.Helper()
+
+	dsn := mssqlDSN()
+	if dsn == "" {
+		t.Skip("未设置 UNIENGINE_MSSQL_DSN / UNIENGINE_MSSQL_HOST,跳过 SQL Server 集成测试")
+	}
+
+	db, eror := sql.Open(driver, dsn)
+	if eror != nil {
+		t.Fatalf("open %s: %v", driver, eror)
+	}
+
+	if eror = db.Ping(); eror != nil {
+		if os.Getenv("UNIENGINE_MSSQL_REQUIRED") == "1" {
+			t.Fatalf("SQL Server 不可达(UNIENGINE_MSSQL_REQUIRED=1): %v", eror)
+		}
+		db.Close()
+		t.Skipf("SQL Server 不可达,跳过集成测试: %v", eror)
+	}
+
+	t.Cleanup(func() { db.Close() })
+
+	return db
+}
+
+// mssqlEngineOn 在既有连接上建引擎(同一驱动名下可能需要"正确/错误"两个引擎)
+func mssqlEngineOn(db *sql.DB, colParam string) *UniEngine.TUniEngine {
+	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: colParam, Provider: UniEngine.DtSQLSRV}
+	eng.Initialize()
+
+	return eng
+}
+
+// nativeParam 返回该驱动名下"一定能真绑定"的占位符风格——读回等原生语句用它,
+// #避免断言语句自身因驱动名不匹配而失败(曾因此误判引擎写失败)
+func nativeParam(driver string) string {
+	if driver == driverMSSQL {
+		return "?"
+	}
+
+	return "@p1"
+}
+
+type mssqlProbeRow struct {
+	Id   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
+// setupMSSQLProbeTable 重建自建探测表并登记主键;Cleanup 时删除
+func setupMSSQLProbeTable(t *testing.T, eng *UniEngine.TUniEngine) {
+	t.Helper()
+
+	drop := fmt.Sprintf("if object_id('%s','U') is not null drop table %s", mssqlProbeTable, mssqlProbeTable)
+	if eror := eng.Execute(drop); eror != nil {
+		t.Fatalf("drop %s: %v", mssqlProbeTable, eror)
+	}
+	t.Cleanup(func() {
+		if eror := eng.Execute(drop); eror != nil {
+			t.Logf("cleanup: drop %s 失败: %v", mssqlProbeTable, eror)
+		}
+	})
+
+	create := fmt.Sprintf("create table %s (id bigint not null primary key, name nvarchar(64) null)", mssqlProbeTable)
+	if eror := eng.Execute(create); eror != nil {
+		t.Fatalf("create %s: %v", mssqlProbeTable, eror)
+	}
+
+	if eror := eng.RegisterClass(mssqlProbeRow{}, mssqlProbeTable).SetKeys("id").LastError; eror != nil {
+		t.Fatalf("SetKeys: %v", eror)
+	}
+}
+
+// rawProbeName 绕过引擎读库中真实存储值;不存在返回 ok=false
+func rawProbeName(t *testing.T, eng *UniEngine.TUniEngine, driver string, id int64) (string, bool) {
+	t.Helper()
+
+	var name sql.NullString
+	sqlText := fmt.Sprintf("select name from %s where id=%s", mssqlProbeTable, nativeParam(driver))
+	eror := eng.Db.QueryRow(sqlText, id).Scan(&name)
+	if eror == sql.ErrNoRows {
+		return "", false
+	}
+	if eror != nil {
+		t.Fatalf("raw select id=%d (driver=%s): %v", id, driver, eror)
+	}
+
+	return name.String, true
+}
+
+// ---------------------------------------------------------------------------
+// 1. 占位符契约:驱动名 × 风格(说明"为什么 @p 不是万能的")
+// ---------------------------------------------------------------------------
+
+// TestMSSQLPlaceholderContract 在真库上固化"驱动名 × 占位符风格"的绑定矩阵。
+// 用例与库是否修复无关,它记录的是 SQL Server + go-mssqldb 的外部事实。
+func TestMSSQLPlaceholderContract(t *testing.T) {
+	const probeValue = int64(7)
+
+	cases := []struct {
+		driver string
+		sql    string
+		binds  bool //#是否应真绑定(bind=false 时要求"结果不是实参值")
+	}{
+		//#"sqlserver":只认 @pN
+		{driverSQLServer, "select @p1", true},
+		{driverSQLServer, "select :1", false},
+		{driverSQLServer, "select ?", false},
+		{driverSQLServer, "select $1", false}, //#money 字面量:不报错但不绑定
+		//#"mssql":预处理 ? / :N / $N → @pN
+		{driverMSSQL, "select :1", true},
+		{driverMSSQL, "select $1", true},
+		{driverMSSQL, "select ?", true},
+		{driverMSSQL, "select @p1", false}, //#不被预处理识别 → expected 0 arguments
+	}
+
+	for _, c := range cases {
+		t.Run(c.driver+"_"+c.sql, func(t *testing.T) {
+			db := openMSSQL(t, c.driver)
+
+			var got sql.NullString
+			eror := db.QueryRow(c.sql, probeValue).Scan(&got)
+
+			if c.binds {
+				if eror != nil {
+					t.Fatalf("%s 下 %s 应真绑定,却失败: %v", c.driver, c.sql, eror)
+				}
+				if got.String != "7" {
+					t.Fatalf("%s 下 %s 绑定值 = %q, want \"7\"", c.driver, c.sql, got.String)
+				}
+				return
+			}
+
+			//#不绑定:可能是报错,也可能是被当成字面量(如 money)
+			if eror == nil && got.String == "7" {
+				t.Errorf("%s 下 %s 竟然真绑定了实参;若驱动行为变化,本用例与文档结论需重新评估", c.driver, c.sql)
+			}
+			if eror == nil {
+				t.Logf("%s 下 %s 未报错但实参被忽略,返回字面量 %q", c.driver, c.sql, got.String)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 2. 引擎端到端:覆盖所有"驱动名 × ColParam"可用组合
+// ---------------------------------------------------------------------------
+
+// TestMSSQLRoundTripMatrix 对每个可用组合跑完整 CRUD,断言数据与意图一致。
+// 关键:生产环境用的是 "mssql" + ":"(与 "sqlserver" + "@p" 等价可用)。
+func TestMSSQLRoundTripMatrix(t *testing.T) {
+	combos := []struct {
+		driver   string
+		colParam string
+	}{
+		{driverMSSQL, ":"},      //#生产环境配置
+		{driverMSSQL, "$"},      //#原 README 配置(在 mssql 驱动名下同样可用)
+		{driverMSSQL, "?"},      //#sqlx 风格
+		{driverSQLServer, "@p"}, //#现代驱动名下的唯一可用配置
+	}
+
+	for _, combo := range combos {
+		t.Run(combo.driver+"_ColParam"+combo.colParam, func(t *testing.T) {
+			db := openMSSQL(t, combo.driver)
+
+			eng := mssqlEngineOn(db, combo.colParam)
+			setupMSSQLProbeTable(t, eng)
+
+			//#Insert
+			if eror := eng.Insert(&mssqlProbeRow{Id: 100, Name: "ALPHA"}, mssqlProbeTable); eror != nil {
+				t.Fatalf("Insert: %v", eror)
+			}
+			if name, ok := rawProbeName(t, eng, combo.driver, 100); !ok || name != "ALPHA" {
+				t.Fatalf("Insert 后 id=100 -> (%q, ok=%v), want (\"ALPHA\", true)", name, ok)
+			}
+
+			//#Update:只改目标行
+			if eror := eng.Update(&mssqlProbeRow{Id: 100, Name: "ALPHA-2"}, mssqlProbeTable); eror != nil {
+				t.Fatalf("Update: %v", eror)
+			}
+			if name, _ := rawProbeName(t, eng, combo.driver, 100); name != "ALPHA-2" {
+				t.Fatalf("Update 后 id=100 -> %q, want \"ALPHA-2\"", name)
+			}
+
+			//#SaveIt:not matched(插入)+ matched(更新)
+			if eror := eng.SaveIt(&mssqlProbeRow{Id: 200, Name: "BETA"}, mssqlProbeTable); eror != nil {
+				t.Fatalf("SaveIt(insert): %v", eror)
+			}
+			if name, ok := rawProbeName(t, eng, combo.driver, 200); !ok || name != "BETA" {
+				t.Fatalf("SaveIt 插入后 id=200 -> (%q, ok=%v), want (\"BETA\", true)", name, ok)
+			}
+			if eror := eng.SaveIt(&mssqlProbeRow{Id: 200, Name: "BETA-2"}, mssqlProbeTable); eror != nil {
+				t.Fatalf("SaveIt(update): %v", eror)
+			}
+			if name, _ := rawProbeName(t, eng, combo.driver, 200); name != "BETA-2" {
+				t.Fatalf("SaveIt 更新后 id=200 -> %q, want \"BETA-2\"", name)
+			}
+
+			//#InsertL:多行占位符序号必须连续正确
+			rows := []mssqlProbeRow{{Id: 300, Name: "GAMMA"}, {Id: 301, Name: "DELTA"}}
+			if eror := eng.InsertL(&rows, mssqlProbeTable); eror != nil {
+				t.Fatalf("InsertL: %v", eror)
+			}
+			for _, want := range rows {
+				if name, ok := rawProbeName(t, eng, combo.driver, want.Id); !ok || name != want.Name {
+					t.Fatalf("InsertL 后 id=%d -> (%q, ok=%v), want (%q, true)", want.Id, name, ok, want.Name)
+				}
+			}
+
+			//#SelectL:经引擎读回
+			var loaded []mssqlProbeRow
+			if eror := eng.SelectL(&loaded, fmt.Sprintf("select id,name from %s order by id", mssqlProbeTable)); eror != nil {
+				t.Fatalf("SelectL: %v", eror)
+			}
+			if len(loaded) != 4 {
+				t.Fatalf("SelectL 读回 %d 行, want 4: %+v", len(loaded), loaded)
+			}
+
+			//#Delete:只删目标行
+			if eror := eng.Delete(&mssqlProbeRow{Id: 100}, mssqlProbeTable); eror != nil {
+				t.Fatalf("Delete: %v", eror)
+			}
+			if _, ok := rawProbeName(t, eng, combo.driver, 100); ok {
+				t.Fatalf("Delete 后 id=100 仍存在")
+			}
+			if _, ok := rawProbeName(t, eng, combo.driver, 200); !ok {
+				t.Fatalf("Delete 误删了非目标行 id=200")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 3. 缺陷复现:驱动名 "sqlserver" + 非 @p 占位符
+// ---------------------------------------------------------------------------
+
+// TestMSSQLDefectSqlserverNoAt 复现已知缺陷,范围严格限定为:
+// **驱动名 "sqlserver" + ColParam 非 "@p"**。
+//
+// 失效模式(实测):
+//   - ColParam="$":引擎生成 $N → 被服务端当 money 字面量 → INSERT 写错值、UPDATE 改错行、
+//     DELETE 删错行、MERGE 匹配错行,**且一律返回 nil**(静默数据损坏);
+//   - ColParam=":"/"?" :服务端直接报语法错误(硬失败,不损坏数据)。
+//
+// 不变式(引擎应保证):驱动名与 ColParam 不匹配时快速失败,而不是静默写错。
+// 库未修复前本用例必然失败,故默认跳过;设 UNIENGINE_MSSQL_DEFECT=1 开启。
+func TestMSSQLDefectSqlserverNoAt(t *testing.T) {
+	if os.Getenv("UNIENGINE_MSSQL_DEFECT") != "1" {
+		t.Skip("缺陷复现用例(库未修复前必然失败):设 UNIENGINE_MSSQL_DEFECT=1 开启")
+	}
+
+	for _, colParam := range []string{"$", ":"} {
+		t.Run("ColParam="+colParam, func(t *testing.T) {
+			db := openMSSQL(t, driverSQLServer)
+
+			bad := mssqlEngineOn(db, colParam)
+			good := mssqlEngineOn(db, "@p")
+
+			//#① INSERT(空表):返回 nil 就必须真的写入目标行
+			setupMSSQLProbeTable(t, bad)
+			eror := bad.Insert(&mssqlProbeRow{Id: 100, Name: "ALPHA"}, mssqlProbeTable)
+			name, ok := rawProbeName(t, bad, driverSQLServer, 100)
+			switch {
+			case eror != nil:
+				t.Logf("ColParam=%q:Insert 报错(%v)——失效模式为硬报错,而非静默损坏", colParam, eror)
+			case !ok || name != "ALPHA":
+				t.Errorf("缺陷:Insert 返回 nil,但 id=100 -> (%q, ok=%v);%q 使占位符退化为字面量,实参未被绑定",
+					name, ok, colParam)
+			}
+
+			//#② UPDATE / ③ DELETE:需种子行,重建表后用正确配置播种
+			setupMSSQLProbeTable(t, good)
+			for _, r := range []mssqlProbeRow{{Id: 1, Name: "row-ONE"}, {Id: 2, Name: "row-TWO"}, {Id: 5, Name: "row-FIVE"}} {
+				row := r
+				if e := good.Insert(&row, mssqlProbeTable); e != nil {
+					t.Fatalf("播种失败: %v", e)
+				}
+			}
+
+			if e := bad.Update(&mssqlProbeRow{Id: 5, Name: "row-FIVE-CHANGED"}, mssqlProbeTable); e != nil {
+				t.Logf("ColParam=%q:Update 报错(%v)", colParam, e)
+			} else if v, _ := rawProbeName(t, bad, driverSQLServer, 5); v != "row-FIVE-CHANGED" {
+				t.Errorf("缺陷:Update 返回 nil,但 id=5 -> %q(期望 row-FIVE-CHANGED);非目标行被改动", v)
+			}
+
+			if e := bad.Delete(&mssqlProbeRow{Id: 5}, mssqlProbeTable); e != nil {
+				t.Logf("ColParam=%q:Delete 报错(%v)", colParam, e)
+			} else if _, still := rawProbeName(t, bad, driverSQLServer, 5); still {
+				t.Errorf("缺陷:Delete 返回 nil,但 id=5 仍存在;非目标行被删除")
+			}
+		})
+	}
+}

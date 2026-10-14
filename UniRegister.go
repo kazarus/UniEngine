@@ -1,5 +1,6 @@
 // UniRegister
 // #注册表:类/表/字段/主键登记与 SQL 预生成
+
 package UniEngine
 
 import (
@@ -9,8 +10,24 @@ import (
 	"strings"
 )
 
-func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUniTable {
+// invalidTable 构造一个**未注册**的表载体,仅携带 LastError。
+// #沿用 RegisterClass 既有的链式约定:调用方(如 SetKeys/SetSecret)见到 LastError 即短路,
+// #签名保持 *TUniTable 不变,非法输入既不进注册表也不 panic。
+func invalidTable(TableName string, eror error) *TUniTable {
+	return &TUniTable{TableName: TableName, LastError: eror}
+}
 
+// identGuard 注册类 API 的统一标识符白名单校验(防注入;与 Write/Exist* 路径同一 validIdent)。
+// #运行时传入的表名/字段名一律经此校验——这些字符串会被直接拼进生成的 SQL 文本。
+// #Sentinel 区分语义(表名用 ErrInvalidTableName,字段名用 ErrInvalidFieldName),便于调用方 errors.Is 判别。
+func identGuard(Sentinel error, What string, Name string) error {
+	if !validIdent(Name) {
+		return fmt.Errorf("%w: %s [%s] (only letters/digits/underscore/dot are allowed); check your code;", Sentinel, What, Name)
+	}
+	return nil
+}
+
+func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUniTable {
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -20,12 +37,18 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 
 	//#类型守卫:裸 nil/非结构体(含指针)返回带 LastError 的未注册表(链式约定),不再反射 panic
 	if Class == nil {
-		return &TUniTable{TableName: TableName, LastError: fmt.Errorf("%w: RegisterClass got a nil param; needs a struct value; check your code;", ErrNilParam)}
+		return invalidTable(TableName, fmt.Errorf("%w: RegisterClass got a nil param; needs a struct value; check your code;", ErrNilParam))
 	}
 
 	t := reflect.TypeOf(Class)
 	if t.Kind() != reflect.Struct {
-		return &TUniTable{TableName: TableName, LastError: fmt.Errorf("UniEngine: RegisterClass needs a struct value, but got kind [%s]; check your code;", t.Kind())}
+		return invalidTable(TableName, fmt.Errorf("UniEngine: RegisterClass needs a struct value, but got kind [%s]; check your code;", t.Kind()))
+	}
+
+	//#表名白名单:RegisterClass 的表名会经 PrepareRunSQL 直接拼进 SQL(CRUD 表名不引号),
+	//#此前只在写路径(resolveTarget)校验,PrepareRunSQL 路径构成注入面
+	if eror := identGuard(ErrInvalidTableName, "RegisterClass table name", TableName); eror != nil {
+		return invalidTable(TableName, eror)
 	}
 
 	n := t.NumField()
@@ -37,7 +60,6 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 	UniTable.ClassType = t
 
 	for i := 0; i < n; i++ {
-
 		f := t.Field(i)
 
 		// 跳过未导出字段:反射无法读写(FieldByName().Interface() 会 panic)
@@ -53,6 +75,13 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 		// 跳过无 db tag 的字段:FieldName 为空会以 "" 键污染注册表并生成非法 SQL
 		if UniField.FieldName == "" {
 			continue
+		}
+
+		//#"db:\"-\" / db:\"_\"" 是只读标记,不是列名,豁免校验;其余列名走白名单
+		if UniField.FieldName != "-" && UniField.FieldName != "_" {
+			if eror := identGuard(ErrInvalidFieldName, fmt.Sprintf("RegisterClass field tag on %s", f.Name), UniField.FieldName); eror != nil {
+				return invalidTable(TableName, eror)
+			}
 		}
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
@@ -75,12 +104,15 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 }
 
 func (this *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTable {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
 	if this.HashTabl == nil {
 		this.HashTabl = make(map[string]*TUniTable, 0)
+	}
+
+	if eror := identGuard(ErrInvalidTableName, "RegisterTable table name", TableName); eror != nil {
+		return invalidTable(TableName, eror)
 	}
 
 	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
@@ -98,12 +130,18 @@ func (this *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 }
 
 func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniTable {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
 	if this.HashTabl == nil {
 		this.HashTabl = make(map[string]*TUniTable, 0)
+	}
+
+	if eror := identGuard(ErrInvalidTableName, "RegisterField table name", TableName); eror != nil {
+		return invalidTable(TableName, eror)
+	}
+	if eror := identGuard(ErrInvalidFieldName, "RegisterField field name", FieldName); eror != nil {
+		return invalidTable(TableName, eror)
 	}
 
 	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
@@ -127,7 +165,6 @@ func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 }
 
 func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniTable {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -135,8 +172,21 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
+	if eror := identGuard(ErrInvalidTableName, "RegisterPkeys table name", TableName); eror != nil {
+		return invalidTable(TableName, eror)
+	}
+	if eror := identGuard(ErrInvalidFieldName, "RegisterPkeys field name", FieldName); eror != nil {
+		return invalidTable(TableName, eror)
+	}
+
 	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
-	if Valid {
+	if !Valid {
+		//#表未登记时不再返回 nil(旧实现会让 .SetKeys() 等链式调用 nil 解引用 panic),
+		//#改为返回带 LastError 的未注册表(与 RegisterClass 守卫同约定)
+		return invalidTable(TableName, fmt.Errorf("%w: RegisterPkeys table [%s] is not registered; call RegisterTable/RegisterClass first;", ErrUnregisteredClass, TableName))
+	}
+
+	{
 		var UniField = TUniField{}
 		UniField.AttriName = ""
 		UniField.FieldName = strings.ToLower(FieldName)
@@ -151,7 +201,6 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 }
 
 func (this *TUniEngine) GetTable(TableName string) *TUniTable {
-
 	return this.tableByName(TableName)
 }
 
@@ -159,7 +208,6 @@ func (this *TUniEngine) GetTable(TableName string) *TUniTable {
 // #HashTabl 同时以表名与类全名双键登记且指向同一表,须按 TableName 去重;
 // #供存量加解密迁移等注册表驱动场景遍历,新增 SetSecret/secreton 登记即自动纳入
 func (this *TUniEngine) ListSecretTable() []*TUniTable {
-
 	this.rlockTables()
 	defer this.mu.RUnlock()
 
@@ -183,7 +231,6 @@ func (this *TUniEngine) ListSecretTable() []*TUniTable {
 }
 
 func (this *TUniEngine) PrepareTables(TableName string) error {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -216,7 +263,6 @@ func (this *TUniEngine) PrepareTables(TableName string) error {
 }
 
 func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (string, []TUniField, []TUniField, error) {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -230,7 +276,6 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 	}
 
 	switch QueryType {
-
 	case EtSelect:
 		{
 			var SqlWhere []string
