@@ -2,6 +2,8 @@
 
 UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
 
+> **编码风格**:库代码标识符采用 **PascalCase**(每个单词首字母大写,如 `SqlQuery`/`Args`/`ColIndex`/`LowerTxt`),局部变量与参数同此风格,接收者固定为 `this`;方法名后缀 `...Ctx` 表示 context.Context 变体。测试文件(`*_test.go`/`integration`/`contrib`)沿用 Go 社区 camelCase。
+
 > 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
 > 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
 > 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
