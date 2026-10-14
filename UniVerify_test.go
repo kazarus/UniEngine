@@ -32,7 +32,7 @@ func verifyRowColumns() []string {
 func newVerifyTestEngine(d *mockDriver) *TUniEngine {
 	db := sql.OpenDB(mockConnector{d: d})
 	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		VerifyOn: 1, VerifyMode: 1, VerifyBy: "test-verify-key"}
+		VerifyOn: 1, VerifyMode: 1, VerifyBy: "test-verify-key", VerifyMacVer: 1}
 	eng.Initialize()
 	eng.RegisterClass(TVerifyRow{}, "tbl_verify_row").
 		SetKeys("who_build", "user_indx").

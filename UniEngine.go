@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // TUniEngine is a multi-database ORM-like engine built on database/sql.
@@ -42,7 +43,7 @@ type TUniEngine struct {
 	VerifyOn     int64       //#开启存储完整性校验#写路径回填MAC伴随列,读路径逐行验签(与TUniTable.VerifyOn同时开启才生效)
 	VerifyBy     string      //#内置HMAC-SHA256密钥#VerifyHook非空时不使用
 	VerifyMode   int64       //#验签模式#1=宽容(无MAC标签的存量行跳过验签,回填期用);2=严格(无标签行报错,回填完成后切换);0及其它按1处理
-	VerifyMacVer int64       //#MAC载荷格式版本#0/1=v1拼接载荷(存量兼容,缺省);2=v2无歧义载荷(值长度前缀,评审Q1)#置2后新写入落MAC2:标签,存量v1行读取仍按v1算法验签#完整防碰撞须全表重签,迁移步骤见README
+	VerifyMacVer int64       //#MAC载荷格式版本#0/2=v2无歧义载荷(缺省);1=显式写旧v1#存量v1行仍按v1算法验签,完整防碰撞须全表重签,迁移步骤见README
 	VerifyHook   TVerifyHook //#应用完整性钩子#为空时使用内置HMAC-SHA256#应用可实现国密HMAC-SM3等
 
 	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
@@ -58,6 +59,10 @@ type TUniEngine struct {
 	runDebug int32   //#SQL调试输出开关#原子读写,可运行中切换
 
 	secret *secretState //#派生密钥缓存与本进程写盐(懒初始化,详见UniSecret.go)
+
+	sqlServerValidationMu   sync.Mutex //#首次使用 SQL Server 时验证实际驱动是否绑定 ColParam
+	validatedSQLServerDB    *sql.DB
+	validatedSQLServerParam string
 }
 
 // noCopy 本身不实现任何同步语义,唯一用途是让 go vet 的 copylocks 分析器
@@ -173,6 +178,43 @@ func (this *TUniEngine) getValParam(aIndex int) string {
 	}
 
 	return fmt.Sprintf("%s%d", this.ColParam, aIndex)
+}
+
+// validateSQLServerBinding 用真实连接做只读参数回显。database/sql 不暴露 sql.Open
+// 的驱动名,仅检查 ColParam 字符串无法区分 mssql 与 sqlserver。回显值不一致时
+// (尤其 sqlserver + $N:被 T-SQL 当作 money 字面量),必须在任何业务 SQL 前失败。
+// 配置字段与 Db 按并发契约须在并发使用前固定;DB/ColParam 改变时重新验证。
+func (this *TUniEngine) validateSQLServerBinding(Ctx context.Context) error {
+	if this.dbFamily() != FmSQLSRV {
+		return nil
+	}
+	if this.Db == nil {
+		return fmt.Errorf("%w: SQL Server Db is nil", ErrInvalidPlaceholderBinding)
+	}
+
+	this.sqlServerValidationMu.Lock()
+	defer this.sqlServerValidationMu.Unlock()
+
+	if this.validatedSQLServerDB == this.Db && this.validatedSQLServerParam == this.ColParam {
+		return nil
+	}
+	if this.ColParam != ":" && this.ColParam != "$" && this.ColParam != "?" && this.ColParam != "@p" {
+		return fmt.Errorf("%w: unsupported SQL Server ColParam %q", ErrInvalidPlaceholderBinding, this.ColParam)
+	}
+
+	const sentinel = "UniEngine-bind-check-47381"
+	var got string
+	probe := "select " + this.getValParam(1) + " /* UniEngine bind check */"
+	if eror := this.Db.QueryRowContext(Ctx, probe, sentinel).Scan(&got); eror != nil {
+		return fmt.Errorf("%w: SQL Server ColParam %q did not bind: %v", ErrInvalidPlaceholderBinding, this.ColParam, eror)
+	}
+	if got != sentinel {
+		return fmt.Errorf("%w: SQL Server ColParam %q returned %q instead of the bound value", ErrInvalidPlaceholderBinding, this.ColParam, got)
+	}
+
+	this.validatedSQLServerDB = this.Db
+	this.validatedSQLServerParam = this.ColParam
+	return nil
 }
 
 func (this *TUniEngine) getColParam(FieldName string) string {
@@ -337,6 +379,9 @@ func (this *TUniEngine) DefaultPageSize() int64 {
 // 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
 // 返回的语句由调用方负责 Close。
 func (this *TUniEngine) prepareCtx(Ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
+	if eror := this.validateSQLServerBinding(Ctx); eror != nil {
+		return nil, eror
+	}
 	if tx := this.currentTx(); tx != nil {
 		return tx.PrepareContext(Ctx, SqlQuery)
 	}
@@ -349,6 +394,9 @@ func (this *TUniEngine) Begin() error {
 }
 
 func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
+	if eror := this.validateSQLServerBinding(Ctx); eror != nil {
+		return eror
+	}
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -416,6 +464,16 @@ func (this *TUniEngine) RunDebug(Value bool) error {
 }
 
 func (this *TUniEngine) Initialize() error {
+	//#SQL Server 的驱动名无法从 database/sql 可靠读取:初始化时用只读回显
+	//#检查实际占位符绑定。失败时不登记内置表,由调用方直接处理初始化错误。
+	if this.dbFamily() == FmSQLSRV {
+		Ctx, Cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer Cancel()
+		if eror := this.validateSQLServerBinding(Ctx); eror != nil {
+			return eror
+		}
+	}
+
 	//#并发契约:表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)
 	//#与配置字段(ColLabel/ColParam/Provider/SecretOn 等)须在并发查询开始前完成;
 	//#注册(RegisterClass/RegisterTable/...)与查询可并发

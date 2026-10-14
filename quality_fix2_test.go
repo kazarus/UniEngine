@@ -127,13 +127,13 @@ func TestQ1MacV2WeirdValuesRoundTrip(t *testing.T) {
 	}
 }
 
-// 缺省(VerifyMacVer=0)保持 v1:标签 MAC: 前缀,正常写入读取不受升级影响(存量兼容)。
-// 注:v1 载荷的 0x1f 碰撞在切 2 并全表重签前仍然存在,迁移步骤见 README。
-func TestQ1MacV1DefaultCompatible(t *testing.T) {
+// 显式 VerifyMacVer=1 保留旧写入格式;存量 v1 行升级后仍可读取。
+// 完整防碰撞保证仍需把存量数据重签为 v2,迁移步骤见 README。
+func TestQ1MacV1ExplicitCompatible(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
+	e.VerifyOn, e.VerifyMode, e.VerifyBy, e.VerifyMacVer = 1, 2, "q1-test-key", 1
 	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 
 	r := reviewMACRow{ID: 1, A: "admin", B: "user"}
@@ -141,7 +141,7 @@ func TestQ1MacV1DefaultCompatible(t *testing.T) {
 		t.Fatal(eror)
 	}
 	if !strings.HasPrefix(r.MAC, "MAC:") {
-		t.Fatalf("default version should emit MAC: tag, got %q", r.MAC)
+		t.Fatalf("explicit legacy version should emit MAC: tag, got %q", r.MAC)
 	}
 
 	d.queryRows = [][]driver.Value{{int64(1), "admin", "user", r.MAC}}

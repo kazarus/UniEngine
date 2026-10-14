@@ -1,8 +1,8 @@
 # UniEngine 第二批修复设计(Q1 / Q2 / Q5)
 
-> **状态:已实施**(mock 层全量测试+race 通过;Q2/Q5 评审探针已转 FAIL=修复确认,Q1 由 VerifyMacVer=2 回归测试确认)。
-> 遗留:§6 之 Q5"真实驱动验证"用例已写入 `integration/mysql_test.go`(`TestMySQLPlaceholderRewriteStoredValues`),
-> 待可用的 MySQL 凭据后执行(本机 root 密码验证未通过,用户选择跳过,命令见该文件头注释)。
+> **状态:已实施并完成真库验收。** mock 层全量测试+race 通过;Q2/Q5 评审探针已转 FAIL=修复确认,
+> Q1 由 VerifyMacVer=2 回归测试确认;§6 之 Q5"真实驱动验证"已用本机 MySQL 26.7.0 执行,
+> `integration/` 全部 6 项 MySQL 测试通过(含 `TestMySQLPlaceholderRewriteStoredValues`,评审报告 §6 验收项全闭环)。
 > 基线:评审报告 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68,复评 72)。
 > 第一批修复(Q3/Q4/Q7 + 假断言修正)已落地于 commit `4014962`。
 

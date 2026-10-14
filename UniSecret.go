@@ -35,15 +35,17 @@ const (
 	secretSaltLen = 16                     //#写盐长度(字节)
 	secretHeadLen = secretSaltLen + 4 + 12 //#密文头:盐 + 迭代数(4) + Nonce(12)
 	//#密文内嵌迭代数的合法上限,防御损坏/恶意密文触发超高开销派生
-	secretIterMax = 10000000
+	secretIterMax  = 10000000
+	secretCacheMax = 128 //#跨进程密文可能携带任意盐;缓存必须有界
 )
 
 // #secretState 派生密钥缓存与本进程写盐
 // #作为指针字段挂在引擎上:引擎按值拷贝时共享同一份缓存,且不触发 vet copylocks
 type secretState struct {
-	mu   sync.Mutex
-	Salt []byte            //#本进程写盐,首次加密时懒生成
-	Keys map[string][]byte //#"盐|迭代数" -> AES-256 密钥
+	mu    sync.Mutex
+	Salt  []byte            //#本进程写盐,首次加密时懒生成
+	Keys  map[string][]byte //#"盐|迭代数|密钥指纹" -> AES-256 密钥
+	Order []string          //#先进先出淘汰顺序,长度不超过 secretCacheMax
 }
 
 // #懒初始化守卫(仅覆盖建态窗口,不护业务临界区;与 muLazy 同一模式)
@@ -87,17 +89,33 @@ func (this *TUniEngine) writeSalt() ([]byte, error) {
 	return St.Salt, nil
 }
 
-// #deriveKey PBKDF2-HMAC-SHA256 派生 AES-256 密钥;按"盐+迭代数+密钥指纹"缓存。
-// #首个到达的调用持锁派生,并发等待者随后直接命中缓存(避免惊群重复派生);
-// #密钥常驻内存是该形态加密的标准代价,与任何进程内密钥持有等价。
+func (this *TUniEngine) secretCacheKey(Salt []byte, Iter int) string {
+	//#以密钥指纹而非明文入键,避免在缓存映射里额外留存一份密钥明文副本
+	SecretTag := sha256.Sum256([]byte(this.SecretBy))
+	return string(Salt) + "|" + strconv.Itoa(Iter) + "|" + string(SecretTag[:8])
+}
+
+// cacheKeyLocked 在持有 secretState.mu 时插入并淘汰最旧条目。
+func (St *secretState) cacheKeyLocked(CacheKey string, Key []byte) {
+	if _, Valid := St.Keys[CacheKey]; Valid {
+		return
+	}
+	if len(St.Order) >= secretCacheMax {
+		delete(St.Keys, St.Order[0])
+		St.Order[0] = ""
+		St.Order = St.Order[1:]
+	}
+	St.Keys[CacheKey] = Key
+	St.Order = append(St.Order, CacheKey)
+}
+
+// #deriveKey 用于写入:按"盐+迭代数+密钥指纹"缓存,容量有界。
+// #同一冷密钥的并发派生由锁串行化,后续调用可命中缓存。
 // #键必须覆盖**全部派生输入**:曾漏掉 SecretBy,导致运行时改密钥仍命中旧派生密钥,
 // #轮换既不生效也不报错(见评估报告 §4.6,回归测试 TestSecretRotateKeyTakesEffect)
 func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 	St := this.secretStateOf()
-
-	//#以密钥指纹而非明文入键,避免在缓存映射里额外留存一份密钥明文副本
-	SecretTag := sha256.Sum256([]byte(this.SecretBy))
-	CacheKey := string(Salt) + "|" + strconv.Itoa(Iter) + "|" + string(SecretTag[:8])
+	CacheKey := this.secretCacheKey(Salt, Iter)
 
 	St.mu.Lock()
 	defer St.mu.Unlock()
@@ -111,9 +129,30 @@ func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 		return nil, eror
 	}
 
-	St.Keys[CacheKey] = Key
+	St.cacheKeyLocked(CacheKey, Key)
 
 	return Key, nil
+}
+
+// deriveKeyForDecrypt 仅查已有缓存;冷派生在锁内串行执行,认证成功前不缓存。
+// 这样无效密文即使使用不同盐,也不会持久占用缓存。
+func (this *TUniEngine) deriveKeyForDecrypt(Salt []byte, Iter int) ([]byte, error) {
+	St := this.secretStateOf()
+	CacheKey := this.secretCacheKey(Salt, Iter)
+	St.mu.Lock()
+	defer St.mu.Unlock()
+	if Key, Valid := St.Keys[CacheKey]; Valid {
+		return Key, nil
+	}
+	return pbkdf2.Key(sha256.New, this.SecretBy, Salt, Iter, 32)
+}
+
+func (this *TUniEngine) cacheVerifiedKey(Salt []byte, Iter int, Key []byte) {
+	St := this.secretStateOf()
+	CacheKey := this.secretCacheKey(Salt, Iter)
+	St.mu.Lock()
+	defer St.mu.Unlock()
+	St.cacheKeyLocked(CacheKey, Key)
 }
 
 // #GCMOpen 以给定密钥做 AES-256-GCM 解密(Data 为 Nonce+密文)
@@ -236,7 +275,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		return "", errors.New("UniEngine: decrypt fail,invalid iterations in cipher Text")
 	}
 
-	Key, eror := this.deriveKey(Salt, Iter)
+	Key, eror := this.deriveKeyForDecrypt(Salt, Iter)
 	if eror != nil {
 		return "", eror
 	}
@@ -245,6 +284,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 	if eror != nil {
 		return "", eror
 	}
+	this.cacheVerifiedKey(Salt, Iter, Key)
 
 	return string(PlainText), nil
 }
