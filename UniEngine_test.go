@@ -19,8 +19,9 @@ type mockRow struct {
 	Code string `db:"-"` //readonly marker
 }
 
-func newTestEngine() TUniEngine {
-	var e TUniEngine
+// newTestEngine 返回 *TUniEngine——引擎含 noCopy,按值返回会被 go vet 拦下。
+func newTestEngine() *TUniEngine {
+	e := &TUniEngine{}
 	e.Initialize()
 	e.ColLabel = "db"
 	e.ColParam = "$"
@@ -219,7 +220,7 @@ func TestSetKeysUnregisteredFieldReturnsError(t *testing.T) {
 func TestAutoKeysMYSQLNMissingDatabase(t *testing.T) {
 	e := newTestEngine()
 	ak := TAutoKeys4MYSQLN{}
-	_, err := ak.GetSqlAutoKeys(&e, "mock_row")
+	_, err := ak.GetSqlAutoKeys(e, "mock_row")
 	if err == nil {
 		t.Fatal("expected error when DataBase is empty")
 	}

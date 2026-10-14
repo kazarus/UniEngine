@@ -1,0 +1,59 @@
+// Package UniEngine 是一个基于 database/sql 的多数据库 ORM-like 引擎:
+// 用结构体 tag 声明列映射,以注册表驱动 SQL 生成,支持 PostgreSQL / SQL Server /
+// Oracle / MySQL 及其兼容库(金仓 / 达梦 / openGauss / PolarDB / Taurus)。
+//
+// # 快速开始
+//
+// 装配引擎 → 登记类 → 调用查询/写入方法:
+//
+//	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provider: UniEngine.DtMYSQLN}
+//	_ = eng.Initialize()
+//	_ = eng.RegisterClass(TUser{}, "t_user").SetKeys("user_indx").SetSecret("password").LastError
+//
+//	eror := eng.SaveIt(&user)                       // 方言原生 UPSERT(PG on conflict / Oracle·SQLServer merge)
+//	eror = eng.SelectL(&users, "select * from t_user where data_stat=?", 1)
+//
+// 每个查询/写入方法都有对应的 *Ctx 变体(接受 context.Context),原方法等价于以
+// context.Background() 调用该变体。
+//
+// # 方言与占位符
+//
+// 引擎行为按「协议族」判断,而非逐个具体驱动:占位符风格、标识符引用、元数据目录、
+// UPSERT 语法、COPY 白名单均以 TDbFamily 分支。新增兼容库时按所兼容的协议归族即可。
+//
+// 注意 ColParam 必须与 sql.Open 所用的**驱动名**匹配,SQL Server 尤其关键:
+// go-mssqldb 的 "mssql" 会把 ? / :N / $N 预处理为 @pN,而 "sqlserver" 只认 @pN——
+// 用错组合不会报错却会写错数据。详见 README 的 0.1 / 0.2 两节。
+//
+// # 并发契约
+//
+// 查询与写入路径并发安全:预备语句是局部变量,查询仅持读锁完成注册表/事务查找,
+// Register* 可与查询并发执行。三个例外:
+//   - 事务期间(Begin 与 Commit/Cancel 之间)调用须串行——底层 *sql.Tx 非并发安全;
+//   - 配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更
+//     (SetKeys/SetSecret/SetVerify/AutoKeys/PrepareTables/PrepareRunSQL)
+//     应在并发查询开始前完成;
+//   - 引擎**不得按值拷贝**,请一律使用 *TUniEngine:拷贝会复制 tx/inTx 等值字段却共享
+//     mu,导致副本开启的事务对原件不可见。该约束由 noCopy + go vet(copylocks 分析器)
+//     在静态检查阶段强制。
+//
+// # 错误处理
+//
+// 报错点以哨兵错误(见 errors.go)加 %w 包装,调用方应使用 errors.Is 判别而非匹配文本:
+// ErrUnregisteredClass / ErrNoPkeys / ErrNilParam / ErrInvalidTableName /
+// ErrInvalidFieldName / ErrInvalidConstraintName / ErrNoTransaction / ErrAlreadyInTransaction。
+// 注册类 API(RegisterClass/RegisterTable/RegisterField/RegisterPkeys)遇到非法输入时不 panic,
+// 而是返回**带 LastError 的未注册表**,便于链式调用在链尾统一检查。
+//
+// # 应用层加密与存储完整性
+//
+// 敏感列以 tag 标记(db:"password,secreton")或 SetSecret 登记:写入自动加密、读取自动解密,
+// 内置实现为 PBKDF2-HMAC-SHA256 派生密钥 + AES-256-GCM(密文自包含盐与迭代数);
+// SecretHook 可接管为业务密钥/国密/加密机。存量明文(无 ENC: 标签)读取时直通,便于渐进迁移。
+// 另提供存储完整性校验(SetVerify):对登记的保护列写时签名、读时验签。
+//
+// # 模块布局
+//
+// 本模块(zero dependency)不引入任何第三方驱动;真实数据库集成测试与 pgx COPY 适配
+// 分别位于独立模块 integration/ 与 contrib/pgxcopy,按需引入。
+package UniEngine

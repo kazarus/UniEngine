@@ -490,3 +490,93 @@ func TestSelectMHRejectsNonStringAssignableKey(t *testing.T) {
 		t.Errorf("SelectH(float64 key) should error, got: %v", eror)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 评审加固:注册 API 标识符白名单(表名/字段名/tag 列名)
+// 运行时传入的名字会被直接拼进生成的 SQL(CRUD 表名不引号、MySQL/Oracle 族列名亦不引号),
+// 故与 Write/Exist* 路径同样做 validIdent 校验:非法输入不进注册表、不 panic。
+// ---------------------------------------------------------------------------
+
+func TestRegisterRejectsInvalidIdentifiers(t *testing.T) {
+	type regBadTag struct {
+		Id  int64 `db:"id"`
+		Bad int64 `db:"a;drop table w"`
+	}
+	type regOk struct {
+		Id   int64  `db:"id"`
+		Name string `db:"name"`
+	}
+
+	engine := &TUniEngine{ColLabel: "db", ColParam: "?", Provider: DtMYSQLN}
+	engine.Initialize()
+
+	cases := []struct {
+		name     string
+		sentinel error
+		call     func() error
+	}{
+		{"RegisterTable", ErrInvalidTableName, func() error { return engine.RegisterTable("t;drop table x", 0).LastError }},
+		{"RegisterField(table)", ErrInvalidTableName, func() error { return engine.RegisterField("t;drop table x", "id").LastError }},
+		{"RegisterField(field)", ErrInvalidFieldName, func() error { return engine.RegisterField("reg_ok", "a;drop table y").LastError }},
+		{"RegisterPkeys(field)", ErrInvalidFieldName, func() error { return engine.RegisterPkeys("reg_ok", "a--b").LastError }},
+		{"RegisterClass(table)", ErrInvalidTableName, func() error { return engine.RegisterClass(regOk{}, "t;drop table z").LastError }},
+		{"RegisterClass(tag)", ErrInvalidFieldName, func() error { return engine.RegisterClass(regBadTag{}, "reg_tag").LastError }},
+	}
+	for _, c := range cases {
+		if eror := c.call(); !errors.Is(eror, c.sentinel) {
+			t.Errorf("%s 应返回 %v, got: %v", c.name, c.sentinel, eror)
+		}
+	}
+
+	//#非法注册不得进入注册表,PrepareRunSQL 亦不应产出可注入 SQL
+	if tbl := engine.GetTable("t;drop table x"); tbl != nil {
+		t.Error("非法表名不得进入注册表")
+	}
+	if sql, _, _, _ := engine.PrepareRunSQL("t;drop table x", EtInsert); sql != "" {
+		t.Errorf("非法表名的 PrepareRunSQL 应为空, got: %q", sql)
+	}
+
+	//#只读标记 db:"-" / db:"_" 是标记而非列名,不得被白名单误杀
+	type regReadonly struct {
+		Id   int64  `db:"id"`
+		Code string `db:"-"`
+		Alt  string `db:"_"`
+	}
+	if eror := engine.RegisterClass(regReadonly{}, "reg_ro").LastError; eror != nil {
+		t.Errorf(`db:"-"/db:"_" 不应被标识符校验拒绝, got: %v`, eror)
+	}
+
+	//#正向对照:合法注册与既有链式行为不受影响
+	engine.RegisterTable("reg_ok", 0)
+	engine.RegisterField("reg_ok", "id")
+	engine.RegisterField("reg_ok", "name")
+	engine.RegisterPkeys("reg_ok", "id")
+	engine.PrepareTables("reg_ok")
+	sql, _, _, eror := engine.PrepareRunSQL("reg_ok", EtInsert)
+	if eror != nil || !strings.Contains(sql, "insert into reg_ok") {
+		t.Fatalf("合法注册受影响: sql=%q err=%v", sql, eror)
+	}
+}
+
+// #RegisterPkeys 在表未登记时曾返回 nil,链式 .SetKeys() 会 nil 解引用 panic
+func TestRegisterPkeysMissingTableNoPanic(t *testing.T) {
+	engine := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	engine.Initialize()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("RegisterPkeys 链式调用不得 panic, got: %v", r)
+		}
+	}()
+
+	tbl := engine.RegisterPkeys("no_such_table", "id")
+	if tbl == nil {
+		t.Fatal("RegisterPkeys 不得返回 nil(链式约定要求非 nil 载体)")
+	}
+	if !errors.Is(tbl.LastError, ErrUnregisteredClass) {
+		t.Errorf("期望 ErrUnregisteredClass, got: %v", tbl.LastError)
+	}
+	if eror := tbl.SetKeys("id").LastError; eror == nil {
+		t.Error("链式 SetKeys 应在 LastError 上短路,而非 panic 或静默通过")
+	}
+}

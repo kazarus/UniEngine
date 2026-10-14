@@ -1,5 +1,6 @@
 // UniSecret_test
 // #应用加密测试
+
 package UniEngine
 
 import (
@@ -799,7 +800,6 @@ func TestTableSecretOnFlag(t *testing.T) {
 
 // #测试N:ListSecretTable 注册表驱动遍历——仅含加密列的表,双键去重,按表名排序
 func TestListSecretTable(t *testing.T) {
-
 	eng := newSecretTestEngine(&mockDriver{})
 
 	//#user_name 作定位键(password 为加密列,不能作键)
@@ -828,7 +828,6 @@ func TestListSecretTable(t *testing.T) {
 
 // #测试N:按 ClassType 反射构造切片走 SelectL,密文读入即自动解密(注册表驱动读路径)
 func TestSelectLByClassType(t *testing.T) {
-
 	eng := newSecretTestEngine(&mockDriver{})
 
 	cipherText, eror := eng.Secret("p@ssw0rd", true)

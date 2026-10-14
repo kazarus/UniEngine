@@ -15,6 +15,8 @@ var (
 	ErrAlreadyInTransaction = errors.New("UniEngine: transaction already in progress")
 	// ErrInvalidTableName 表名标识符不合法(防注入白名单)
 	ErrInvalidTableName = errors.New("UniEngine: invalid table name")
+	// ErrInvalidFieldName 字段名标识符不合法(防注入白名单:Register* 参数与 struct tag 列名)
+	ErrInvalidFieldName = errors.New("UniEngine: invalid field name")
 	// ErrInvalidConstraintName 约束名标识符不合法(防注入白名单)
 	ErrInvalidConstraintName = errors.New("UniEngine: invalid constraint name")
 	// ErrNilParam 公共入口收到 nil 参数(裸 nil 与 typed nil 统一判别,替代反射 panic)
