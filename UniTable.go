@@ -20,11 +20,11 @@ type TUniTable struct {
 	SqlUpdate string `db:"sql_update" json:"sqlUpdate"`
 	SqlDelete string `db:"sql_delete" json:"sqlDelete"`
 
-	SecretOn   bool        //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
+	SecretOn  bool        //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
 	ColSecret []TUniField //#栏目加密
 
-	VerifyOn   bool        //#是否含完整性保护字段#SetVerify登记时置位
-	VerifyAt   string      //#MAC伴随列(字段名,小写)#如 mac_text,建议建列 varchar(64) NOT NULL DEFAULT ''
+	VerifyOn  bool        //#是否含完整性保护字段#SetVerify登记时置位
+	VerifyAt  string      //#MAC伴随列(字段名,小写)#如 mac_text,建议建列 varchar(64) NOT NULL DEFAULT ''
 	ColVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
 
 	HashField map[string]TUniField //ToLower
@@ -33,7 +33,7 @@ type TUniTable struct {
 	ListField []TUniField //ToLower
 	ListPkeys []TUniField //ToLower
 
-	Err error //#链式登记(SetKeys/SetSecret)的首个错误#置位后短路后续登记,链尾检查
+	LastError error //#链式登记(SetKeys/SetSecret)的首个错误#置位后短路后续登记,链尾检查
 }
 
 func (this *TUniTable) HasField(FieldName string) (bool, error) {
@@ -160,10 +160,10 @@ func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
 
 // #SetKeys 登记主键并返回本表,支持链式:
 // #  UniEngineEx.RegisterClass(core.TSYSPATH{}, "sys_path").SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").SetSecret("MAST_NAME")
-// #链中首个错误记入 Err 并短路后续登记,链尾以 if tbl.Err != nil 检查
+// #链中首个错误记入 LastError 并短路后续登记,链尾以 if tbl.LastError != nil 检查
 func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 
-	if this.Err != nil {
+	if this.LastError != nil {
 		return this
 	}
 
@@ -171,19 +171,19 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 
 		fieldName, ok := ItemPara.(string)
 		if !ok {
-			this.Err = fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
+			this.LastError = fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
 			return this
 		}
 
 		Field, Valid := this.HashField[strings.ToLower(fieldName)]
 		if !Valid {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(fieldName))
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(fieldName))
 			return this
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if Field.SecretOn {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(fieldName))
 			return this
 		}
 
@@ -197,10 +197,10 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 	return this
 }
 
-// #SetSecret 标记加密列并返回本表,支持链式(错误处理同 SetKeys:记入 Err 并短路)
+// #SetSecret 标记加密列并返回本表,支持链式(错误处理同 SetKeys:记入 LastError 并短路)
 func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 
-	if this.Err != nil {
+	if this.LastError != nil {
 		return this
 	}
 
@@ -208,7 +208,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 
 		fieldName, ok := ItemPara.(string)
 		if !ok {
-			this.Err = fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
+			this.LastError = fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
 			return this
 		}
 
@@ -216,13 +216,13 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 
 		Field, Valid := this.HashField[lowerName]
 		if !Valid {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
 			return this
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if _, isPkey := this.HashPkeys[lowerName]; isPkey {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, lowerName)
 			return this
 		}
 
@@ -255,7 +255,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 	return this
 }
 
-// #SetVerify 登记存储完整性保护并返回本表,支持链式(错误处理同 SetKeys:记入 Err 并短路):
+// #SetVerify 登记存储完整性保护并返回本表,支持链式(错误处理同 SetKeys:记入 LastError 并短路):
 // #  UniEngineEx.RegisterClass(core.TUSERPART{}, "tbl_user_part").SetKeys(...).SetVerify("mac_text", "who_build", "user_indx", "data_stat")
 // #MacField 为 MAC 伴随列(须为已登记的 string 字段,建议建列 varchar(64) NOT NULL DEFAULT ”,
 // #NOT NULL 缺省空串——存量行扫描 NULL 会报错),Fields 为保护列(登记顺序=载荷顺序);
@@ -264,7 +264,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 // #(secreton 列参与载荷的是解密后的明文,与读路径先解密后验签的顺序一致)
 func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
 
-	if this.Err != nil {
+	if this.LastError != nil {
 		return this
 	}
 
@@ -272,31 +272,31 @@ func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
 
 	MacCol, Valid := this.HashField[lowerMac]
 	if !Valid {
-		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerMac)
 		return this
 	}
 	if MacCol.AttriName == "" {
-		this.Err = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; mac column needs a writable string field", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; mac column needs a writable string field", this.TableName, lowerMac)
 		return this
 	}
 	if MacCol.ReadOnly {
-		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is readonly; mac column must be writable", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is readonly; mac column must be writable", this.TableName, lowerMac)
 		return this
 	}
 	if _, isPkey := this.HashPkeys[lowerMac]; isPkey {
-		this.Err = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; mac column is engine-computed and can not be a pkey", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; mac column is engine-computed and can not be a pkey", this.TableName, lowerMac)
 		return this
 	}
 	//#MAC 值写入 string 字段;其它类型无法回填,登记期直接拒绝
 	if this.ClassType != nil {
 		if sf, ok := this.ClassType.FieldByName(MacCol.AttriName); !ok || sf.Type.Kind() != reflect.String {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; mac column must be string", this.TableName, lowerMac)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; mac column must be string", this.TableName, lowerMac)
 			return this
 		}
 	}
 
 	if len(Fields) == 0 {
-		this.Err = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, lowerMac)
 		return this
 	}
 
@@ -308,21 +308,21 @@ func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
 		lowerName := strings.ToLower(ItemPara)
 
 		if lowerName == lowerMac {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is the mac column itself; it can not protect itself", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is the mac column itself; it can not protect itself", this.TableName, lowerName)
 			return this
 		}
 
 		Field, Valid := this.HashField[lowerName]
 		if !Valid {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
 			return this
 		}
 		if Field.AttriName == "" {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected fields must map to class attributes", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected fields must map to class attributes", this.TableName, lowerName)
 			return this
 		}
 		if HashSeen[lowerName] {
-			this.Err = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, lowerName)
 			return this
 		}
 

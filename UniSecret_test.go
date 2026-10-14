@@ -509,7 +509,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 	eng := newSecretTestEngine(&mockDriver{})
 	tb := eng.RegisterClass(TTestUser{}, "test_user")
 
-	if eror := tb.SetSecret("password").Err; eror != nil {
+	if eror := tb.SetSecret("password").LastError; eror != nil {
 		t.Fatal(eror)
 	}
 
@@ -531,7 +531,7 @@ func TestSetSecretSyncListField(t *testing.T) {
 	}
 
 	//#非字符串参数报错而非 panic
-	if eror := tb.SetSecret(123).Err; eror == nil {
+	if eror := tb.SetSecret(123).LastError; eror == nil {
 		t.Fatal("non-string argument should return error")
 	}
 }
@@ -545,10 +545,10 @@ func TestSetSecretRejectsPkey(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 	tbl := eng.RegisterClass(TTestUser{}, "test_user2")
-	if eror := tbl.SetKeys("user_name").Err; eror != nil {
+	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
-	if eror := tbl.SetSecret("user_name").Err; eror == nil {
+	if eror := tbl.SetSecret("user_name").LastError; eror == nil {
 		t.Fatal("SetSecret on a pkey field should return error")
 	}
 }
@@ -558,7 +558,7 @@ func TestSetKeysRejectsEncrypt(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 	tbl := eng.RegisterClass(TTestUser{}, "test_user3")
-	if eror := tbl.SetKeys("password").Err; eror == nil {
+	if eror := tbl.SetKeys("password").LastError; eror == nil {
 		t.Fatal("SetKeys on an encrypt-marked field should return error")
 	}
 }
@@ -784,7 +784,7 @@ func TestTableSecretOnFlag(t *testing.T) {
 	if tblPlain.SecretOn {
 		t.Fatal("table without any secret field should not be marked")
 	}
-	if eror := tblPlain.SetSecret("password").Err; eror != nil {
+	if eror := tblPlain.SetSecret("password").LastError; eror != nil {
 		t.Fatalf("SetSecret: %v", eror)
 	}
 	if !tblPlain.SecretOn {
@@ -914,7 +914,7 @@ func TestListSecretColumns(t *testing.T) {
 		Remark   string `db:"remark"`
 	}
 	tbl2 := eng.RegisterClass(tDualSecret{}, "t_dual_secret")
-	if eror := tbl2.SetSecret("password", "remark").Err; eror != nil {
+	if eror := tbl2.SetSecret("password", "remark").LastError; eror != nil {
 		t.Fatalf("SetSecret: %v", eror)
 	}
 	if len(tbl2.ColSecret) != 2 {
@@ -922,7 +922,7 @@ func TestListSecretColumns(t *testing.T) {
 	}
 
 	//#去重:重复 SetSecret 同一列,清单不增长
-	if eror := tbl2.SetSecret("password").Err; eror != nil {
+	if eror := tbl2.SetSecret("password").LastError; eror != nil {
 		t.Fatalf("SetSecret again: %v", eror)
 	}
 	if len(tbl2.ColSecret) != 2 {

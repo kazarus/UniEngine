@@ -86,7 +86,7 @@ func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTabl
 	}
 
 	tbl := eng.RegisterClass(itUser{}, "it_user")
-	if eror := tbl.SetKeys("user_name").Err; eror != nil {
+	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
@@ -301,7 +301,7 @@ func TestIntegrationSecret(t *testing.T) {
 	defer eng.Db.Close()
 	setupUserTable(t, eng)
 	tbl := eng.RegisterClass(itSecretUser{}, "it_user")
-	if eror := tbl.SetKeys("user_name").Err; eror != nil {
+	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
