@@ -13,18 +13,18 @@ type TUniTable struct {
 	ParentTab string `db:"parent_tab" json:"parentTab"`
 	TableName string `db:"table_name" json:"tableName"`
 
-	ClassType reflect.Type `db:"-" json:"-"` //#注册类类型(RegisterClass 登记;RegisterTable/RegisterField 路径为空)#供注册表驱动的反射构造读行切片
-
 	SqlSelect string `db:"sql_select" json:"sqlSelect"`
 	SqlInsert string `db:"sql_insert" json:"sqlInsert"`
 	SqlUpdate string `db:"sql_update" json:"sqlUpdate"`
 	SqlDelete string `db:"sql_delete" json:"sqlDelete"`
 
+	ClassType reflect.Type `db:"-" json:"-"` //#注册类类型(RegisterClass 登记;RegisterTable/RegisterField 路径为空)#供注册表驱动的反射构造读行切片
+
 	SecretOn  bool        //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
 	ColSecret []TUniField //#栏目加密
 
 	VerifyOn  bool        //#是否含完整性保护字段#SetVerify登记时置位
-	VerifyAt  string      //#MAC伴随列(字段名,小写)#如 mac_text,建议建列 varchar(64) NOT NULL DEFAULT ''
+	VerifyAt  string      //#MAC伴随列(字段名,小写)#如 hmac_text,建议建列 varchar(200) not null default ''
 	ColVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
 
 	HashField map[string]TUniField //ToLower
@@ -45,10 +45,10 @@ func (this *TUniTable) HasField(FieldName string) (bool, error) {
 	return false, nil
 }
 
-// orderedFields 返回全部已注册字段的确定序:先按 ListField(类声明序/既有列表序),
+// orderedField 返回全部已注册字段的确定序:先按 ListField(类声明序/既有列表序),
 // 其后按字段名排序补齐仅写入 HashField 的字段(如 RegisterField 直写);同名字段以
 // 先出现者为准。CRUD 生成 SQL 一律走本序,保证同一输入产生相同语句文本,利于数据库端语句缓存。
-func (this *TUniTable) orderedFields() []TUniField {
+func (this *TUniTable) orderedField() []TUniField {
 
 	if len(this.HashField) == 0 {
 		return nil
@@ -119,7 +119,7 @@ func (this *TUniTable) orderedPkeys() []TUniField {
 func (this *TUniTable) writableFields() []TUniField {
 
 	var fields []TUniField
-	for _, ItemPara := range this.orderedFields() {
+	for _, ItemPara := range this.orderedField() {
 		if ItemPara.ReadOnly || ItemPara.AttriName == "" {
 			continue
 		}

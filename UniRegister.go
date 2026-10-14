@@ -186,7 +186,7 @@ func (this *TUniEngine) PrepareTables(TableName string) error {
 
 	//#按确定序重建(ListField 既有序优先,其余按字段名排序),避免 map 迭代序导致 SQL 文本漂移
 	ListField := make([]TUniField, 0, len(UniTable.HashField))
-	for _, ItemPara := range UniTable.orderedFields() {
+	for _, ItemPara := range UniTable.orderedField() {
 		if ItemPara.ReadOnly {
 			continue
 		}
@@ -244,7 +244,7 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 			var colList []string
 			var paramList []string
 			ColIndex := 1
-			for _, ItemPara := range UniTable.orderedFields() {
+			for _, ItemPara := range UniTable.orderedField() {
 				if ItemPara.ReadOnly {
 					continue
 				}
@@ -265,7 +265,7 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 			var setList []string
 			var keyList []string
 			ColIndex := 1
-			for _, ItemPara := range UniTable.orderedFields() {
+			for _, ItemPara := range UniTable.orderedField() {
 				if ItemPara.ReadOnly {
 					continue
 				}
