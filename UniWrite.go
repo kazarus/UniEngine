@@ -190,12 +190,12 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 		}
 
 		var colList []string
-		var paramList []string
+		var valList []string
 		ColIndex := 1
 		for _, ItemPara := range fields {
 
 			colList = append(colList, this.getColParam(ItemPara.FieldName))
-			paramList = append(paramList, this.getValParam(ColIndex))
+			valList = append(valList, this.getValParam(ColIndex))
 			ColIndex = ColIndex + 1
 
 			if UniTable.secretColumn(ItemPara) {
@@ -209,7 +209,7 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
-		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(colList, ","), strings.Join(paramList, ","))
+		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(colList, ","), strings.Join(valList, ","))
 	}
 
 	this.sqlDebug("insert", SqlQuery, SqlValue)
@@ -285,10 +285,10 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 			f := v.Index(m)
 
-			var paramList []string
+			var valList []string
 			for _, ItemPara := range fields {
 
-				paramList = append(paramList, this.getValParam(ColIndex))
+				valList = append(valList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
 				if UniTable.secretColumn(ItemPara) {
@@ -304,9 +304,9 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 			if this.dbFamily() == FmORACLE {
 				//#Oracle:INSERT ALL 多行语法
-				rowList = append(rowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(colList, ","), strings.Join(paramList, ",")))
+				rowList = append(rowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(colList, ","), strings.Join(valList, ",")))
 			} else {
-				rowList = append(rowList, fmt.Sprintf("( %s )", strings.Join(paramList, ",")))
+				rowList = append(rowList, fmt.Sprintf("( %s )", strings.Join(valList, ",")))
 			}
 		}
 
