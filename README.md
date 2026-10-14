@@ -17,10 +17,10 @@
 > - **Concurrency**: query/write paths are safe for concurrent use; calls must be
 >   serialized only while a transaction is open. The engine must always be used
 >   as `*TUniEngine` — by-value copies are rejected by `go vet`.
-> - **SQL Server binding check**: the placeholder must match the *driver name*.
->   `Initialize()` probes the live connection and returns
->   `ErrInvalidPlaceholderBinding` for a mismatch before registering tables.
->   Check its error; see §0.2 for the driver matrix.
+> - **SQL Server configuration**: set `ProvideName` to the actual `database/sql`
+>   driver mode (`mssql` or `sqlserver`) and choose its matching `ColParam`.
+>   `Initialize()` rejects invalid declared combinations before registering
+>   tables; it does not probe the connection. See §0.2 for the matrix.
 > - **Nullable columns**: the driver scans straight into your struct fields, so a
 >   `NULL` in a column mapped to a non-nullable type (`string`/`int64`/`bool`/`time.Time`)
 >   fails the read — and for `SelectL` it discards the **whole** batch. Use
@@ -65,7 +65,7 @@ Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等�
 
 ##### 0.2.SQL Server 驱动名与占位符
 
-SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱动名**。go-mssqldb 注册了两个名字,预处理行为相反。下表描述原始驱动行为;引擎在 `Initialize()` 时拦截错误组合:
+SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱动名**。go-mssqldb 注册了两个名字,预处理行为相反。开发者必须把实际驱动名填入 `ProvideName`;引擎在 `Initialize()` 时检查声明的组合:
 
 | sql.Open 驱动名 | 引擎 ColParam | 实际效果 |
 | --------------- | ------------- | -------- |
@@ -78,18 +78,18 @@ SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱�
 ```go
 //#驱动名 mssql:内部把 ? / :N / $N 预处理为 @pN
 db, _ := sql.Open("mssql", DbSource)
-UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: ":", Provider: UniEngine.DtSQLSRV}
+UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: ":", Provider: UniEngine.DtSQLSRV, ProvideName: "mssql"}
 
 //#驱动名 sqlserver:不预处理,仅认 @pN
 db, _ := sql.Open("sqlserver", DbSource)
-UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Provider: UniEngine.DtSQLSRV}
+UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Provider: UniEngine.DtSQLSRV, ProvideName: "sqlserver"}
 ```
 
-> **初始化校验**:`UniEngineEx.Initialize()` 在 SQL Server 族上用实际连接执行只读参数回显。占位符未真正绑定时返回 `ErrInvalidPlaceholderBinding`,且不登记内置表。务必处理初始化错误;后续执行入口也会在配置变动或跳过初始化时检查。`$N` 在 T-SQL 中是 **money 字面量**;旧版本使用 `sqlserver` + `$` 的部署可能已有错误数据,建议审计历史数据(可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串)。
+> **初始化校验**:`UniEngineEx.Initialize()` 根据 `ProviderName()` 返回的开发者声明驱动名检查 `ColParam`;未填写 `ProvideName`、驱动名不支持或组合错误时返回 `ErrInvalidPlaceholderBinding`,且不登记内置表。后续执行入口也会检查当前配置。此检查不连接数据库,无法发现 `ProvideName` 与 `sql.Open` 实际驱动名不一致;配置者必须保证两者相同。`$N` 在 T-SQL 中是 **money 字面量**;旧版本使用 `sqlserver` + `$` 的部署可能已有错误数据,建议审计历史数据。
 >
 > 两种驱动名下**没有通用取值**:`@p` 在 `mssql` 下报 `expected 0 arguments`,而 `:`/`$`/`?` 在 `sqlserver` 下不能正确绑定——请按驱动名选择 `ColParam`。
 >
-> 现代写法与 `mssql` 同语义(同样只接受 `:`/`$`/`?`):`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`。
+> 现代写法与 `mssql` 同语义(同样只接受 `:`/`$`/`?`):`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`;这种连接器模式下也须设置 `ProvideName: "mssql"`。
 
 #### 1.安装方式
 

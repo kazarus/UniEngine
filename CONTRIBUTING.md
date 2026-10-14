@@ -148,13 +148,15 @@ driver *name* changes the rules:
 | `sqlserver` | `:` / `?` | server-side syntax error |
 | `sqlserver` | `$` | **silently writes wrong data** — `$N` is a T-SQL *money literal* |
 
-There is **no value that works for both driver names**. `Initialize()` probes
-the live SQL Server connection with a read-only bound parameter and returns
-`ErrInvalidPlaceholderBinding` before publishing registry entries if the value
-does not bind. Callers must handle the initialization error. A change in `Db`
-or `ColParam` triggers validation again before SQL execution. The table above
-shows raw driver behavior; older deployments using `sqlserver` + `$` may need
-historical data review.
+There is **no value that works for both driver names**. The developer sets
+`ProvideName` to the actual driver mode. `ProviderName()` returns that value
+for SQL Server, and `Initialize()` rejects an unsupported `ProvideName` or an
+incompatible `ColParam` with `ErrInvalidPlaceholderBinding` before publishing
+registry entries. The check performs no I/O and cannot detect a false driver
+declaration; callers must keep `ProvideName` aligned with `sql.Open` or the
+connector mode (`NewConnectorWithProcessQueryText` uses `ProvideName="mssql"`).
+Execution entry points check the current configuration again.
+Older deployments using `sqlserver` + `$` may need historical data review.
 
 Any change to this area requires running `TestMSSQLPlaceholderContract`,
 `TestMSSQLRoundTripMatrix`, and `TestMSSQLInitializeRejectsMismatchedBinding`

@@ -23,8 +23,10 @@
 //
 // 注意 ColParam 必须与 sql.Open 所用的**驱动名**匹配,SQL Server 尤其关键:
 // go-mssqldb 的 "mssql" 会把 ? / :N / $N 预处理为 @pN,而 "sqlserver" 只认 @pN——
-// Initialize 会用实际 SQL Server 连接做只读绑定回显,错误组合返回
-// ErrInvalidPlaceholderBinding,调用方必须处理初始化错误。详见 README 的 0.1 / 0.2 两节。
+// SQL Server 须由开发者把实际驱动名(mssql/sqlserver)填入 ProvideName;
+// Initialize 按 ProviderName() 返回值与 ColParam 校验配置,错误组合返回
+// ErrInvalidPlaceholderBinding。该检查不连接数据库,调用方须保证声明与实际驱动一致。
+// 详见 README 的 0.1 / 0.2 两节。
 //
 // # 并发契约
 //

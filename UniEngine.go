@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // TUniEngine is a multi-database ORM-like engine built on database/sql.
@@ -70,8 +69,9 @@ type TUniEngine struct {
 	// 而 Supplier=DtPOLODB 配非 PG 族 Provider 会让 InsertP 直接报错。
 	Supplier TDriveType
 
-	// ProvideName 数据库驱动名称。引擎内部未使用(全仓库零引用)。
-	// Deprecated: 设置它不会产生任何效果。
+	// ProvideName 由开发者指定的 database/sql 驱动名。SQL Server 必填:
+	// "mssql" 使用 :/$/? 占位符,"sqlserver" 使用 @p。
+	// 此字段必须与 sql.Open 或连接器实际使用的驱动模式一致。
 	ProvideName string
 
 	tx       *sql.Tx //#当前事务(Begin 之后非 nil)
@@ -80,9 +80,6 @@ type TUniEngine struct {
 
 	secret *secretState //#派生密钥缓存与本进程写盐(懒初始化,详见UniSecret.go)
 
-	sqlServerValidationMu   sync.Mutex //#首次使用 SQL Server 时验证实际驱动是否绑定 ColParam
-	validatedSQLServerDB    *sql.DB
-	validatedSQLServerParam string
 }
 
 // noCopy 本身不实现任何同步语义,唯一用途是让 go vet 的 copylocks 分析器
@@ -200,41 +197,31 @@ func (this *TUniEngine) getValParam(aIndex int) string {
 	return fmt.Sprintf("%s%d", this.ColParam, aIndex)
 }
 
-// validateSQLServerBinding 用真实连接做只读参数回显。database/sql 不暴露 sql.Open
-// 的驱动名,仅检查 ColParam 字符串无法区分 mssql 与 sqlserver。回显值不一致时
-// (尤其 sqlserver + $N:被 T-SQL 当作 money 字面量),必须在任何业务 SQL 前失败。
-// 配置字段与 Db 按并发契约须在并发使用前固定;DB/ColParam 改变时重新验证。
-func (this *TUniEngine) validateSQLServerBinding(Ctx context.Context) error {
+// validateSQLServerPlaceholderConfig 按开发者声明的实际驱动名校验占位符。
+// database/sql 不暴露 sql.Open 的驱动名;调用方必须保证 ProvideName 与连接一致。
+func (this *TUniEngine) validateSQLServerPlaceholderConfig() error {
 	if this.dbFamily() != FmSQLSRV {
 		return nil
 	}
 	if this.Db == nil {
 		return fmt.Errorf("%w: SQL Server Db is nil", ErrInvalidPlaceholderBinding)
 	}
-
-	this.sqlServerValidationMu.Lock()
-	defer this.sqlServerValidationMu.Unlock()
-
-	if this.validatedSQLServerDB == this.Db && this.validatedSQLServerParam == this.ColParam {
-		return nil
+	if this.ProvideName == "" {
+		return fmt.Errorf("%w: SQL Server ProvideName is required (mssql or sqlserver)", ErrInvalidPlaceholderBinding)
 	}
-	if this.ColParam != ":" && this.ColParam != "$" && this.ColParam != "?" && this.ColParam != "@p" {
-		return fmt.Errorf("%w: unsupported SQL Server ColParam %q", ErrInvalidPlaceholderBinding, this.ColParam)
+	switch this.ProviderName() {
+	case "mssql":
+		if this.ColParam == ":" || this.ColParam == "$" || this.ColParam == "?" {
+			return nil
+		}
+	case "sqlserver":
+		if this.ColParam == "@p" {
+			return nil
+		}
+	default:
+		return fmt.Errorf("%w: unsupported SQL Server ProvideName %q", ErrInvalidPlaceholderBinding, this.ProvideName)
 	}
-
-	const sentinel = "UniEngine-bind-check-47381"
-	var got string
-	probe := "select " + this.getValParam(1) + " /* UniEngine bind check */"
-	if eror := this.Db.QueryRowContext(Ctx, probe, sentinel).Scan(&got); eror != nil {
-		return fmt.Errorf("%w: SQL Server ColParam %q did not bind: %v", ErrInvalidPlaceholderBinding, this.ColParam, eror)
-	}
-	if got != sentinel {
-		return fmt.Errorf("%w: SQL Server ColParam %q returned %q instead of the bound value", ErrInvalidPlaceholderBinding, this.ColParam, got)
-	}
-
-	this.validatedSQLServerDB = this.Db
-	this.validatedSQLServerParam = this.ColParam
-	return nil
+	return fmt.Errorf("%w: SQL Server ProvideName %q does not accept ColParam %q", ErrInvalidPlaceholderBinding, this.ProvideName, this.ColParam)
 }
 
 func (this *TUniEngine) getColParam(FieldName string) string {
@@ -322,8 +309,13 @@ func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, Args interfa
 	fmt.Printf("UniEngine: %s.val: %v\n", Kind, Args)
 }
 
+// ProviderName 返回驱动名称。SQL Server 在配置 ProvideName 后返回该声明;
+// 未填写时沿用旧的协议族名称,但 Initialize 会拒绝缺失的 SQL Server 配置。
 func (this *TUniEngine) ProviderName() string {
 	var Result string
+	if this.Provider == DtSQLSRV && this.ProvideName != "" {
+		return this.ProvideName
+	}
 
 	switch this.Provider {
 	case DtORACLE:
@@ -399,7 +391,7 @@ func (this *TUniEngine) DefaultPageSize() int64 {
 // 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
 // 返回的语句由调用方负责 Close。
 func (this *TUniEngine) prepareCtx(Ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
-	if eror := this.validateSQLServerBinding(Ctx); eror != nil {
+	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
 		return nil, eror
 	}
 	if tx := this.currentTx(); tx != nil {
@@ -414,7 +406,7 @@ func (this *TUniEngine) Begin() error {
 }
 
 func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
-	if eror := this.validateSQLServerBinding(Ctx); eror != nil {
+	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
 		return eror
 	}
 	this.lockTables()
@@ -484,14 +476,10 @@ func (this *TUniEngine) RunDebug(Value bool) error {
 }
 
 func (this *TUniEngine) Initialize() error {
-	//#SQL Server 的驱动名无法从 database/sql 可靠读取:初始化时用只读回显
-	//#检查实际占位符绑定。失败时不登记内置表,由调用方直接处理初始化错误。
-	if this.dbFamily() == FmSQLSRV {
-		Ctx, Cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer Cancel()
-		if eror := this.validateSQLServerBinding(Ctx); eror != nil {
-			return eror
-		}
+	//#SQL Server 初始化时检查开发者声明的驱动名与占位符组合。
+	//#失败时不登记内置表,由调用方直接处理初始化错误。
+	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
+		return eror
 	}
 
 	//#并发契约:表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)
