@@ -236,6 +236,12 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 		//#改为返回带 LastError 的未注册表(与 RegisterClass 守卫同约定)
 		return invalidTable(TableName, fmt.Errorf("%w: RegisterPkeys table [%s] is not registered; call RegisterTable/RegisterClass first;", ErrUnregisteredClass, TableName))
 	}
+	//#同 SetKeys/AutoKeys:SetVerify 之后主键冻结。此处直接返回未注册表(不克隆、不发布),
+	//#保证已发布快照的主键集合不变(评审 Q2 顺序变体)
+	if UniTable.VerifyOn {
+		return invalidTable(TableName, fmt.Errorf("%w: table[%s] RegisterPkeys is not allowed after SetVerify; register pkeys before SetVerify (re-register the class to change pkeys)", ErrPkeysFrozenAfterVerify, TableName))
+	}
+
 	Old := UniTable
 	UniTable = cloneTableMetadata(UniTable)
 
@@ -338,7 +344,10 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 			var SqlWhere []string
 			ColIndex := 1
 			for _, ItemPara := range UniTable.orderedPkeys() {
-				if ItemPara.ReadOnly {
+				//#只跳过"只读标记字段"(db:"-"/db:"_" 没有真实列名);
+				//#db:"created_at,readonly" 这类**有真实列名的只读列**必须纳入定位键,
+				//#否则本函数产出的 WHERE 会漏掉该主键,与 Delete/Update/SaveIt 的 pkeyFields 口径不一致
+				if !isPkeyUsable(ItemPara) {
 					continue
 				}
 				SqlWhere = append(SqlWhere, fmt.Sprintf("    and %s=%s", this.getColParam(ItemPara.FieldName), this.getValParam(ColIndex)))
@@ -404,6 +413,23 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 
 			SqlResult = fmt.Sprintf("update %s set %s where 1=1 and %s", UniTable.TableName, strings.Join(SetList, ","), strings.Join(KeyList, " and "))
 			UniTable.SqlUpdate = SqlResult
+		}
+	case EtDelete:
+		{
+			var KeyList []string
+			ColIndex := 1
+
+			for _, ItemPara := range UniTable.orderedPkeys() {
+				KeyList = append(KeyList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+				ColIndex = ColIndex + 1
+			}
+
+			if len(KeyList) == 0 {
+				return "", ListField, UniTable.ListPkeys, fmt.Errorf("UniEngine: no deleteable column for table:%s", UniTable.TableName)
+			}
+
+			SqlResult = fmt.Sprintf("delete from %s where 1=1 and %s", UniTable.TableName, strings.Join(KeyList, " and "))
+			UniTable.SqlDelete = SqlResult
 		}
 	}
 

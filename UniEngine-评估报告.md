@@ -152,6 +152,7 @@ OK      零行 + map[string]TRowM    → nil
   - **§4.7 已修**：`SecretDefault` 写分支在派生前校验上界，越界直接报错而非产出坏数据（`UniSecret.go` +4 行）。回归测试 `TestSecretWriteRejectsOversizedIter` —— 已在 `/tmp` 副本上确认其**修复前失败**（`SecretIter=10000001 写路径未拦截,产出读不回的密文`）、修复后通过。
   - **§4.6 已修**：派生密钥缓存键由「盐 + 迭代数」改为「盐 + 迭代数 + `sha256(SecretBy)[:8]`」，以指纹而非明文入键。回归测试 `TestSecretRotateKeyTakesEffect` 覆盖「新密文只由新密钥可解」与「旧密文不再静默沿用旧密钥」。
 - **安全 7.0 → 7.5**：**§4.8 已修**。选择**登记期拒绝**而非自动并入主键，理由是自动并入会改变载荷构成，使已合规登记表的存量 MAC 全部失效、升级瞬间全表验签失败；登记期拒绝则不触碰载荷语义。新增逃生口 `TUniTable.VerifyUnkeyed`。真库测试 `TestMySQLVerifyRowBinding` 证明「整行搬运被检出」与「篡改保护列被检出」。
+  - **【2026-10-14 补记】** 本节修复当时只覆盖「先主键、后验签」的顺序；其后发现**顺序变体**：`SetVerify` 成功后再用 `SetKeys`/`AutoKeys` 追加主键不会重新校验，新主键脱离载荷（实测可绕过）。现已按业主方案封住——**`SetVerify` 即主键冻结**，三处变更入口一律返回 `ErrPkeysFrozenAfterVerify` 且不写入主键；`VerifyOn=false` 时不冻结。回归用例 `TestPkeysFrozenAfterSetVerify` / `TestPkeysNotFrozenWhenSetVerifyFails`。
 - **测试与 CI 9.5 → 10.0**：补齐**对称性测试**（写侧迭代数边界、轮换生效、SetVerify 主键门禁三条），并新增 **`style_test.go` 门禁**——把 v9 清理又回归的两类机械残留写成断言，随 `go test` 在本地与 CI 矩阵执行。门禁本身也做了「能否拦住违规」的验证（临时构造违规文件 → 准确报出 `file:line`）。
 - **文档与工程化 8.0 → 8.5**：**§4.9 已修**（轮换语义改为精确表述，并补上「密文不含密钥标识，轮换需配套迁移」这一操作前提）、**§4.10 已修**（MySQL 示例补 `DataBase`）。
 - **勘误我自己的预测**：v14 报告里我写「四项做完约 **8.6**」，按本模型逐项复算实际为 **8.18 → 8.2**。这已是我本会话第三次算错合计（前两次是 v11/v12 的 7.93/7.98，实为 7.925/8.000），已改为逐项复算并保留两位小数。
@@ -242,7 +243,8 @@ if ch == '?' {
 
 1. **危险组合未被拦截**：驱动名 `sqlserver` + `ColParam` 非 `"@p"` 时，引擎不校验、不报错，`$` 组合会**静默写错数据**（`Update` 改错行、`Delete` 删错行、`MERGE` 匹配错行）。这是真实且严重的数据完整性风险，只是**不是"整个 SQLServer 族"的问题**。
 2. **README 未说明驱动名依赖**：驱动表只给「连接符/占位符」两列，读者无法得知 `$`/`:`/`?` 的正确性还取决于 `sql.Open` 用的是 `mssql` 还是 `sqlserver`。**这正是本次误判的根源，也是读者会踩的同一个坑。**
-3. **引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，不掌握驱动名，因此无法在 `Initialize()` 时校验组合一致性。
+3. ~~**引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，不掌握驱动名，因此无法在 `Initialize()` 时校验组合一致性。~~
+   **【已被后续修复取代 · 2026-10-14】** 该结论已不成立：`Initialize()` 现对 SQL Server 用**真实连接做只读参数回显**（`select @p1 /* ... */` 哨兵值比对；命中即缓存，`Db`/`ColParam` 变更后重验），错误组合返回 `ErrInvalidPlaceholderBinding`，失败时不注册内置表。**评估者此前把"`database/sql` 不暴露驱动名"误当成"无法校验"**——实际上用一条哨兵回显即可覆盖，包括 `sqlserver`+`$` 这种返回值与实参不符的静默情形。
 4. **`getSqlQuery` 无 SQLServer 分支**（`UniEngine.go:198-223`）：原始 SQL 里的 `$N` 在 `sqlserver` 驱动名下不会被改写。
 
 > **2026-10-14 说明（业主决定）**：README 驱动表 SQLServer 行已由 `$` / `$1` 改为 **`:` / `:1`**（仅文档，代码未动）。**本次实测确认该改动有效**——生产环境使用驱动名 `mssql`，而 `mssql` 下 `:`、`$`、`?` 三者都正确（实测 6/6），故新值与原值在 `mssql` 下均可用。`README.md:24` 现在与生产配置一致。

@@ -21,7 +21,13 @@
 >   `Initialize()` probes the live connection and returns
 >   `ErrInvalidPlaceholderBinding` for a mismatch before registering tables.
 >   Check its error; see §0.2 for the driver matrix.
-> - **Tests**: 120+ unit tests (~80% statement coverage, mock driver) plus
+> - **Nullable columns**: the driver scans straight into your struct fields, so a
+>   `NULL` in a column mapped to a non-nullable type (`string`/`int64`/`bool`/`time.Time`)
+>   fails the read — and for `SelectL` it discards the **whole** batch. Use
+>   `sql.NullString` / `sql.NullInt64` / pointers, or `[]byte`. The scalar helpers
+>   (`SelectS`/`SelectD`/`SelectF`) are the opposite: they scan into `sql.NullXxx`
+>   and return a zero value on `NULL`. See §3 (Chinese) for the measured matrix.
+> - **Tests**: 170+ unit tests (~88% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
 >
@@ -148,7 +154,28 @@ defer cancel()
 eror = UniEngineEx.InsertCtx(ctx, &row)
 ```
 
-##### 3.应用加密(敏感字段)
+##### 3.可空列与 NULL(读路径语义)
+
+引擎**不做 NULL 转换**:每一列直接扫进结构体对应字段,行为完全遵循 `database/sql`。真机实测(MySQL 8.4.6):
+
+| 结构体字段类型 | 库中该列为 NULL 时 |
+| --- | --- |
+| `string` / `int64` / `bool` / `time.Time` 等**不可空类型** | ❌ 报错;`SelectL` **整批丢弃**(不是跳过那一行) |
+| `[]byte` | ✅ 置为 `nil` |
+| `sql.NullString` / `sql.NullInt64` / `sql.NullFloat64` / `sql.NullTime` | ✅ `Valid=false` |
+| `*string` / `*int64` 等指针 | ✅ 置为 `nil` |
+
+- 结构体入口 `Select` / `SelectL` / `SelectM` / `SelectH` 遇 NULL 即失败,错误形如
+  `sql: Scan error on column index 1, name "v": converting NULL to string is unsupported`。
+  该错误**只给列下标与列名、不含行号**,多行结果时无法据此定位是哪一行;`SelectL` 会**整批返回空**(已扫过的行一并丢弃)。
+- **标量入口相反、是宽容的**:`SelectS`(内部 `sql.NullString`)、`SelectD`(`sql.NullInt64`)、
+  `SelectF`(`sql.NullFloat64`)遇 NULL **不报错**,分别返回 `""` / `0` / `0`。
+- 结论:**列可空时请把结构体字段声明为 `sql.NullXxx` 或指针**(推荐前者,语义最明确)。
+  否则一条 NULL 就会让整次 `SelectL` 失败——这是"查不出数据"最常见的原因。
+- 引擎**不提供**"NULL 自动降级为空值 / 跳过该行":前者会把 NULL 静默变成 `""`/`0`(判空与统计语义出错),
+  后者会让调用方无法区分"本来没有这行"与"这行读不动"。需要部分成功语义时,请在应用层按可空类型读入后自行判定。
+
+##### 4.应用加密(敏感字段)
 
 UniEngine 提供应用层加密 hook,敏感字段(密码/证件号/手机号等)写入时自动加密,读取时自动解密。
 
@@ -178,11 +205,11 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - **secreton 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
 - **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调(上限 10000000,越界时**写路径直接报错**而不是产出读不回的密文);派生密钥按"盐+迭代数+密钥指纹"缓存在引擎内,最多保留 128 项,按先入先出淘汰。冷解密仅在 GCM 认证成功后缓存派生结果;认证失败的密文不会增加缓存项。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
 - 密文格式:`ENC:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
-- **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,且**必须覆盖全部已登记主键**(复合主键缺任何一列都会在登记期报 `LastError`;主键须先于验签登记——先 `SetKeys`/`AutoKeys` 再 `SetVerify`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。保护列覆盖全部主键时,把 A 行的数据连同 MAC 一起搬到 B 行、或改写任一主键列,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
+- **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,且**必须覆盖全部已登记主键**(复合主键缺任何一列都会在登记期报 `LastError`;主键须先于验签登记——先 `SetKeys`/`AutoKeys` 再 `SetVerify`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。**`SetVerify` 成功即冻结主键**:此后 `SetKeys`/`AutoKeys`/`RegisterPkeys` 一律被拒并返回 `ErrPkeysFrozenAfterVerify`(**不写入任何主键**,`AutoKeys` 连元数据查询都不发起),需变更主键请重新 `RegisterClass` 后按 `[SetKeys/AutoKeys → SetVerify]` 顺序登记。保护列覆盖全部主键时,把 A 行的数据连同 MAC 一起搬到 B 行、或改写任一主键列,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
 - **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。缺省 `VerifyMacVer=0` 现在写 v2 无歧义载荷(`MAC2:`);`VerifyMacVer=2` 同样写 v2,只有显式设置 `VerifyMacVer=1` 才写旧 v1(`MAC:`)。读取按标签识别版本,存量 v1 行仍可验签。升级后新写入和更新的行自动写 v2;存量行需分批读出并更新重签,全表转为 v2 后才获得完整防歧义保证。
 - **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
 
-##### 3.1.存量数据鉴别与迁移
+##### 4.1.存量数据鉴别与迁移
 
 开启加密后,库中会存在两类数据:加密前的存量明文、加密后的密文。
 读取时自动鉴别:
@@ -210,7 +237,7 @@ for i := range users {
 因此轮换后**旧密钥写出的存量密文将无法再解密**——轮换必须配套迁移(用旧密钥读出、
 用新密钥重写),或自行以 `SecretHook` 接管以实现多密钥共存。
 
-##### 4.从旧版本迁移(SpecialInsert → CopyIn)
+##### 5.从旧版本迁移(SpecialInsert → CopyIn)
 
 `SpecialInsert*` 系列方法更名为 `CopyIn*`(语义即 PostgreSQL 的 COPY IN 协议):
 
@@ -289,7 +316,7 @@ UNIENGINE_MYSQL_DB=demo go test ./integration/ -run MySQL -v
 
 | job | 族 | 触发 | 说明 |
 | --- | -- | ---- | ---- |
-| `build-test` | — | 每次 push/PR | Go 1.24–1.27 矩阵:`build`/`vet`/`gofmt`/`test -race` + **覆盖率门槛 75%** + 基准 smoke + 10s fuzz smoke |
+| `build-test` | — | 每次 push/PR | Go 1.24–1.27 矩阵:`build`/`vet`/`gofmt`/`test -race` + **覆盖率门槛 80%** + 基准 smoke + 10s fuzz smoke |
 | `integration-pg` | PostgreSQL 16 | 每次 push/PR | `postgres:16-alpine` service 容器 |
 | `integration-mysql` | MySQL 8.4 | 每次 push/PR | `mysql:8.4` service 容器 |
 | `integration-heavy` | SQL Server 2022 + Oracle Free 23 | **每日定时 + 手动** | 重容器(各 1–2 GB / 30–90s 就绪),不阻塞 PR,次日暴露腐化;失败时打印容器日志 |

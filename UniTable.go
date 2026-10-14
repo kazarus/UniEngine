@@ -10,10 +10,16 @@ import (
 )
 
 type TUniTable struct {
-	IPriority int64  `db:"i_priority" json:"iPriority"`
+	IPriority int64 `db:"i_priority" json:"iPriority"`
+
+	// ParentTab 父表名。引擎内部未使用(全仓库零引用),保留仅为兼容既有调用方。
+	// Deprecated: 设置它不会产生任何效果。
 	ParentTab string `db:"parent_tab" json:"parentTab"`
+
 	TableName string `db:"table_name" json:"tableName"`
 
+	// SqlSelect/SqlInsert/SqlUpdate/SqlDelete 是 PrepareRunSQL 生成结果的留痕(按 EtSelect/
+	// EtInsert/EtUpdate/EtDelete 分别写入);引擎不读回它们,仅供调用方取用与排查。
 	SqlSelect string `db:"sql_select" json:"sqlSelect"`
 	SqlInsert string `db:"sql_insert" json:"sqlInsert"`
 	SqlUpdate string `db:"sql_update" json:"sqlUpdate"`
@@ -146,6 +152,14 @@ func (this *TUniTable) pkeyFields() []TUniField {
 	return Result
 }
 
+// isPkeyUsable 判断字段能否拼进 WHERE 作定位键:必须有真实列名。
+// 只读**标记**字段(db:"-" / db:"_")的 FieldName 就是标记本身,拼进去会得到 "-=?" 这类非法 SQL。
+// 注意与 ReadOnly 的区别:db:"created_at,readonly" 有真实列名,作定位键是合法的。
+// PrepareRunSQL(EtSelect) 与 pkeyFields()(Delete/Update/SaveIt 的 WHERE)共用本口径。
+func isPkeyUsable(ItemPara TUniField) bool {
+	return ItemPara.FieldName != "-" && ItemPara.FieldName != "_"
+}
+
 // secretColumn 判断写入路径是否对该列应用加密:主键值一律保持明文
 // (WHERE 定位行的语义,密文无法与库中存量匹配),仅数据列参与应用加密。
 // SetSecret/SetKeys/AutoKeys 已在登记时双向拒绝 secreton×主键,
@@ -168,6 +182,14 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 		return this
 	}
 
+	//#SetVerify 是元数据配置的终点:主键集合已与保护列绑定,此后再追加主键会让
+	//#"主键必须全部纳入 MAC 载荷"这一保证失效(评审 Q2 的顺序变体)。在变更前直接拒绝,
+	//#不写入任何主键;需变更请重新 RegisterClass 后按 [SetKeys/AutoKeys → SetVerify] 顺序登记
+	if this.VerifyOn {
+		this.LastError = fmt.Errorf("%w: table[%s] SetKeys is not allowed after SetVerify; register pkeys before SetVerify (re-register the class to change pkeys)", ErrPkeysFrozenAfterVerify, this.TableName)
+		return this
+	}
+
 	for _, ItemPara := range Fields {
 		FieldName, Ok := ItemPara.(string)
 		if !Ok {
@@ -184,6 +206,15 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if Field.SecretOn {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey Values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(FieldName))
+			return this
+		}
+
+		//#只读标记字段(db:"-" / db:"_")的 FieldName 就是标记本身,没有真实列名:当主键会生成
+		//#非法 SQL(如 "-=?"),而 pkeyFields 只过滤 AttriName 为空、不过滤 ReadOnly,
+		//#故 Update/Delete/SaveIt/SaveItWhenNotExist 的 WHERE 会一并语法错误。
+		//#这里只拦"标记字段":db:"real_col,readonly" 有真实列名,作 WHERE 定位键是合法的
+		if Field.FieldName == "-" || Field.FieldName == "_" {
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a readonly marker (db:\"-\" / db:\"_\") without a real column name; it can not be a pkey", this.TableName, Field.FieldName)
 			return this
 		}
 
@@ -358,6 +389,12 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 // AutoKeys 按数据库元数据自动登记主键。UniEngineEx 为引擎指针(第二阶段起不再按值拷贝)。
 func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...interface{}) error {
+	//#同 SetKeys:SetVerify 之后主键冻结,不再从库元数据追加(评审 Q2 顺序变体)。
+	//#置于最前,连元数据查询都不发起
+	if this.VerifyOn {
+		return fmt.Errorf("%w: table[%s] AutoKeys is not allowed after SetVerify; register pkeys before SetVerify (re-register the class to change pkeys)", ErrPkeysFrozenAfterVerify, this.TableName)
+	}
+
 	var SQL string
 
 	if len(GetSqlAutoKeys) > 0 {

@@ -48,12 +48,31 @@ type TUniEngine struct {
 
 	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 
-	Instance    string     //#数据库实例
-	DataBase    string     //#数据库名称
-	DataUser    string     //#数据库用户
-	Provider    TDriveType //#数据库驱动标识
-	Supplier    TDriveType //#数据库驱动标识(区分 DtORACLE VS DtDAMENG)
-	ProvideName string     //#数据库驱动名称
+	// Instance 数据库实例名。引擎内部未使用(全仓库零引用),保留仅为兼容既有调用方。
+	// Deprecated: 设置它不会产生任何效果;需要实例名的场景请自行维护或经 SQL 传递。
+	Instance string
+
+	// DataBase 数据库名称。MySQL 族的元数据探测(Exist*/ExistConst/AutoKeys/IfDropView)
+	// 走 information_schema,必须提供库名,否则报 "database is not specified";其余族无需该字段。
+	DataBase string
+
+	// DataUser 数据库用户。引擎内部未使用(全仓库零引用),保留仅为兼容既有调用方。
+	// Deprecated: 设置它不会产生任何效果。
+	DataUser string
+
+	// Provider 数据库驱动标识:决定协议族(占位符风格/标识符引用/元数据目录/upsert 语法/
+	// INSERT ALL/COPY 白名单)。方言相关的一切分支都只看本字段。
+	Provider TDriveType
+
+	// Supplier **仅**用于 InsertP 的批量路由:PolarDB 时改走 COPY 协议,其余走多行 INSERT
+	// (见 UniCopyIn.go 的 insertPage)。引擎内部从不赋值,须由调用方显式设置;
+	// 它与 Provider 是两套开关——只设 Provider=DtPOLODB 不会让 InsertP 走 COPY,
+	// 而 Supplier=DtPOLODB 配非 PG 族 Provider 会让 InsertP 直接报错。
+	Supplier TDriveType
+
+	// ProvideName 数据库驱动名称。引擎内部未使用(全仓库零引用)。
+	// Deprecated: 设置它不会产生任何效果。
+	ProvideName string
 
 	tx       *sql.Tx //#当前事务(Begin 之后非 nil)
 	inTx     bool    //#事务进行中(期间调用须串行)
