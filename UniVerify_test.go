@@ -101,7 +101,7 @@ func TestSetVerifyValidation(t *testing.T) {
 
 		item.call(tab)
 
-		if tab.Err == nil {
+		if tab.LastError == nil {
 			t.Fatalf("case[%s] should fail", item.name)
 		}
 		if tab.VerifyOn {
