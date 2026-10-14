@@ -48,11 +48,12 @@ type TUniEngine struct {
 
 	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 
-	Instance string     //#数据库实例
-	DataBase string     //#数据库名称
-	DataUser string     //#数据库用户
-	Provider TDriveType //#数据库驱动
-	Supplier TDriveType //#数据库驱动(区分 DtORACLE VS DtDAMENG)
+	Instance    string     //#数据库实例
+	DataBase    string     //#数据库名称
+	DataUser    string     //#数据库用户
+	Provider    TDriveType //#数据库驱动标识
+	Supplier    TDriveType //#数据库驱动标识(区分 DtORACLE VS DtDAMENG)
+	ProvideName string     //#数据库驱动名称
 
 	tx       *sql.Tx //#当前事务(Begin 之后非 nil)
 	inTx     bool    //#事务进行中(期间调用须串行)

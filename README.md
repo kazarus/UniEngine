@@ -17,10 +17,10 @@
 > - **Concurrency**: query/write paths are safe for concurrent use; calls must be
 >   serialized only while a transaction is open. The engine must always be used
 >   as `*TUniEngine` — by-value copies are rejected by `go vet`.
-> - **⚠️ SQL Server pitfall**: the placeholder must match the *driver name*. With
->   `mssql` the driver rewrites `:`/`$`/`?` to `@pN`; with `sqlserver` only `@pN`
->   works, and `$N` is silently treated as a **money literal** — the statement
->   "succeeds" while writing wrong data. See §0.2 (Chinese) for the full table.
+> - **SQL Server binding check**: the placeholder must match the *driver name*.
+>   `Initialize()` probes the live connection and returns
+>   `ErrInvalidPlaceholderBinding` for a mismatch before registering tables.
+>   Check its error; see §0.2 for the driver matrix.
 > - **Tests**: 120+ unit tests (~80% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
@@ -36,6 +36,7 @@ UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 
 
 > 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
 > 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
+> 同表 `RegisterTable/RegisterField/RegisterPkeys` 会发布新的元数据快照;已经开始的调用使用原快照,后续调用读取新快照。不要在并发使用期间直接修改已返回的 `*TUniTable` 或其 map/slice。
 > 另:**引擎不得按值拷贝**——请一律使用 `*TUniEngine`。拷贝会复制 `tx`/`inTx` 等值字段却共享 `mu`,副本 Begin 之后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。该约束已由 `noCopy` + `go vet`(copylocks 分析器)在静态检查阶段强制,CI 有门禁。
 > 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
 
@@ -58,7 +59,7 @@ Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等�
 
 ##### 0.2.SQL Server 驱动名与占位符
 
-SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱动名**。go-mssqldb 注册了两个名字,预处理行为相反:
+SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱动名**。go-mssqldb 注册了两个名字,预处理行为相反。下表描述原始驱动行为;引擎在 `Initialize()` 时拦截错误组合:
 
 | sql.Open 驱动名 | 引擎 ColParam | 实际效果 |
 | --------------- | ------------- | -------- |
@@ -78,9 +79,9 @@ db, _ := sql.Open("sqlserver", DbSource)
 UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Provider: UniEngine.DtSQLSRV}
 ```
 
-> **`sqlserver` + `$` 是本引擎最危险的组合**:`$N` 在 T-SQL 里是合法的 **money 字面量**(`$1` 恒等于 1.0000,与传入实参无关),既不报错也不绑定实参——语句"执行成功"、引擎返回 `nil`,但 INSERT 写入的是占位符序号字面量、UPDATE 改错行、DELETE 删错行。**全程无任何错误提示**,只能靠数据比对发现。若曾使用该组合,建议审计历史数据(可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串)。
+> **初始化校验**:`UniEngineEx.Initialize()` 在 SQL Server 族上用实际连接执行只读参数回显。占位符未真正绑定时返回 `ErrInvalidPlaceholderBinding`,且不登记内置表。务必处理初始化错误;后续执行入口也会在配置变动或跳过初始化时检查。`$N` 在 T-SQL 中是 **money 字面量**;旧版本使用 `sqlserver` + `$` 的部署可能已有错误数据,建议审计历史数据(可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串)。
 >
-> 两种驱动名下**没有通用取值**:`@p` 在 `mssql` 下报 `expected 0 arguments`,而 `:`/`$`/`?` 在 `sqlserver` 下报语法错误或静默写错——请按驱动名选择 `ColParam`。
+> 两种驱动名下**没有通用取值**:`@p` 在 `mssql` 下报 `expected 0 arguments`,而 `:`/`$`/`?` 在 `sqlserver` 下不能正确绑定——请按驱动名选择 `ColParam`。
 >
 > 现代写法与 `mssql` 同语义(同样只接受 `:`/`$`/`?`):`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`。
 
@@ -119,7 +120,9 @@ UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provi
 //#MySQL 族走 information_schema:ExistTable/ExistViews/ExistField/ExistConst/IfDropView 与 AutoKeys 均需库名,
 //#缺省报 `UniEngine: database is not specified`(其余族由连接或库自身元数据获得,无需该字段)
 UniEngineEx.DataBase = "kz2020_gcgl_demo"
-UniEngineEx.Initialize()
+if eror := UniEngineEx.Initialize(); eror != nil {
+  return eror
+}
 
 //#根据数据库元数据,主动获取主键
 var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
@@ -173,10 +176,11 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - 手工注册的字段可用 `.SetSecret("password")` 标记加密
 - 主键字段请勿标记 secreton(密文含随机nonce,无法用于匹配)
 - **secreton 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
-- **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调(上限 10000000,越界时**写路径直接报错**而不是产出读不回的密文);派生密钥按"盐+迭代数+密钥指纹"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
+- **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调(上限 10000000,越界时**写路径直接报错**而不是产出读不回的密文);派生密钥按"盐+迭代数+密钥指纹"缓存在引擎内,最多保留 128 项,按先入先出淘汰。冷解密仅在 GCM 认证成功后缓存派生结果;认证失败的密文不会增加缓存项。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
 - 密文格式:`ENC:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
 - **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,且**必须覆盖全部已登记主键**(复合主键缺任何一列都会在登记期报 `LastError`;主键须先于验签登记——先 `SetKeys`/`AutoKeys` 再 `SetVerify`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。保护列覆盖全部主键时,把 A 行的数据连同 MAC 一起搬到 B 行、或改写任一主键列,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
-- **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。`VerifyMacVer=2`(新)改用无歧义编码——逐列"列名+值长度+值字节",值中任意字节均被长度界定,构造性消除歧义;读写以标签自识别(`MAC:`=v1 / `MAC2:`=v2),**存量 v1 行升级后仍可正常验签**。迁移步骤:①升级代码(缺省仍写 v1,灰度无感)→ ②上线 `VerifyMacVer=2`(新写入/更新落 v2)→ ③存量重签(全表读出再写回,Update 路径自动重算 MAC,可分批)→ ④完整防碰撞保证以全表 v2 为准。缺省 `VerifyMacVer=0/1` 保持 v1 行为不变
+- **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。缺省 `VerifyMacVer=0` 现在写 v2 无歧义载荷(`MAC2:`);`VerifyMacVer=2` 同样写 v2,只有显式设置 `VerifyMacVer=1` 才写旧 v1(`MAC:`)。读取按标签识别版本,存量 v1 行仍可验签。升级后新写入和更新的行自动写 v2;存量行需分批读出并更新重签,全表转为 v2 后才获得完整防歧义保证。
+- **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
 
 ##### 3.1.存量数据鉴别与迁移
 

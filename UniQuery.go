@@ -93,8 +93,8 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	FieldIdx := make([]int, length)
 	EncryIdx := make([]int, 0, 2)
 
-	//#完整性验签预解析:SELECT 列覆盖全部保护列与 MAC 列时返回上下文,
-	//#否则为 nil(partial select 无法还原载荷,该行跳过验签)
+	//#完整性验签预解析:SELECT 列覆盖全部保护列与 MAC 列时返回上下文;
+	//#宽容模式下部分列查询沿用跳过验签语义,严格模式返回 ErrIncompleteVerification。
 	var RowVerify *verifyRowCtx
 
 	if !HasHook {

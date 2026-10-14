@@ -7,7 +7,7 @@
 // 装配引擎 → 登记类 → 调用查询/写入方法:
 //
 //	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provider: UniEngine.DtMYSQLN}
-//	_ = eng.Initialize()
+//	if err := eng.Initialize(); err != nil { return err }
 //	_ = eng.RegisterClass(TUser{}, "t_user").SetKeys("user_indx").SetSecret("password").LastError
 //
 //	eror := eng.SaveIt(&user)                       // 方言原生 UPSERT(PG on conflict / Oracle·SQLServer merge)
@@ -23,12 +23,14 @@
 //
 // 注意 ColParam 必须与 sql.Open 所用的**驱动名**匹配,SQL Server 尤其关键:
 // go-mssqldb 的 "mssql" 会把 ? / :N / $N 预处理为 @pN,而 "sqlserver" 只认 @pN——
-// 用错组合不会报错却会写错数据。详见 README 的 0.1 / 0.2 两节。
+// Initialize 会用实际 SQL Server 连接做只读绑定回显,错误组合返回
+// ErrInvalidPlaceholderBinding,调用方必须处理初始化错误。详见 README 的 0.1 / 0.2 两节。
 //
 // # 并发契约
 //
 // 查询与写入路径并发安全:预备语句是局部变量,查询仅持读锁完成注册表/事务查找,
-// Register* 可与查询并发执行。三个例外:
+// Register* 可与查询并发执行;同表登记以新元数据快照发布,调用方不要直接并发修改
+// 已返回表指针内的 map/slice。三个例外:
 //   - 事务期间(Begin 与 Commit/Cancel 之间)调用须串行——底层 *sql.Tx 非并发安全;
 //   - 配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更
 //     (SetKeys/SetSecret/SetVerify/AutoKeys/PrepareTables/PrepareRunSQL)
@@ -41,7 +43,8 @@
 //
 // 报错点以哨兵错误(见 errors.go)加 %w 包装,调用方应使用 errors.Is 判别而非匹配文本:
 // ErrUnregisteredClass / ErrNoPkeys / ErrNilParam / ErrInvalidTableName /
-// ErrInvalidFieldName / ErrInvalidConstraintName / ErrNoTransaction / ErrAlreadyInTransaction。
+// ErrInvalidFieldName / ErrInvalidConstraintName / ErrNoTransaction / ErrAlreadyInTransaction /
+// ErrInvalidPlaceholderBinding / ErrIncompleteVerification。
 // 注册类 API(RegisterClass/RegisterTable/RegisterField/RegisterPkeys)遇到非法输入时不 panic,
 // 而是返回**带 LastError 的未注册表**,便于链式调用在链尾统一检查。
 //
@@ -51,6 +54,9 @@
 // 内置实现为 PBKDF2-HMAC-SHA256 派生密钥 + AES-256-GCM(密文自包含盐与迭代数);
 // SecretHook 可接管为业务密钥/国密/加密机。存量明文(无 ENC: 标签)读取时直通,便于渐进迁移。
 // 另提供存储完整性校验(SetVerify):对登记的保护列写时签名、读时验签。
+// 缺省写 MAC2 v2;显式 VerifyMacVer=1 才写旧 v1,旧行读取仍兼容。严格模式下
+// 缺保护列或 MAC 列的结构体查询返回 ErrIncompleteVerification。内置解密的
+// 派生密钥缓存最多 128 项,认证失败的冷密文不会进入缓存。
 //
 // # 模块布局
 //

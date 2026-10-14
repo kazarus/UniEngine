@@ -148,13 +148,18 @@ driver *name* changes the rules:
 | `sqlserver` | `:` / `?` | server-side syntax error |
 | `sqlserver` | `$` | **silently writes wrong data** — `$N` is a T-SQL *money literal* |
 
-There is **no value that works for both driver names**, so this cannot be fixed
-by picking a different constant — only by documentation plus (optionally) a
-config check. Oracle/MySQL/PostgreSQL fail loudly on a wrong placeholder.
+There is **no value that works for both driver names**. `Initialize()` probes
+the live SQL Server connection with a read-only bound parameter and returns
+`ErrInvalidPlaceholderBinding` before publishing registry entries if the value
+does not bind. Callers must handle the initialization error. A change in `Db`
+or `ColParam` triggers validation again before SQL execution. The table above
+shows raw driver behavior; older deployments using `sqlserver` + `$` may need
+historical data review.
 
-Any change to this area requires running `TestMSSQLPlaceholderContract` and
-`TestMSSQLRoundTripMatrix` against a real SQL Server; a mock driver that records
-SQL text cannot tell "the SQL contains `$1`" from "the parameter was bound".
+Any change to this area requires running `TestMSSQLPlaceholderContract`,
+`TestMSSQLRoundTripMatrix`, and `TestMSSQLInitializeRejectsMismatchedBinding`
+against a real SQL Server; a mock driver that records SQL text cannot tell
+"the SQL contains `$1`" from "the parameter was bound".
 
 ## 7. Integration tests
 
