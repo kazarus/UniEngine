@@ -162,6 +162,11 @@ func (this *TUniEngine) InsertP(i interface{}, PageSize int64, TableName ...stri
 
 func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
 
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
+	if eror := nilParamOf("InsertP", i); eror != nil {
+		return eror
+	}
+
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
 	}
@@ -223,6 +228,11 @@ func (this *TUniEngine) SpecialInsertPCtx(Ctx context.Context, i interface{}, Pa
 }
 
 func (this *TUniEngine) CopyInPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
+
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
+	if eror := nilParamOf("CopyInP", i); eror != nil {
+		return eror
+	}
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999

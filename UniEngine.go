@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -136,8 +137,6 @@ func (this *TUniEngine) currentTx() *sql.Tx {
 }
 
 // validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
-
-// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
 func validIdent(name string) bool {
 
 	if name == "" {
@@ -151,6 +150,22 @@ func validIdent(name string) bool {
 	}
 
 	return true
+}
+
+// nilParamOf 公共入口的 nil 参数统一校验:裸 nil 与 typed nil 均返回 ErrNilParam 包装错误。
+// 判断只依赖 reflect.ValueOf(对裸 nil 安全),调用方必须在本函数之后才允许 reflect.TypeOf/Kind
+// ——裸 nil 时 TypeOf 返回 nil Type,直接取 Kind 会空指针解引用(评审 P0 缺陷根源)。
+func nilParamOf(Method string, i interface{}) error {
+
+	if i == nil {
+		return fmt.Errorf("%w: method [%s] got a nil param; check your code;", ErrNilParam, Method)
+	}
+
+	if rv := reflect.ValueOf(i); rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return fmt.Errorf("%w: method [%s] got a nil pointer param; check your code;", ErrNilParam, Method)
+	}
+
+	return nil
 }
 
 func (this *TUniEngine) getValParam(aIndex int) string {

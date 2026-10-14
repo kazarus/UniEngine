@@ -24,14 +24,14 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 		TablName = TableName[0]
 	}
 
+	//#nil 校验必须先于 reflect.TypeOf/Kind:裸 nil 时 TypeOf 返回 nil Type,取 Kind 直接 panic
+	if eror := nilParamOf(Method, i); eror != nil {
+		return nil, reflect.Value{}, "", eror
+	}
+
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
-	}
-
-	//#typed nil 指针:Indirect 返回零值 Value,后续反射取值会 panic,此处显式拒绝
-	if rv := reflect.ValueOf(i); rv.Kind() == reflect.Ptr && rv.IsNil() {
-		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] got a nil pointer param; check your code;", Method)
 	}
 
 	if WantKind == reflect.Slice {
