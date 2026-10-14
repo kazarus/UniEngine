@@ -6,6 +6,8 @@ package UniEngine
 import (
 	"database/sql"
 	"database/sql/driver"
+	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -492,5 +494,123 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	tab3.SetVerify("mac_text", "data_stat", "mast_name")
 	if tab3.LastError != nil {
 		t.Fatalf("VerifyUnkeyed 应放行, got %v", tab3.LastError)
+	}
+}
+
+// #测试16:SetVerify 是配置终点——主键冻结,SetKeys/AutoKeys/RegisterPkeys 一律拒绝
+// #(评审 Q2 顺序变体:事后追加主键会让"主键须全部纳入 MAC 载荷"失效)
+func TestPkeysFrozenAfterSetVerify(t *testing.T) {
+	eng := newVerifyTestEngine(&mockDriver{})
+	tab := eng.GetTable("tbl_verify_row")
+	if tab == nil || !tab.VerifyOn {
+		t.Fatal("前置:表应已成功启用验签")
+	}
+	Before := len(tab.HashPkeys)
+
+	//#① SetKeys:拒绝,且不得真的写入主键
+	if eror := tab.SetKeys("data_stat").LastError; !errors.Is(eror, ErrPkeysFrozenAfterVerify) {
+		t.Fatalf("SetVerify 后 SetKeys 应被拒(ErrPkeysFrozenAfterVerify), got %v", eror)
+	}
+	if len(tab.HashPkeys) != Before {
+		t.Fatalf("被拒的 SetKeys 不得改变主键集合: %d → %d", Before, len(tab.HashPkeys))
+	}
+
+	//#② AutoKeys:拒绝,且不发起元数据查询(守卫在最前)
+	if eror := tab.AutoKeys(eng, TAutoKeys4POSTGR{}); !errors.Is(eror, ErrPkeysFrozenAfterVerify) {
+		t.Fatalf("SetVerify 后 AutoKeys 应被拒, got %v", eror)
+	}
+	if len(tab.HashPkeys) != Before {
+		t.Fatalf("被拒的 AutoKeys 不得改变主键集合")
+	}
+
+	//#③ 引擎侧 RegisterPkeys:拒绝,且已发布快照的主键集合不得变化
+	if eror := eng.RegisterPkeys("tbl_verify_row", "mast_name").LastError; !errors.Is(eror, ErrPkeysFrozenAfterVerify) {
+		t.Fatalf("SetVerify 后 RegisterPkeys 应被拒, got %v", eror)
+	}
+	if _, Ok := eng.GetTable("tbl_verify_row").HashPkeys["mast_name"]; Ok {
+		t.Fatal("被拒的 RegisterPkeys 不得加入主键")
+	}
+
+	//#④ 被拒只影响后续登记,不影响数据面:验签读写仍按原绑定工作
+	d := &mockDriver{columns: verifyRowColumns(), queryRows: [][]driver.Value{{int64(1), int64(2), int64(1), "ok", ""}}}
+	eng2 := newVerifyTestEngine(d)
+	eng2.GetTable("tbl_verify_row").SetKeys("data_stat") //#被拒,但不应妨碍读取
+	var got TVerifyRow
+	if eror := eng2.Select(&got, "select who_build,user_indx,data_stat,mast_name,mac_text from tbl_verify_row where who_build=1"); eror != nil {
+		t.Fatalf("登记被拒不应影响数据面读取, got %v", eror)
+	}
+}
+
+// #测试17:SetVerify 失败(未置 VerifyOn)时主键不得被冻结——避免误伤正常登记顺序
+func TestPkeysNotFrozenWhenSetVerifyFails(t *testing.T) {
+	eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+
+	tab := eng.RegisterClass(TVerifyRow{}, "tbl_nofreeze").SetKeys("who_build")
+	if eror := tab.SetVerify("mac_text", "no_such_col").LastError; eror == nil {
+		t.Fatal("前置:引用未登记列的 SetVerify 应失败")
+	}
+	if tab.VerifyOn {
+		t.Fatal("前置:失败的 SetVerify 不应置 VerifyOn")
+	}
+
+	//#失败的登记调用会留下 LastError,而 LastError 会让后续链式登记短路(既有的独立机制)。
+	//#这里模拟"调用方改对配置后继续登记":清掉该错误,再验证主键**未**被冻结
+	tab.LastError = nil
+
+	//#未启用验签 ⇒ 主键未冻结,仍可补登
+	if eror := tab.SetKeys("user_indx").LastError; eror != nil {
+		t.Fatalf("VerifyOn=false 时 SetKeys 不应被拒, got %v", eror)
+	}
+	if _, Ok := tab.HashPkeys["user_indx"]; !Ok {
+		t.Fatal("SetKeys 应已加入主键")
+	}
+}
+
+// #测试18:verifyFormat 的类型覆盖与不支持类型的稳定报错(载荷逐列格式化器,此前仅 30% 覆盖)
+func TestVerifyFormatKinds(t *testing.T) {
+	cases := []struct {
+		name string
+		in   interface{}
+		want string
+	}{
+		{"string", "abc", "abc"},
+		{"空串", "", ""},
+		{"含分隔符", "a\x1fb", "a\x1fb"},
+		{"int", int(7), "7"},
+		{"int8", int8(-8), "-8"},
+		{"int16", int16(16), "16"},
+		{"int32", int32(32), "32"},
+		{"int64", int64(-64), "-64"},
+		{"uint", uint(7), "7"},
+		{"uint8", uint8(8), "8"},
+		{"uint16", uint16(16), "16"},
+		{"uint32", uint32(32), "32"},
+		{"uint64", uint64(64), "64"},
+		{"float32", float32(1.5), "1.5"},
+		{"float64", float64(1.5), "1.5"},
+		{"float64 零", float64(0), "0"},
+		{"float64 负", float64(-2.25), "-2.25"},
+		{"bool true", true, "1"},
+		{"bool false", false, "0"},
+	}
+
+	for _, c := range cases {
+		got, eror := verifyFormat(reflect.ValueOf(c.in))
+		if eror != nil {
+			t.Fatalf("%s: unexpected error: %v", c.name, eror)
+		}
+		if string(got) != c.want {
+			t.Fatalf("%s: verifyFormat=%q, want %q", c.name, got, c.want)
+		}
+	}
+
+	//#不支持的 kind 必须稳定报错,而不是 panic 或静默空串
+	for _, bad := range []interface{}{
+		[]byte("x"), struct{ A int }{1}, map[string]int{"a": 1}, new(int),
+	} {
+		if _, eror := verifyFormat(reflect.ValueOf(bad)); eror == nil {
+			t.Fatalf("kind %T 应报不支持", bad)
+		}
 	}
 }

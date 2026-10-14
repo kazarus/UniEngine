@@ -2,32 +2,39 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
-## master-20261014(质量评审后续修复)
+## master-20261014
+
+> **结构说明（2026-10-14）**：本段原为**三个同名的 `## master-20261014` 标题**（质量评审后续修复 / 代码质量评审修复 / 早期批次），读者无法判断哪个是当前段。现合并为**一个发布段**：原三组降为 `###` 主题，组内子标题相应降一级。**内容与顺序未改动。**
+
+### 质量评审后续修复
 
 - SQL Server 在 `TUniEngine.Initialize()` 使用真实连接进行只读参数回显;占位符未绑定时返回 `ErrInvalidPlaceholderBinding`,且初始化不会登记内置表。调用方必须检查初始化错误。数据库或 `ColParam` 变更后,执行入口会重新验证。`integration/mssql_test.go` 的 16 个真库子例已通过,覆盖绑定矩阵、有效组合读写和错误组合初始化拒绝。
 - 同表 `RegisterTable/RegisterField/RegisterPkeys` 改为复制并发布元数据快照,允许与读取并发;已取得的旧指针继续使用旧快照。直接修改返回的 `*TUniTable` 仍须遵守并发契约。
 - 缺省 `VerifyMacVer=0` 改为写 `MAC2:` v2 载荷;显式 `VerifyMacVer=1` 保留旧 v1 写法。读取仍按标签兼容 v1 行,但存量数据需要重签才能全面获得 v2 防歧义保证。
 - `VerifyMode=2` 的结构体读取若缺保护列或 MAC 列,或使用无法由引擎验签的结果钩子,现在返回 `ErrIncompleteVerification`。
 - 内置派生密钥缓存最多 128 项;冷解密仅在 GCM 认证通过后缓存派生结果。
+- **`SetVerify` 之后主键冻结**(评审 Q2 的顺序变体,安全收紧):此前可在 `SetVerify` 成功后继续用 `SetKeys`/`AutoKeys`/`RegisterPkeys` 追加主键,使「主键必须全部纳入 MAC 载荷」这一保证失效(实测:事后追加的主键列被改写,原 MAC 仍通过验签)。现在这三种调用一律被拒并返回 `ErrPkeysFrozenAfterVerify`,且**不写入任何主键**;`AutoKeys` 的守卫置于最前,连元数据查询都不发起;`RegisterPkeys` 直接返回未注册表,**不克隆也不发布**,已发布快照的主键集合不变。被拒只影响后续登记,数据面读写与既有绑定不受影响。需变更主键请重新 `RegisterClass` 后按 `[SetKeys/AutoKeys → SetVerify]` 顺序登记;`VerifyOn=false`(含 `SetVerify` 失败)时主键不冻结,正常登记顺序不受影响。
+- **`SetKeys` 拒绝只读标记字段作主键**(评估发现,行为收紧):`db:"-"` / `db:"_"` 的 `FieldName` 就是标记本身、**没有真实列名**,作主键会生成 `-=?` 这类非法 WHERE;而 `pkeyFields` 只过滤 `AttriName` 为空、**不过滤 `ReadOnly`**,故 `Update`/`Delete`/`SaveIt`/`SaveItWhenNotExist` 的 WHERE 会一并语法错误(真机实测 `Error 1064 (42000)`),`PrepareRunSQL(EtDelete)` 同理。现在登记期直接拒绝且不写入主键。**只拦标记字段**:`db:"real_col,readonly"` 有真实列名,作 WHERE 定位键依然合法(回归用例 `TestSetKeysRejectsReadonlyMarker` 含该正向对照)。其余入口本已封住——`RegisterPkeys("-")` 被标识符白名单拒绝,`AutoKeys` 取库内真实列名。
+- **文档:可空列与 NULL 的读路径语义**(评估发现,仅文档):README 新增 `3.可空列与 NULL`,写明真机实测矩阵——不可空字段(`string`/`int64`/`bool`/`time.Time`)遇 NULL 会**报错且 `SelectL` 整批丢弃**(0 行,错误只给列下标与列名、不含行号);`[]byte`、`sql.NullXxx`、指针则正常。同时记明**引擎自身的两种相反策略**:结构体入口报错,而标量入口 `SelectS`/`SelectD`/`SelectF` 内部用 `sql.NullXxx`、NULL 时返回零值不报错。`doc.go` 同步补充。引擎不做静默降级(会把 NULL 变成 `""`/`0` 或让调用方无法区分"没有这行"与"读不动"),需部分成功语义时请在应用层按可空类型读入后判定。
+- **回归测试补全与覆盖率门槛上调**(评估 T1 批次):新增 **14 条**用例——`PrepareRunSQLEtDelete` 四情形(正常/复合主键按登记序/无主键拒绝/未注册表)、分页路径(`InsertP` 页数与参数守恒、`CopyInP` 方言路由、`insertPage` 的 `Supplier=DtPOLODB` 分支、四个废弃别名)、元数据探测(`Exist*` 共用收尾的真/假分支、非法标识符、MySQL 缺 `DataBase`、`IfDropView` 两种情形、`ExecuteMust` 的 0 行/1 行/驱动错误)、以及 `verifyFormat` 的类型全覆盖与不支持 kind 的稳定报错。根模块语句覆盖率 **82.4% → 88.0%**：`UniMeta.go` 41.9%→91.9%、`UniCopyIn.go` 45.6%→97.1%、`insertPage` 0%→100%、`InsertPCtx`/`CopyInPCtx` 8.7%→91.3%、`verifyFormat` 30%→100%。CI 覆盖率门槛由 **75% 上调至 80%**。
+- **清理与口径对齐**(评估 T1 批次):`TUniEngine.Instance`/`.DataUser`/`.ProvideName` 与 `TUniTable.ParentTab` 标注 `Deprecated`(引擎内部零引用,设置无效),`Supplier` 的注释改为其真实用途(`InsertP` 的 PolarDB→COPY 路由,且引擎从不赋值),`SqlSelect~SqlDelete` 注明是 `PrepareRunSQL` 的结果留痕;**`PrepareRunSQL(EtSelect)` 的 WHERE 改为只跳过只读标记字段**(经新增的 `isPkeyUsable`),使 `db:"col,readonly"` 这类**有真实列名的只读列**能作定位键,与 `Delete/Update/SaveIt` 的 `pkeyFields()` 口径一致(此前会被跳过,导致 WHERE 漏掉该主键)。
 
-## master-20261014(代码质量评审修复:第一批 + 第二批)
+### 代码质量评审修复（第一批 + 第二批）
 
 依据 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68/100)分两批修复 6 项 P1;修复设计见 `FIX_DESIGN_BATCH2_2026-10-14.md`。
 
-### 第二批(行为变更,升级须读)
+#### 第二批(行为变更,升级须读)
 
 - **`SetVerify` 强制覆盖全部已登记主键**(评审 Q2,破坏性收紧):此前复合主键只需保护其中一列即可登记,未保护的主键列被改写仍能通过严格验签。现在缺任何主键列都报 `LastError` 并列出缺失列;主键须先于验签登记(先 `SetKeys`/`AutoKeys` 再 `SetVerify`,顺序颠倒显式报错)。逃生门 `VerifyUnkeyed=true` 语义不变。
 - **MAC 载荷 v2(评审 Q1,当时的第二批行为)**:该批引入 `VerifyMacVer=2` 以启用无歧义载荷;上方后续修复已将缺省写入改为 v2。读取仍按标签兼容旧 v1 行。迁移步骤见 README「MAC 载荷版本与防碰撞迁移」。
 - **占位符转换改为 SQL 词法扫描**(评审 Q5,含破坏性报错):`$N` 转换只作用于代码区,字符串常量与注释里的 `$N` 不再被误改;MySQL 分支按占位符出现序**重排/复制实参**(乱序 `$2/$1`、重复 `$1` 均正确绑定),`$0`/编号超实参数/实参多余从"静默错绑"变为**显式报错**。内部方法 `getSqlQuery` 签名变更(非导出,不影响公开 API)。已知边界:不处理反斜杠转义(`'don\'t'`),请用 `''` 或原生占位符。
 
-### 第一批(可靠性,commit 4014962)
+#### 第一批(可靠性,commit 4014962)
 
 - `Cancel/Commit` 按事务终态语义**无条件**回收引擎事务引用:context 取消自动回滚、提交失败、回滚失败后实例可恢复并重新 `Begin`,原始错误保留(评审 Q3;此前一次超时即令共享实例永久滞留"事务中");
 - 验签回填前检查可写性,按值传行时四个写入口(`Insert/Update/SaveIt/SaveItWhenNotExist`)返回普通错误而非反射 panic,失败先于 SQL 执行(评审 Q4);
 - `RegisterClass` 登记期拒绝重复列 tag(含大小写归一化),报错列出冲突的两个 Go 字段名;`-`/`_` 标记豁免(评审 Q7;此前写入取第一个字段、读取填最后一个字段,读写不对称);
 - 修正 `TestSetKeysUnregisteredFieldReturnsError` 假断言(检查表指针而非 `LastError`)。
-
-## master-20261014
 
 ### SQL Server 占位符：正确性取决于「驱动名 × ColParam」（文档澄清 + 真库实测）
 
@@ -180,8 +187,11 @@
 
 ### 已知限制
 
-- **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。
-- **`sqlserver` + `$` 的历史数据需审计**：该组合下写入的值取自占位符序号（`$1`→1、`$2`→`"2.00"`），INSERT 写错值、UPDATE 改错行、DELETE 删错行，且引擎一律返回 `nil`。可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串。
+> **注**：本节属早期条目，保留原样以便追溯。带 **【已被后续修复取代】** 标记者**不再代表当前行为**——当前行为以本文档靠前的修复段与代码为准。
+
+- **【已被后续修复取代 · 2026-10-14】SQL Server 占位符与驱动名强耦合，引擎无法自检** —— 本条「引擎无法自检」已不成立：`Initialize()` 现对 SQL Server 使用**真实连接做只读参数回显**（`select @p1 /* ... */` 哨兵值比对），错误组合返回 `ErrInvalidPlaceholderBinding`，且初始化失败时不注册内置表，调用方必须检查初始化错误。详见本段靠前的 `### 质量评审后续修复` 与 `### SQL Server 真驱动集成测试` 两节,以及 `README.md` 0.2 节。**以下为原文留痕：**
+  > ~~`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。~~
+- **`sqlserver` + `$` 的历史数据需审计（本条仍然有效）**：该组合下写入的值取自占位符序号（`$1`→1、`$2`→`"2.00"`），INSERT 写错值、UPDATE 改错行、DELETE 删错行，且引擎一律返回 `nil`。可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串。
 
 ## master-20261013
 

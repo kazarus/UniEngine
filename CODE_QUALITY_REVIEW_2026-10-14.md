@@ -18,7 +18,7 @@
 | 文档与易用性 | 10% | 8.0 | 9.0 | 9.00 | README/CHANGELOG/贡献指南说明新缺省值、错误和迁移；初始化错误需应用显式处理 |
 | **合计** | **100%** | **68 / 100** | | **85.75 → 86 / 100** | 整数四舍五入；与原评审采用同一权重 |
 
-本轮复评记录：根模块 `go test -race -count=1 ./...`、`go vet ./...`、`gofmt` 检查,以及独立 `integration/` 模块编译检查。`60d0f7f` 的设计记录载明本机 MySQL 26.7.0 的 6 项集成测试通过,含 Q5 最终存储值断言；本轮未重新连接 MySQL。用户提供的 SQL Server 实例上执行 `go test -count=1 -run '^TestMSSQL' .` 通过:8 个原始绑定矩阵子例、4 个有效组合读写子例、4 个错误组合初始化拒绝子例。读写用例使用随机独立表名,并把清理失败计为测试失败；未操作固定名称的已有表。连接信息未写入仓库。本轮未连接真实 PostgreSQL 或 Oracle,也未核验远端 CI 状态；82.4% 覆盖率是上一复评基线,并非本轮重测结果。
+本轮复评记录：根模块 `go test -race -count=1 ./...`、`go vet ./...`、`gofmt` 检查,以及独立 `integration/` 模块编译检查。`60d0f7f` 的设计记录载明本机 MySQL 26.7.0 的 6 项集成测试通过,含 Q5 最终存储值断言；本轮未重新连接 MySQL。**【更正 2026-10-14】**`26.7.0` 不是有效的 MySQL 版本号(MySQL 发行序列为 5.x / 8.0 / 8.1–8.4 / 9.x),该版本号无法核实。评估方以握手报文确认可达实例服务端为 **MySQL 8.4.6**,并在该实例上用同一用例 `TestMySQLPlaceholderRewriteStoredValues` 复跑**通过**(见下方 Q5 行);原「本机」实例的版本仍未经独立核验。用户提供的 SQL Server 实例上执行 `go test -count=1 -run '^TestMSSQL' .` 通过:8 个原始绑定矩阵子例、4 个有效组合读写子例、4 个错误组合初始化拒绝子例。读写用例使用随机独立表名,并把清理失败计为测试失败；未操作固定名称的已有表。连接信息未写入仓库。本轮未连接真实 PostgreSQL 或 Oracle,也未核验远端 CI 状态；82.4% 覆盖率是上一复评基线,并非本轮重测结果。
 
 ### Q1–Q8 销账台账
 
@@ -29,10 +29,10 @@
 | 编号 | 当前状态 | 修复及销账证据 | 尚需处理的边界 |
 | --- | --- | --- | --- |
 | Q1 MAC 载荷歧义 | **有条件销账** | `VerifyMacVer=0` 缺省写 `MAC2:` v2,显式 `=1` 才写 v1；新回归与旧行兼容测试通过 | 存量 v1 行仍须更新重签,全表转为 v2 后才获得完整防歧义保证。迁移步骤见 README「MAC 载荷版本与防碰撞迁移」 |
-| Q2 复合主键绑定 | **有条件销账** | `UniTable.go:SetVerify` 拒绝遗漏已登记主键；两列/三列、缺主键和篡改回归通过 | 该检查发生在调用 `SetVerify` 时；之后仍可通过 `SetKeys`/`AutoKeys` 变更主键，现无重新校验或冻结机制。应封住该顺序变体，或把“主键登记必须先完成”作为可执行约束 |
+| Q2 复合主键绑定 | **已销账** | `UniTable.go:SetVerify` 拒绝遗漏已登记主键；两列、三列、缺主键和篡改回归通过。**【补记 2026-10-14】** 顺序变体亦已封住：`SetVerify` 成功后主键冻结，`SetKeys`/`AutoKeys`/`RegisterPkeys` 一律被拒并返回 `ErrPkeysFrozenAfterVerify`，且不写入任何主键（`RegisterPkeys` 不克隆不发布）；`VerifyOn=false` 时不冻结，正常登记顺序不受影响。回归用例 `TestPkeysFrozenAfterSetVerify`、`TestPkeysNotFrozenWhenSetVerifyFails` | 需变更主键须重新 `RegisterClass` 后按序登记；外部代码直接改已返回的 `*TUniTable` 仍受 Q6 快照语义约束 |
 | Q3 事务取消后状态滞留 | **已销账** | `UniEngine.go:Cancel/Commit` 在底层返回错误后也清理 `tx/inTx`；`TestQ3CancelledTransactionRecovers`、提交失败和回滚失败测试通过 | 长期事务归属设计仍可改进，但不影响本项缺陷销账 |
 | Q4 MAC 回填反射 panic | **已销账** | `UniVerify.go:verifySignCols` 在 `SetString` 前检查 `CanSet`；四个写入口的按值参数返回普通错误且 SQL 未执行，指针回填回归通过 | 后续扩展写入口时仍需沿用该参数契约 |
-| Q5 SQL 占位符错改/错绑 | **已销账** | 词法扫描与 MySQL 参数重排已回归；MySQL 26.7.0 真库记录含最终存储值断言；SQL Server 本轮真库 16 个子例通过,覆盖原始绑定、有效组合读写与 `Initialize()` 拒绝错绑 | 反斜杠转义仍是已文档化的词法边界；旧版 `sqlserver` + `$` 部署仍需审计历史数据 |
+| Q5 SQL 占位符错改/错绑 | **已销账** | 词法扫描与 MySQL 参数重排已回归；MySQL 真库记录含最终存储值断言(原记录版本「26.7.0」非有效 MySQL 版本号,【更正 2026-10-14】;可达实例经握手实测 **8.4.6**,该用例已在其上复跑通过)；SQL Server 本轮真库 16 个子例通过,覆盖原始绑定、有效组合读写与 `Initialize()` 拒绝错绑 | 反斜杠转义仍是已文档化的词法边界；旧版 `sqlserver` + `$` 部署仍需审计历史数据 |
 | Q6 同表动态注册并发 | **已销账** | `RegisterTable/RegisterField/RegisterPkeys` 在锁内复制表元数据并发布新快照；`TestConcurrentSameTableRegistrationUsesSnapshots` 与根模块 race 测试覆盖同表注册和查询 | 外部代码直接改已返回的 `*TUniTable` 不受快照机制保护,仍须遵守并发契约 |
 | Q7 重复列 tag 映射不对称 | **已销账** | `RegisterClass` 拒绝归一化后重复的真实列名；同名、大小写及 `-`/`_` 标记回归通过 | 无本项遗留 |
 | Q8 无效密文污染无界缓存 | **已销账** | 派生密钥缓存限制 128 项并淘汰旧项；冷解密在 GCM 认证通过后才缓存,无效密文回归通过 | 大量不同盐仍可产生 PBKDF2 计算负载,调用层需要限制输入规模和速率 |

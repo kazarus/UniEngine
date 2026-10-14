@@ -25,7 +25,7 @@ lives in a separate module. If a change would add a dependency to the root
 ```sh
 # library (root module: no network needed, no go.sum)
 go build ./... && go vet ./... && gofmt -l . && go test -race -count=1 .
-go test -cover -count=1 .                     # keep coverage from regressing (CI floor: 75%)
+go test -cover -count=1 .                     # keep coverage from regressing (CI floor: 80%)
 
 # integration (real databases; unset env => the suite skips)
 cd integration && go vet ./... && go test -race -count=1 .
@@ -43,7 +43,7 @@ go test -bench . -benchmem -run '^$'
 ```
 
 CI (`.github/workflows/ci.yml`) gates on `build` / `vet` / `gofmt -l` / `test -race`
-(with a **75% coverage floor**) / benchmark smoke / **10s fuzz smoke per target**, on
+(with a **80% coverage floor**) / benchmark smoke / **10s fuzz smoke per target**, on
 a Go 1.24–1.27 matrix. `gofmt`, `vet` and the coverage floor are **hard gates** — a
 change that fails any of them will not be merged.
 

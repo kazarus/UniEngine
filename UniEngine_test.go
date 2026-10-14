@@ -229,6 +229,42 @@ func TestSetKeysUnregisteredFieldReturnsError(t *testing.T) {
 	}
 }
 
+// 只读标记字段(db:"-" / db:"_")的 FieldName 就是标记本身,没有真实列名:当主键会生成
+// "-=?" 这类非法 WHERE。而 pkeyFields 只过滤 AttriName 为空、不过滤 ReadOnly,故
+// Update/Delete/SaveIt/SaveItWhenNotExist 的 WHERE 会一并语法错误 —— 在登记期从源头拒绝。
+func TestSetKeysRejectsReadonlyMarker(t *testing.T) {
+	e := newTestEngine()
+
+	for _, marker := range []string{"-", "_"} {
+		tbl := e.RegisterClass(markerKeyRow{}, "mock_marker").SetKeys(marker)
+		if tbl.LastError == nil {
+			t.Fatalf("marker %q 作主键应被拒", marker)
+		}
+		if _, ok := tbl.HashPkeys[marker]; ok {
+			t.Fatalf("被拒的 marker %q 不得进入主键集合", marker)
+		}
+	}
+
+	//#正向对照:带 readonly 选项但**有真实列名**的字段仍可作主键(如服务端生成的键)
+	tbl := e.RegisterClass(readonlyRealKeyRow{}, "mock_ro_key").SetKeys("name")
+	if tbl.LastError != nil {
+		t.Fatalf("db:\"name,readonly\" 作主键应放行, got %v", tbl.LastError)
+	}
+	if _, ok := tbl.HashPkeys["name"]; !ok {
+		t.Fatal("readonly 真实列名应已登记为主键")
+	}
+}
+
+type markerKeyRow struct {
+	Id  int64  `db:"id"`
+	Tag string `db:"-"`
+}
+
+type readonlyRealKeyRow struct {
+	Id   int64  `db:"id"`
+	Name string `db:"name,readonly"`
+}
+
 // AutoKeys 实现的 MySQL 变体在未指定 DataBase 时应返回 error(旧代码会 panic)。
 func TestAutoKeysMYSQLNMissingDatabase(t *testing.T) {
 	e := newTestEngine()
@@ -897,4 +933,106 @@ func TestCopyInHookDispatch(t *testing.T) {
 		t.Fatalf("tx guard fail: %v", eror)
 	}
 	eng.Cancel()
+}
+
+// ---- EtDelete:PrepareRunSQL 的 DELETE 分支 ----
+
+type delPkeyRow struct {
+	WhoBuild int64  `db:"who_build"`
+	UserIndx int64  `db:"user_indx"`
+	Name     string `db:"name"`
+}
+
+// EtDelete 生成的语句必须带 from 且以主键定位(缺 from 会得到 "delete t where ..." 语法错误)
+func TestPrepareRunSQLEtDelete(t *testing.T) {
+	e := newTestEngine()
+	tbl := e.RegisterClass(delPkeyRow{}, "t_del").SetKeys("who_build", "user_indx")
+	if tbl.LastError != nil {
+		t.Fatalf("SetKeys: %v", tbl.LastError)
+	}
+
+	sql, _, pkeys, eror := e.PrepareRunSQL("t_del", EtDelete)
+	if eror != nil {
+		t.Fatalf("unexpected error: %v", eror)
+	}
+	if !strings.HasPrefix(sql, "delete from t_del where 1=1 and ") {
+		t.Fatalf("delete sql malformed(必须带 from): %q", sql)
+	}
+	//#复合主键按登记序拼入,占位符连续
+	if !strings.Contains(sql, `"who_build"=$1 and "user_indx"=$2`) {
+		t.Fatalf("复合主键未按登记序拼入: %q", sql)
+	}
+	if len(pkeys) != 2 {
+		t.Fatalf("pkeys=%d, want 2", len(pkeys))
+	}
+	//#生成结果留痕在 TUniTable.SqlDelete
+	if got := e.GetTable("t_del").SqlDelete; got != sql {
+		t.Fatalf("SqlDelete 未留痕: %q vs %q", got, sql)
+	}
+}
+
+// 无主键表不得产出无条件 DELETE(where 1=1 会删全表),必须报错且不返回 SQL
+func TestPrepareRunSQLEtDeleteNoPkeys(t *testing.T) {
+	e := newTestEngine()
+	e.RegisterTable("t_del_nokey", 0)
+	e.RegisterField("t_del_nokey", "name")
+	e.PrepareTables("t_del_nokey")
+
+	sql, _, _, eror := e.PrepareRunSQL("t_del_nokey", EtDelete)
+	if eror == nil {
+		t.Fatal("无主键表执行 EtDelete 应报错")
+	}
+	if sql != "" {
+		t.Fatalf("无主键时不得产出 SQL(否则是无条件 DELETE): %q", sql)
+	}
+}
+
+// 未注册表沿用既有契约:空结果 + nil 错误(不再对 nil 取 ListPkeys)
+func TestPrepareRunSQLEtDeleteUnregisteredTable(t *testing.T) {
+	e := newTestEngine()
+
+	sql, fields, pkeys, eror := e.PrepareRunSQL("no_such_table", EtDelete)
+	if eror != nil {
+		t.Fatalf("未注册表不应报错, got %v", eror)
+	}
+	if sql != "" || len(fields) != 0 || pkeys != nil {
+		t.Fatalf("未注册表应返回空结果, got (%q,%d,%v)", sql, len(fields), pkeys)
+	}
+}
+
+// ---- 可空只读列作定位键:PrepareRunSQL 与 pkeyFields 口径必须一致 ----
+
+type roRealKeyRow struct {
+	Id   int64  `db:"id"`
+	Name string `db:"name,readonly"` //#有真实列名的只读列
+}
+
+// db:"col,readonly" 的列名是真的,可作 WHERE 定位键:EtSelect 不得把它跳过
+// (此前按 ReadOnly 跳过,导致 PrepareRunSQL 的 WHERE 漏掉该主键,而 Delete/Update/SaveIt 会包含)
+func TestPrepareRunSQLKeepsReadonlyRealColumn(t *testing.T) {
+	e := newTestEngine()
+	tbl := e.RegisterClass(roRealKeyRow{}, "t_ro").SetKeys("id", "name")
+	if tbl.LastError != nil {
+		t.Fatalf("SetKeys: %v", tbl.LastError)
+	}
+
+	sql, _, _, eror := e.PrepareRunSQL("t_ro", EtSelect)
+	if eror != nil {
+		t.Fatalf("unexpected error: %v", eror)
+	}
+	if !strings.Contains(sql, `"id"=$1`) {
+		t.Fatalf("WHERE 缺 id: %q", sql)
+	}
+	if !strings.Contains(sql, `"name"=$2`) {
+		t.Fatalf("WHERE 漏掉了只读但列名真实的定位键: %q", sql)
+	}
+
+	//#与 DELETE 分支同口径(两处都经 isPkeyUsable)
+	del, _, _, eror := e.PrepareRunSQL("t_ro", EtDelete)
+	if eror != nil {
+		t.Fatalf("EtDelete unexpected error: %v", eror)
+	}
+	if !strings.Contains(del, `"name"=$2`) {
+		t.Fatalf("DELETE 的 WHERE 也应含该列: %q", del)
+	}
 }

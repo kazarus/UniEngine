@@ -48,6 +48,13 @@
 // 注册类 API(RegisterClass/RegisterTable/RegisterField/RegisterPkeys)遇到非法输入时不 panic,
 // 而是返回**带 LastError 的未注册表**,便于链式调用在链尾统一检查。
 //
+// # 可空列与 NULL
+//
+// 扫描目标就是结构体字段本身,引擎不做 NULL 转换:字段为不可空类型(string/int64/bool/time.Time 等)
+// 而库中该列为 NULL 时,Select/SelectL/SelectM/SelectH 报错,且 SelectL 会整批丢弃(不是跳过该行)。
+// 请改用 sql.NullString 等 sql.NullXxx 或指针(*string/*int64);[]byte 天然接受 NULL(置 nil)。
+// 标量入口 SelectS/SelectD/SelectF 相反:内部使用 sql.NullXxx,NULL 时返回零值且不报错。
+//
 // # 应用层加密与存储完整性
 //
 // 敏感列以 tag 标记(db:"password,secreton")或 SetSecret 登记:写入自动加密、读取自动解密,

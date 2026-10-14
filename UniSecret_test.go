@@ -30,6 +30,8 @@ type mockDriver struct {
 	nextErr      error  //#非空时 rows.Next 返回该错误,模拟读取中断
 	commitErr    error  //#非空时事务 Commit 返回该错误,模拟驱动层提交失败
 	rollbackErr  error  //#非空时事务 Rollback 返回该错误,模拟驱动层回滚失败
+	execErr      error  //#非空时 Exec 返回该错误,模拟写路径驱动失败
+	affected     *int64 //#非空时 Exec 报告该影响行数(缺省 1),用于覆盖 ExecuteMust 的零行分支
 	probeResult  string //#SQL Server 绑定探针的可选覆盖值;空串表示回显实参
 	probeCount   int
 }
@@ -114,6 +116,14 @@ func (s *mockStmt) Close() error  { return nil }
 func (s *mockStmt) NumInput() int { return -1 }
 func (s *mockStmt) Exec(args []driver.Value) (driver.Result, error) {
 	s.d.recordExec(args)
+
+	if s.d.execErr != nil {
+		return nil, s.d.execErr
+	}
+	if s.d.affected != nil {
+		return driver.RowsAffected(*s.d.affected), nil
+	}
+
 	return driver.RowsAffected(1), nil
 }
 func (s *mockStmt) Query(args []driver.Value) (driver.Rows, error) {

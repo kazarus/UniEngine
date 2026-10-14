@@ -25,4 +25,7 @@ var (
 	ErrInvalidPlaceholderBinding = errors.New("UniEngine: invalid SQL Server placeholder binding")
 	// ErrIncompleteVerification 严格模式下查询未返回验签所需的全部列
 	ErrIncompleteVerification = errors.New("UniEngine: incomplete verification projection")
+	// ErrPkeysFrozenAfterVerify SetVerify 成功后主键集合即冻结(主键须全部纳入保护列,
+	// 事后追加会绕过该保证);需变更主键请重新 RegisterClass 后再按序登记
+	ErrPkeysFrozenAfterVerify = errors.New("UniEngine: pkeys are frozen after SetVerify")
 )
