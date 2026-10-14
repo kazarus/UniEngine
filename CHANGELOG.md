@@ -80,7 +80,7 @@
   - `SecretHook` 自定义加密钩子，默认内置 AES-256-GCM（密文带 `ENC:` 标签）；
   - 读取自动解密、存量明文（无标签）自动鉴别直通；
   - 非 `string` 字段标记 `secreton` 时写入 `fast-fail` 报错；
-  - **`TUniTable.SecretOn`**（表级加密标记）：`SetSecret` 或 `RegisterClass` 检测到 tag 标记的加密列时置位，形成 `TUniEngine.SecretOn`（引擎级）→ `TUniTable.SecretOn`（表级）→ `TUniField.SecretOn`（列级）三级标记。
+  - **`TUniTable.SecretOn`**（表级加密标记）：`SetSecret` 或 `RegisterClass` 检测到 tag 标记的加密列时置位，形成 `TUniEngine.SecretOn`（引擎级）→ `TUniTable.SecretOn`（表级）→ `TUniField.SecretOn`（列级）三级标记；`TUniTable.ListSecret []TUniField` 登记加密列清单（tag 路径按类声明序、SetSecret 按调用序，重复登记自动去重）。
 - **`ExistConst` 约束存在性检查**：支持 `CtPK`/`CtFK`/`CtUK`/`CtDF` 四类约束，按数据库方言查询系统目录（PG `pg_constraint`/`pg_attrdef`、SQLServer `sys.objects`、Oracle `user_constraints`/`user_tab_cols`、MySQL `information_schema`），并对约束名做 `validIdent` 防注入校验。
 - **加固**：
   - `validIdent` 表名/字段名防注入校验；
