@@ -6,6 +6,7 @@
 // #  UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" \
 // #    go test ./integration/ -v
 // #连不上时默认跳过;设 UNIENGINE_PG_REQUIRED=1 则失败(CI 用)。
+
 package integration
 
 import (
@@ -34,7 +35,6 @@ func pgDSN() string {
 }
 
 func newEngine(t *testing.T) *UniEngine.TUniEngine {
-
 	t.Helper()
 
 	db, eror := sql.Open("pgx", pgDSN())
@@ -52,6 +52,11 @@ func newEngine(t *testing.T) *UniEngine.TUniEngine {
 
 	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: UniEngine.DtPOSTGR}
 	eng.Initialize()
+
+	//#连接生命周期由本函数用 t.Cleanup 接管:统一登记在**最早**位置,故按 LIFO
+	//#晚于各用例后续登记的 t.Cleanup(如建表后的 DROP)执行——DROP 一定跑在连接关闭之前。
+	//#若改用 defer,defer 会先于所有 t.Cleanup 执行,建表清理将落在已关闭的连接上而静默失败(表泄漏)。
+	t.Cleanup(func() { db.Close() })
 
 	return eng
 }
@@ -75,7 +80,6 @@ func newSecretEngine(t *testing.T) *UniEngine.TUniEngine {
 }
 
 func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTable {
-
 	t.Helper()
 
 	if eror := eng.Execute("drop table if exists it_user"); eror != nil {
@@ -94,7 +98,6 @@ func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTabl
 }
 
 func countUser(t *testing.T, eng *UniEngine.TUniEngine) int64 {
-
 	t.Helper()
 
 	n, eror := eng.SelectD("select count(1) from it_user")
@@ -107,7 +110,6 @@ func countUser(t *testing.T, eng *UniEngine.TUniEngine) int64 {
 // #passwordOf 走 SelectS——引擎开启加密时该路径自动解密,拿到的是明文;
 // #检查库中存储形态(应为 ENC: 密文)用 rawPasswordOf
 func passwordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
-
 	t.Helper()
 
 	v, eror := eng.SelectS("select password from it_user where user_name=$1", user)
@@ -119,7 +121,6 @@ func passwordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
 
 // #rawPasswordOf 绕过引擎(原生 query)读存储原值,专供存储形态断言
 func rawPasswordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string {
-
 	t.Helper()
 
 	var v string
@@ -134,9 +135,7 @@ func rawPasswordOf(t *testing.T, eng *UniEngine.TUniEngine, user string) string 
 // ---------------------------------------------------------------------------
 
 func TestIntegrationCrud(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 
 	//#Insert + SelectL + Select 单行 + 标量
@@ -192,9 +191,7 @@ func TestIntegrationCrud(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegrationUpsert(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 
 	//#SaveIt:不存在 → 插入
@@ -235,9 +232,7 @@ func TestIntegrationUpsert(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegrationCopyIn(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 
 	//#pgx 驱动下须接 CopyInHook 走原生 CopyFrom(见 TestIntegrationCopyInDefaultPathPinned)
@@ -277,9 +272,7 @@ func TestIntegrationCopyIn(t *testing.T) {
 // #pgx 不模拟 lib/pq 的 COPY 约定(NumInput=0,逐行传参被 database/sql 拒绝),
 // #故不接 CopyInHook 时 CopyInL 报该错——这是文档化限制,非回归
 func TestIntegrationCopyInDefaultPathPinned(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 
 	eror := eng.CopyInL(&[]itUser{{"pin-1", "pw"}})
@@ -296,9 +289,7 @@ func TestIntegrationCopyInDefaultPathPinned(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegrationSecret(t *testing.T) {
-
 	eng := newSecretEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 	tbl := eng.RegisterClass(itSecretUser{}, "it_user")
 	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
@@ -415,9 +406,7 @@ type itAuto struct {
 }
 
 func TestIntegrationAutoKeysAndExist(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 
 	if eror := eng.Execute("drop table if exists it_auto"); eror != nil {
 		t.Fatalf("drop: %v", eror)
@@ -463,9 +452,7 @@ func TestIntegrationAutoKeysAndExist(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegrationTransaction(t *testing.T) {
-
 	eng := newEngine(t)
-	defer eng.Db.Close()
 	setupUserTable(t, eng)
 
 	//#Begin → Insert → Cancel(回滚)

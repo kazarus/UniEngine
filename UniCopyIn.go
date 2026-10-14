@@ -1,5 +1,6 @@
 // UniCopyIn
 // #批量写入:COPY 协议(CopyInHook)与分页
+
 package UniEngine
 
 import (
@@ -14,13 +15,9 @@ func (this *TUniEngine) CopyInL(i interface{}, TableName ...string) error {
 }
 
 // #已废弃:旧版命名,新代码请用 CopyInL;仅为源码兼容保留
-
-// #已废弃:旧版命名,新代码请用 CopyInL;仅为源码兼容保留
 func (this *TUniEngine) SpecialInsertL(i interface{}, TableName ...string) error {
 	return this.CopyInLCtx(context.Background(), i, TableName...)
 }
-
-// #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
 
 // #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
 func (this *TUniEngine) SpecialInsertLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
@@ -28,7 +25,6 @@ func (this *TUniEngine) SpecialInsertLCtx(Ctx context.Context, i interface{}, Ta
 }
 
 func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("CopyInL", i, TableName, reflect.Slice, false)
 	if eror != nil {
 		return eror
@@ -73,7 +69,6 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 	}
 
 	if len(SqlQuery) == 0 && len(SqlValue) == 0 {
-
 		Fields := UniTable.writableFields()
 		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
@@ -84,13 +79,11 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 		}
 
 		for m := 0; m < v.Len(); m++ {
-
 			f := v.Index(m)
 
 			var Row = make([]interface{}, 0)
 
 			for _, ItemPara := range Fields {
-
 				if UniTable.secretColumn(ItemPara) {
 					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
 					if eror != nil {
@@ -116,7 +109,6 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 	//#应用钩子优先(pgx 等驱动用 contrib/pgxcopy 接管原生 CopyFrom);
 	//#未处理(handled=false)时回退内置 pq 风格逐行协议
 	if this.CopyInHook != nil {
-
 		//#钩子从连接池取连接,无法路由到 *sql.Tx;事务期间显式拒绝,避免数据落到事务外
 		if this.currentTx() != nil {
 			return errors.New("UniEngine: CopyInHook can not run inside a transaction (pool connection, not tx-routed); commit or cancel first")
@@ -161,7 +153,6 @@ func (this *TUniEngine) InsertP(i interface{}, PageSize int64, TableName ...stri
 }
 
 func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
 	if eror := nilParamOf("InsertP", i); eror != nil {
 		return eror
@@ -183,7 +174,6 @@ func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize 
 	var ListData = reflect.MakeSlice(t, 0, 0)
 
 	for I := 0; I < All4Data.Len(); I++ {
-
 		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {
@@ -198,10 +188,7 @@ func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize 
 }
 
 // insertPage 按方言路由单页批量写入(PolarDB 走 COPY 协议,其余走 INSERT)。
-
-// insertPage 按方言路由单页批量写入(PolarDB 走 COPY 协议,其余走 INSERT)。
 func (this *TUniEngine) insertPage(Ctx context.Context, ListData reflect.Value, TableName ...string) error {
-
 	if this.Supplier == DtPOLODB {
 		return this.CopyInLCtx(Ctx, ListData.Interface(), TableName...)
 	}
@@ -214,13 +201,9 @@ func (this *TUniEngine) CopyInP(i interface{}, PageSize int64, TableName ...stri
 }
 
 // #已废弃:旧版命名,新代码请用 CopyInP;仅为源码兼容保留
-
-// #已废弃:旧版命名,新代码请用 CopyInP;仅为源码兼容保留
 func (this *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, TableName ...string) error {
 	return this.CopyInPCtx(context.Background(), i, PageSize, TableName...)
 }
-
-// #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
 
 // #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
 func (this *TUniEngine) SpecialInsertPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
@@ -228,7 +211,6 @@ func (this *TUniEngine) SpecialInsertPCtx(Ctx context.Context, i interface{}, Pa
 }
 
 func (this *TUniEngine) CopyInPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
 	if eror := nilParamOf("CopyInP", i); eror != nil {
 		return eror
@@ -250,7 +232,6 @@ func (this *TUniEngine) CopyInPCtx(Ctx context.Context, i interface{}, PageSize 
 	var ListData = reflect.MakeSlice(t, 0, 0)
 
 	for I := 0; I < All4Data.Len(); I++ {
-
 		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {

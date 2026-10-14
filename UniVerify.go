@@ -1,5 +1,6 @@
 // UniVerify
 // #存储完整性校验:写路径对保护列算 HMAC 回填伴随列,读路径逐行验签
+
 package UniEngine
 
 import (
@@ -36,7 +37,6 @@ type verifyRowCtx struct {
 
 // #verifyActive 引擎与表两侧开关同时打开才生效
 func (this *TUniEngine) verifyActive(UniTable *TUniTable) bool {
-
 	if this.VerifyOn == 0 || UniTable == nil || !UniTable.VerifyOn {
 		return false
 	}
@@ -51,7 +51,6 @@ func (this *TUniEngine) verifyStrict() bool {
 
 // #verifySign MAC 计算:VerifyHook 非空走应用钩子,否则内置 HMAC-SHA256(VerifyBy)
 func (this *TUniEngine) verifySign(Payload []byte) ([]byte, error) {
-
 	if this.VerifyHook != nil {
 		return this.VerifyHook(Payload)
 	}
@@ -69,9 +68,7 @@ func (this *TUniEngine) verifySign(Payload []byte) ([]byte, error) {
 // #verifyFormat 保护列值的规范化:定长类型走 strconv 确定序格式(同值必同串),
 // #不支持的类型 fast-fail——静默降级会产出验不过的行
 func verifyFormat(FieldValue reflect.Value) ([]byte, error) {
-
 	switch FieldValue.Kind() {
-
 	case reflect.String:
 		return []byte(FieldValue.String()), nil
 
@@ -99,12 +96,10 @@ func verifyFormat(FieldValue reflect.Value) ([]byte, error) {
 
 // #verifyPayload 规范化载荷:注册表名 + 分隔符 + 登记序保护列值(域分隔防跨表移植 MAC)
 func verifyPayload(TablName string, Cols []int, v reflect.Value) ([]byte, error) {
-
 	Buf := make([]byte, 0, 128)
 	Buf = append(Buf, TablName...)
 
 	for _, Idx := range Cols {
-
 		Buf = append(Buf, verifySep...)
 
 		item, eror := verifyFormat(v.Field(Idx))
@@ -125,7 +120,6 @@ func verifyTextOf(Sum []byte) string {
 // #verifyColsOf 解析保护列的结构体字段下标(顺序=登记顺序=载荷顺序);
 // #引擎或表未开启时返回 (nil,nil)。批量写入路径解析一次循环复用
 func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int, error) {
-
 	if !this.verifyActive(UniTable) {
 		return nil, nil
 	}
@@ -133,7 +127,6 @@ func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int
 	Cols := make([]int, 0, len(UniTable.ColVerify))
 
 	for _, ItemPara := range UniTable.ColVerify {
-
 		Sf, Ok := t.FieldByName(ItemPara.AttriName)
 		if !Ok {
 			return nil, fmt.Errorf("UniEngine: verify protected field[%s] not Found in class[%s]", ItemPara.AttriName, t.String())
@@ -154,7 +147,6 @@ func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int
 // #签名以结构体为源:Update 是整行语义(全部可写列入 SET),更新前须先读后改——
 // #这与本引擎 Update 的既有契约一致
 func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Cols []int) error {
-
 	if len(Cols) == 0 || v.Kind() != reflect.Struct {
 		return nil
 	}
@@ -186,7 +178,6 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Col
 
 // #verifySignRow 写路径签名(单行):解析+签名一步到位
 func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) error {
-
 	if !this.verifyActive(UniTable) || v.Kind() != reflect.Struct {
 		return nil
 	}
@@ -202,7 +193,6 @@ func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) erro
 // #verifyCtxOf 读路径预解析:SELECT 列覆盖全部保护列与 MAC 列时返回验签上下文,
 // #否则返回 nil(该行跳过验签,partial select 无法还原载荷)
 func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldIdx []int) *verifyRowCtx {
-
 	if !this.verifyActive(UniTable) {
 		return nil
 	}
@@ -217,7 +207,6 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 	var Cols []int
 
 	for _, ItemPara := range UniTable.ColVerify {
-
 		Found := -1
 		LowerTxt := strings.ToLower(ItemPara.FieldName)
 
@@ -253,7 +242,6 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 // #非空但无标签属非法值(本引擎写路径必带标签),一律报错。
 // #比对失败即数据被篡改,报错文案不含载荷与行值(避免敏感授权数据泄漏进日志)
 func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
-
 	if RowCtx == nil || v.Kind() != reflect.Struct {
 		return nil
 	}

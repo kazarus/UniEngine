@@ -1,5 +1,6 @@
 // UniQuery
 // #查询:行扫描核心与 SelectD/F/S/L/M/H
+
 package UniEngine
 
 import (
@@ -17,7 +18,6 @@ import (
 
 // selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
 func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst sql.Scanner, Args []interface{}) error {
-
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("select", SqlQuery, Args)
@@ -50,7 +50,6 @@ func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst 
 // sink 第二参数为列→字段下标(热路径预计算结果,钩子路径传原始空切片)——
 // 单 struct 目标用它做按列合并,其余容器目标忽略即可。
 func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type, HasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
-
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	TablName := elemType.String()
@@ -114,7 +113,6 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	}
 
 	for Rows.Next() {
-
 		u := reflect.New(elemType)
 
 		if HasHook {
@@ -158,14 +156,11 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 }
 
 // return int64;
-
-// return int64;
 func (this *TUniEngine) SelectD(SqlQuery string, Args ...interface{}) (int64, error) {
 	return this.SelectDCtx(context.Background(), SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectDCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (int64, error) {
-
 	var Size sql.NullInt64
 	if eror := this.selectColsCtx(Ctx, SqlQuery, &Size, Args); eror != nil {
 		return 0, eror
@@ -175,14 +170,11 @@ func (this *TUniEngine) SelectDCtx(Ctx context.Context, SqlQuery string, Args ..
 }
 
 // return float64;
-
-// return float64;
 func (this *TUniEngine) SelectF(SqlQuery string, Args ...interface{}) (float64, error) {
 	return this.SelectFCtx(context.Background(), SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectFCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (float64, error) {
-
 	var Size sql.NullFloat64
 	if eror := this.selectColsCtx(Ctx, SqlQuery, &Size, Args); eror != nil {
 		return 0, eror
@@ -192,14 +184,11 @@ func (this *TUniEngine) SelectFCtx(Ctx context.Context, SqlQuery string, Args ..
 }
 
 // return string;
-
-// return string;
 func (this *TUniEngine) SelectS(SqlQuery string, Args ...interface{}) (string, error) {
 	return this.SelectSCtx(context.Background(), SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectSCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (string, error) {
-
 	var Text sql.NullString
 	if eror := this.selectColsCtx(Ctx, SqlQuery, &Text, Args); eror != nil {
 		return "", eror
@@ -211,14 +200,11 @@ func (this *TUniEngine) SelectSCtx(Ctx context.Context, SqlQuery string, Args ..
 }
 
 // return struct;查询返回多行时报错(旧版静默保留最后一行),需要多行请用 SelectL。
-
-// return struct;查询返回多行时报错(旧版静默保留最后一行),需要多行请用 SelectL。
 func (this *TUniEngine) Select(i interface{}, SqlQuery string, Args ...interface{}) error {
 	return this.SelectCtx(context.Background(), i, SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
 	if eror := nilParamOf("Select", i); eror != nil {
 		return eror
@@ -265,14 +251,11 @@ func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery s
 }
 
 // return slice of struct;
-
-// return slice of struct;
 func (this *TUniEngine) SelectL(i interface{}, SqlQuery string, Args ...interface{}) error {
 	return this.SelectLCtx(context.Background(), i, SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0);typed nil 切片指针由此拦截
 	if eror := nilParamOf("SelectL", i); eror != nil {
 		return eror
@@ -302,14 +285,11 @@ func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery 
 }
 
 // return map of struct;User;GetMapUnique;
-
-// return map of struct;User;GetMapUnique;
 func (this *TUniEngine) SelectM(i interface{}, SqlQuery string, Args ...interface{}) error {
 	return this.SelectMCtx(context.Background(), i, SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
 	if eror := nilParamOf("SelectM", i); eror != nil {
 		return eror
@@ -359,14 +339,11 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 }
 
 // return map;use custom function;
-
-// return map;use custom function;
 func (this *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, Args ...interface{}) error {
 	return this.SelectHCtx(context.Background(), i, f, SqlQuery, Args...)
 }
 
 func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapUnique, SqlQuery string, Args ...interface{}) error {
-
 	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
 	if eror := nilParamOf("SelectH", i); eror != nil {
 		return eror

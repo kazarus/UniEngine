@@ -1,4 +1,5 @@
 // UniTable
+
 package UniEngine
 
 import (
@@ -37,7 +38,6 @@ type TUniTable struct {
 }
 
 func (this *TUniTable) HasField(FieldName string) (bool, error) {
-
 	if _, Valid := this.HashField[strings.ToLower(FieldName)]; Valid {
 		return true, nil
 	}
@@ -49,7 +49,6 @@ func (this *TUniTable) HasField(FieldName string) (bool, error) {
 // 其后按字段名排序补齐仅写入 HashField 的字段(如 RegisterField 直写);同名字段以
 // 先出现者为准。CRUD 生成 SQL 一律走本序,保证同一输入产生相同语句文本,利于数据库端语句缓存。
 func (this *TUniTable) orderedField() []TUniField {
-
 	if len(this.HashField) == 0 {
 		return nil
 	}
@@ -83,7 +82,6 @@ func (this *TUniTable) orderedField() []TUniField {
 // orderedPkeys 返回全部主键字段的确定序:ListPkeys 顺序优先,
 // 其后按字段名排序补齐仅写入 HashPkeys 的字段(如 RegisterPkeys 直写)。
 func (this *TUniTable) orderedPkeys() []TUniField {
-
 	if len(this.HashPkeys) == 0 {
 		return nil
 	}
@@ -117,7 +115,6 @@ func (this *TUniTable) orderedPkeys() []TUniField {
 // writableFields 返回可经反射赋值的写入列(非只读且有 AttriName 映射),按确定序。
 // RegisterField 直写的字段无 AttriName,不参与反射赋值路径。
 func (this *TUniTable) writableFields() []TUniField {
-
 	var Result []TUniField
 
 	for _, ItemPara := range this.orderedField() {
@@ -132,7 +129,6 @@ func (this *TUniTable) writableFields() []TUniField {
 
 // pkeyFields 返回可用于 where 定位的主键列(有 AttriName 映射),按确定序。
 func (this *TUniTable) pkeyFields() []TUniField {
-
 	var Result []TUniField
 
 	for _, ItemPara := range this.orderedPkeys() {
@@ -150,7 +146,6 @@ func (this *TUniTable) pkeyFields() []TUniField {
 // SetSecret/SetKeys/AutoKeys 已在登记时双向拒绝 secreton×主键,
 // 此处对绕过守卫直接改注册表的用法兜底。
 func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
-
 	if !ItemPara.SecretOn {
 		return false
 	}
@@ -164,13 +159,11 @@ func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
 // #  UniEngineEx.RegisterClass(core.TSYSPATH{}, "sys_path").SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").SetSecret("MAST_NAME")
 // #链中首个错误记入 LastError 并短路后续登记,链尾以 if tbl.LastError != nil 检查
 func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
-
 	if this.LastError != nil {
 		return this
 	}
 
 	for _, ItemPara := range Fields {
-
 		FieldName, Ok := ItemPara.(string)
 		if !Ok {
 			this.LastError = fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
@@ -201,13 +194,11 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 
 // #SetSecret 标记加密列并返回本表,支持链式(错误处理同 SetKeys:记入 LastError 并短路)
 func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
-
 	if this.LastError != nil {
 		return this
 	}
 
 	for _, ItemPara := range Fields {
-
 		FieldName, Ok := ItemPara.(string)
 		if !Ok {
 			this.LastError = fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
@@ -265,7 +256,6 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 // #载荷含注册表名做域分隔,MAC 不可跨表移植;保护列可含主键列与 secreton 列
 // #(secreton 列参与载荷的是解密后的明文,与读路径先解密后验签的顺序一致)
 func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
-
 	if this.LastError != nil {
 		return this
 	}
@@ -307,7 +297,6 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 	var HashList = make(map[string]bool, len(Fields))
 
 	for _, ItemPara := range Fields {
-
 		LowerTxt := strings.ToLower(ItemPara)
 
 		if LowerTxt == LowerCol {
@@ -342,11 +331,9 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 // AutoKeys 按数据库元数据自动登记主键。UniEngineEx 为引擎指针(第二阶段起不再按值拷贝)。
 func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...interface{}) error {
-
 	var SQL string
 
 	if len(GetSqlAutoKeys) > 0 {
-
 		if x, Ok := GetSqlAutoKeys[0].(HasGetSqlAutoKeys); Ok {
 			var eror error
 			SQL, eror = x.GetSqlAutoKeys(UniEngineEx, this.TableName)
@@ -356,7 +343,6 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 		}
 
 	} else {
-
 		var eror error
 		SQL, eror = TAutoKeys4POSTGR{}.GetSqlAutoKeys(UniEngineEx, this.TableName)
 		if eror != nil {

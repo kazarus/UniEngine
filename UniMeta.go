@@ -1,5 +1,6 @@
 // UniMeta
 // #执行与元数据探测:Execute/Exist*/IfDropView
+
 package UniEngine
 
 import (
@@ -17,7 +18,6 @@ func (this *TUniEngine) Execute(SqlQuery string, Args ...interface{}) error {
 }
 
 func (this *TUniEngine) ExecuteCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
-
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("execute", SqlQuery, Args)
@@ -40,7 +40,6 @@ func (this *TUniEngine) ExecuteMust(SqlQuery string, Args ...interface{}) error 
 }
 
 func (this *TUniEngine) ExecuteMustCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
-
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("execute", SqlQuery, Args)
@@ -73,7 +72,6 @@ func (this *TUniEngine) IfDropView(TableName string) (bool, error) {
 }
 
 func (this *TUniEngine) IfDropViewCtx(Ctx context.Context, TableName string) (bool, error) {
-
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
@@ -94,10 +92,7 @@ func (this *TUniEngine) IfDropViewCtx(Ctx context.Context, TableName string) (bo
 }
 
 // existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
-
-// existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
 func (this *TUniEngine) existCount(Ctx context.Context, Kind string, SQL string) (bool, error) {
-
 	this.sqlDebug(Kind, SQL, nil)
 
 	if SQL == "" {
@@ -117,7 +112,6 @@ func (this *TUniEngine) ExistTable(TableName string) (bool, error) {
 }
 
 func (this *TUniEngine) ExistTableCtx(Ctx context.Context, TableName string) (bool, error) {
-
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
@@ -146,7 +140,6 @@ func (this *TUniEngine) ExistViews(TableName string) (bool, error) {
 }
 
 func (this *TUniEngine) ExistViewsCtx(Ctx context.Context, TableName string) (bool, error) {
-
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
@@ -175,7 +168,6 @@ func (this *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 }
 
 func (this *TUniEngine) ExistFieldCtx(Ctx context.Context, TableName, FieldName string) (bool, error) {
-
 	if !validIdent(TableName) || !validIdent(FieldName) {
 		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
 	}
@@ -200,14 +192,11 @@ func (this *TUniEngine) ExistFieldCtx(Ctx context.Context, TableName, FieldName 
 }
 
 // #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
-
-// #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
 func (this *TUniEngine) ExistConst(ConstType TConstType, ConstName string) (bool, error) {
 	return this.ExistConstCtx(context.Background(), ConstType, ConstName)
 }
 
 func (this *TUniEngine) ExistConstCtx(Ctx context.Context, ConstType TConstType, ConstName string) (bool, error) {
-
 	if !validIdent(ConstName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, ConstName)
 	}

@@ -1,4 +1,5 @@
 // UniField
+
 package UniEngine
 
 import "strings"
@@ -18,7 +19,6 @@ type TUniField struct {
 }
 
 func (this *TUniField) initialize(Value string) {
-
 	Arguments := strings.Split(Value, ",")
 	this.FieldName = Arguments[0]
 	if this.FieldName == "-" || this.FieldName == "_" {
