@@ -270,6 +270,12 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 		return this
 	}
 
+	//#参数形态检查最廉且最根本,先于 MAC 列校验(fail-fast:调用缺保护列时不必陪跑后续查找)
+	if len(Fields) == 0 {
+		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, strings.ToLower(VerifyAt))
+		return this
+	}
+
 	LowerCol := strings.ToLower(VerifyAt)
 
 	FieldCol, Valid := this.HashField[LowerCol]
@@ -295,11 +301,6 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; Mac Column must be string", this.TableName, LowerCol)
 			return this
 		}
-	}
-
-	if len(Fields) == 0 {
-		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, LowerCol)
-		return this
 	}
 
 	var ListCols = make([]TUniField, 0, len(Fields))
