@@ -739,6 +739,73 @@ func TestSecretRejectsAbsurdIterations(t *testing.T) {
 	}
 }
 
+// #测试33:SecretIter 越界必须在**写**路径 fail-fast
+// #(读路径已有上限校验;缺失写侧校验会产出引擎自己永远读不回的密文)
+func TestSecretWriteRejectsOversizedIter(t *testing.T) {
+	//#边界内:可加密且可原样读回
+	ok := &TUniEngine{SecretOn: 1, SecretBy: "k", SecretIter: secretIterMax}
+	cipherText, eror := ok.Secret("v", true)
+	if eror != nil {
+		t.Fatalf("SecretIter=secretIterMax 应可加密,却失败: %v", eror)
+	}
+	if plain, eror := ok.Secret(cipherText, false); eror != nil || plain != "v" {
+		t.Fatalf("SecretIter=secretIterMax 的密文应可读回, got (%q, %v)", plain, eror)
+	}
+
+	//#越界:必须报错,且不得返回任何密文
+	for _, iter := range []int{secretIterMax + 1, 99999999, 1 << 31} {
+		eng := &TUniEngine{SecretOn: 1, SecretBy: "k", SecretIter: iter}
+		cipherText, eror := eng.Secret("v", true)
+		if eror == nil {
+			//#若放行,读出必然失败——正是本测试要拦下的"写成功读不回"
+			if _, derr := eng.Secret(cipherText, false); derr != nil {
+				t.Fatalf("SecretIter=%d 写路径未拦截,产出读不回的密文(解密报错 %v)", iter, derr)
+			}
+			t.Fatalf("SecretIter=%d 越界却未报错", iter)
+		}
+		if cipherText != "" {
+			t.Fatalf("SecretIter=%d 报错时不应返回密文, got %q", iter, cipherText)
+		}
+	}
+}
+
+// #测试34:派生密钥缓存的键必须覆盖 SecretBy——运行时轮换后新密文只应由新密钥解开
+// #(曾漏掉 SecretBy:同进程轮换既不生效也不报错,新旧数据全线沿用旧密钥)
+func TestSecretRotateKeyTakesEffect(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "key-a", SecretIter: 2048}
+
+	before, eror := eng.Secret("v", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	eng.SecretBy = "key-b" //#运行时轮换(同进程,缓存已热)
+
+	after, eror := eng.Secret("v", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+
+	//#轮换后新密文必须可由新密钥读回
+	if plain, eror := eng.Secret(after, false); eror != nil || plain != "v" {
+		t.Fatalf("轮换后新密文应可由新密钥读回, got (%q, %v)", plain, eror)
+	}
+	//#且**不得**被旧密钥解开——否则说明缓存键漏了 SecretBy
+	keyA := &TUniEngine{SecretOn: 1, SecretBy: "key-a", SecretIter: 2048}
+	if _, eror := keyA.Secret(after, false); eror == nil {
+		t.Fatal("轮换后新密文竟能被旧密钥解开:缓存键未覆盖 SecretBy")
+	}
+	//#冷缓存的 key-b 引擎也应能读回,证明写侧确实用了新密钥
+	keyB := &TUniEngine{SecretOn: 1, SecretBy: "key-b", SecretIter: 2048}
+	if plain, eror := keyB.Secret(after, false); eror != nil || plain != "v" {
+		t.Fatalf("轮换后新密文应可由 key-b 读回, got (%q, %v)", plain, eror)
+	}
+	//#轮换后旧密文在同进程内也应报错(与冷缓存行为一致,不得静默沿用旧派生密钥)
+	if _, eror := eng.Secret(before, false); eror == nil {
+		t.Fatal("轮换后旧密文不应再能解密(同进程亦不得静默沿用旧密钥)")
+	}
+}
+
 // #测试29:并发加解密(冷缓存下多 goroutine 竞争首次派生;验证缓存与锁的正确性)
 func TestSecretConcurrentAccess(t *testing.T) {
 	eng := &TUniEngine{SecretOn: 1, SecretBy: "race-key", SecretIter: 8192}

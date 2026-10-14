@@ -450,3 +450,36 @@ func TestVerifyWithSecretColumn(t *testing.T) {
 		t.Fatalf("password column must be stored encrypted, got %q", cipher)
 	}
 }
+
+// #测试15:行级绑定强制——保护列须含已登记主键,否则"整行搬运"无法检出(评估 §4.8)
+func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
+	//#① 只保护非键列:登记期即拒(fail-fast,而不是留到运行时才发现绑定失效)
+	eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	tab := eng.RegisterClass(TVerifyRow{}, "tbl_bind_1").SetKeys("who_build", "user_indx")
+	tab.SetVerify("mac_text", "data_stat", "mast_name")
+	if tab.LastError == nil {
+		t.Fatal("保护列不含主键时应拒绝登记")
+	}
+	if tab.VerifyOn {
+		t.Fatal("被拒时不应置 VerifyOn")
+	}
+
+	//#② 保护列含主键:通过(载荷含行标识,搬移即可检出)
+	tab2 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2").SetKeys("who_build", "user_indx")
+	tab2.SetVerify("mac_text", "who_build", "data_stat")
+	if tab2.LastError != nil {
+		t.Fatalf("保护列含主键应通过, got %v", tab2.LastError)
+	}
+	if !tab2.VerifyOn {
+		t.Fatal("登记成功应置 VerifyOn")
+	}
+
+	//#③ 逃生口:显式放弃行级绑定(确有理由时才用),登记前置于表上
+	tab3 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_3").SetKeys("who_build", "user_indx")
+	tab3.VerifyUnkeyed = true
+	tab3.SetVerify("mac_text", "data_stat", "mast_name")
+	if tab3.LastError != nil {
+		t.Fatalf("VerifyUnkeyed 应放行, got %v", tab3.LastError)
+	}
+}

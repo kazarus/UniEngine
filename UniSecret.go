@@ -87,13 +87,17 @@ func (this *TUniEngine) writeSalt() ([]byte, error) {
 	return St.Salt, nil
 }
 
-// #deriveKey PBKDF2-HMAC-SHA256 派生 AES-256 密钥;按"盐+迭代数"缓存。
+// #deriveKey PBKDF2-HMAC-SHA256 派生 AES-256 密钥;按"盐+迭代数+密钥指纹"缓存。
 // #首个到达的调用持锁派生,并发等待者随后直接命中缓存(避免惊群重复派生);
-// #密钥常驻内存是该形态加密的标准代价,与任何进程内密钥持有等价
+// #密钥常驻内存是该形态加密的标准代价,与任何进程内密钥持有等价。
+// #键必须覆盖**全部派生输入**:曾漏掉 SecretBy,导致运行时改密钥仍命中旧派生密钥,
+// #轮换既不生效也不报错(见评估报告 §4.6,回归测试 TestSecretRotateKeyTakesEffect)
 func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 	St := this.secretStateOf()
 
-	CacheKey := string(Salt) + "|" + strconv.Itoa(Iter)
+	//#以密钥指纹而非明文入键,避免在缓存映射里额外留存一份密钥明文副本
+	SecretTag := sha256.Sum256([]byte(this.SecretBy))
+	CacheKey := string(Salt) + "|" + strconv.Itoa(Iter) + "|" + string(SecretTag[:8])
 
 	St.mu.Lock()
 	defer St.mu.Unlock()
@@ -173,6 +177,11 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		}
 
 		Iter := this.secretIterOf()
+		//#写路径必须 fail-fast:越界迭代数会被读路径拒绝(见下方 secretIterMax 校验),
+		//#容忍它只会产出"引擎自己永远读不回"的密文,且 PBKDF2 开销随迭代数线性增长
+		if Iter > secretIterMax {
+			return "", fmt.Errorf("UniEngine: SecretIter %d exceeds max %d; ciphertext would be unreadable", Iter, secretIterMax)
+		}
 
 		Key, eror := this.deriveKey(Salt, Iter)
 		if eror != nil {
