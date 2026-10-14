@@ -63,6 +63,9 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	if UniTable == nil {
 		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
+	if HasHook && this.verifyActive(UniTable) && this.verifyStrict() {
+		return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
+	}
 
 	this.sqlDebug("select", SqlQuery, Args)
 
@@ -115,7 +118,10 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 			}
 		}
 
-		RowVerify = this.verifyCtxOf(UniTable, Column, FieldIdx)
+		RowVerify, eror = this.verifyCtxOf(UniTable, Column, FieldIdx)
+		if eror != nil {
+			return eror
+		}
 	}
 
 	for Rows.Next() {

@@ -17,6 +17,37 @@ func invalidTable(TableName string, eror error) *TUniTable {
 	return &TUniTable{TableName: TableName, LastError: eror}
 }
 
+// cloneTableMetadata 在引擎写锁内复制已发布的表。查询/写入取得旧指针后可继续
+// 只读访问；RegisterTable/Field/Pkeys 只修改副本，再一次性发布到所有别名。
+func cloneTableMetadata(Old *TUniTable) *TUniTable {
+	Copy := *Old
+	Copy.HashField = make(map[string]TUniField, len(Old.HashField))
+	for Key, Field := range Old.HashField {
+		Copy.HashField[Key] = Field
+	}
+	Copy.HashPkeys = make(map[string]TUniField, len(Old.HashPkeys))
+	for Key, Field := range Old.HashPkeys {
+		Copy.HashPkeys[Key] = Field
+	}
+	Copy.ListField = append([]TUniField(nil), Old.ListField...)
+	Copy.ListPkeys = append([]TUniField(nil), Old.ListPkeys...)
+	Copy.ColSecret = append([]TUniField(nil), Old.ColSecret...)
+	Copy.ColVerify = append([]TUniField(nil), Old.ColVerify...)
+	return &Copy
+}
+
+// publishTableMetadata 保持表名/类名双键指向同一快照;调用方已持引擎写锁。
+func (this *TUniEngine) publishTableMetadata(Old, Next *TUniTable) {
+	if Old != nil {
+		for Key, Table := range this.HashTabl {
+			if Table == Old {
+				this.HashTabl[Key] = Next
+			}
+		}
+	}
+	this.HashTabl[strings.ToLower(Next.TableName)] = Next
+}
+
 // identGuard 注册类 API 的统一标识符白名单校验(防注入;与 Write/Exist* 路径同一 validIdent)。
 // #运行时传入的表名/字段名一律经此校验——这些字符串会被直接拼进生成的 SQL 文本。
 // #Sentinel 区分语义(表名用 ErrInvalidTableName,字段名用 ErrInvalidFieldName),便于调用方 errors.Is 判别。
@@ -126,15 +157,18 @@ func (this *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 	}
 
 	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	Old := UniTable
 	if !Valid {
 		UniTable = &TUniTable{}
 		UniTable.HashField = make(map[string]TUniField, 0)
 		UniTable.HashPkeys = make(map[string]TUniField, 0)
 		UniTable.TableName = strings.ToLower(TableName)
+	} else {
+		UniTable = cloneTableMetadata(UniTable)
 	}
 	UniTable.IPriority = IPriority
 
-	this.HashTabl[strings.ToLower(TableName)] = UniTable
+	this.publishTableMetadata(Old, UniTable)
 
 	return UniTable
 }
@@ -155,11 +189,14 @@ func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 	}
 
 	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	Old := UniTable
 	if !Valid {
 		UniTable = &TUniTable{}
 		UniTable.HashField = make(map[string]TUniField, 0)
 		UniTable.HashPkeys = make(map[string]TUniField, 0)
 		UniTable.TableName = strings.ToLower(TableName)
+	} else {
+		UniTable = cloneTableMetadata(UniTable)
 	}
 
 	var UniField = TUniField{}
@@ -167,9 +204,13 @@ func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 	UniField.FieldName = strings.ToLower(FieldName)
 	UniField.TableName = strings.ToLower(TableName)
 
-	UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
+	LowerField := strings.ToLower(UniField.FieldName)
+	if Existing, Ok := UniTable.HashField[LowerField]; Ok && Existing.AttriName != "" {
+		UniField = Existing //#保留 RegisterClass 的反射映射,不以手工空映射覆盖
+	}
+	UniTable.HashField[LowerField] = UniField
 
-	this.HashTabl[strings.ToLower(TableName)] = UniTable
+	this.publishTableMetadata(Old, UniTable)
 
 	return UniTable
 }
@@ -195,6 +236,8 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 		//#改为返回带 LastError 的未注册表(与 RegisterClass 守卫同约定)
 		return invalidTable(TableName, fmt.Errorf("%w: RegisterPkeys table [%s] is not registered; call RegisterTable/RegisterClass first;", ErrUnregisteredClass, TableName))
 	}
+	Old := UniTable
+	UniTable = cloneTableMetadata(UniTable)
 
 	{
 		var UniField = TUniField{}
@@ -202,9 +245,13 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 		UniField.FieldName = strings.ToLower(FieldName)
 		UniField.TableName = strings.ToLower(TableName)
 
-		UniTable.HashPkeys[strings.ToLower(UniField.FieldName)] = UniField
+		LowerField := strings.ToLower(UniField.FieldName)
+		if Existing, Ok := UniTable.HashField[LowerField]; Ok && Existing.AttriName != "" {
+			UniField = Existing //#保留类字段映射,避免后续 Update/Delete 反射定位失败
+		}
+		UniTable.HashPkeys[LowerField] = UniField
 
-		this.HashTabl[strings.ToLower(TableName)] = UniTable
+		this.publishTableMetadata(Old, UniTable)
 	}
 
 	return UniTable

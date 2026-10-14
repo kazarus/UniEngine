@@ -150,11 +150,11 @@ func verifyPayloadV2(TablName string, Names []string, Cols []int, v reflect.Valu
 
 // #verifyTextOf MAC 伴随值:标签 + base64(原始MAC);标签随载荷版本(v1=MAC:,v2=MAC2:)
 func verifyTextOf(Sum []byte, MacVer int64) string {
-	if MacVer == 2 {
-		return verifyMac2Tag + base64.StdEncoding.EncodeToString(Sum)
+	if MacVer == 1 {
+		return UniVerifyTag + base64.StdEncoding.EncodeToString(Sum)
 	}
 
-	return UniVerifyTag + base64.StdEncoding.EncodeToString(Sum)
+	return verifyMac2Tag + base64.StdEncoding.EncodeToString(Sum)
 }
 
 // #verifyColsOf 解析保护列的结构体字段下标(顺序=登记顺序=载荷顺序);
@@ -205,13 +205,13 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Col
 		ListName[Pos] = strings.ToLower(UniTable.ColVerify[Pos].FieldName)
 	}
 
-	//#载荷按引擎版本选择:v2 无歧义编码(评审Q1),v1 保持拼接(存量兼容)
+	//#缺省写 v2;显式 VerifyMacVer=1 才保留旧 v1 写法(读侧按标签兼容旧行)
 	var Payload []byte
 	var eror error
-	if this.VerifyMacVer == 2 {
-		Payload, eror = verifyPayloadV2(UniTable.TableName, ListName, Cols, v)
-	} else {
+	if this.VerifyMacVer == 1 {
 		Payload, eror = verifyPayload(UniTable.TableName, Cols, v)
+	} else {
+		Payload, eror = verifyPayloadV2(UniTable.TableName, ListName, Cols, v)
 	}
 	if eror != nil {
 		return eror
@@ -252,16 +252,16 @@ func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) erro
 	return this.verifySignCols(v, UniTable, Cols)
 }
 
-// #verifyCtxOf 读路径预解析:SELECT 列覆盖全部保护列与 MAC 列时返回验签上下文,
-// #否则返回 nil(该行跳过验签,partial select 无法还原载荷)
-func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldIdx []int) *verifyRowCtx {
+// #verifyCtxOf 读路径预解析:宽容模式下部分列查询保留旧行为;严格模式拒绝
+// 缺少保护列或 MAC 列的结果,避免悄悄绕过验签。
+func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldIdx []int) (*verifyRowCtx, error) {
 	if !this.verifyActive(UniTable) {
-		return nil
+		return nil, nil
 	}
 
 	MacCol, Valid := UniTable.HashField[UniTable.VerifyAt]
 	if !Valid || MacCol.AttriName == "" {
-		return nil
+		return nil, fmt.Errorf("%w: table[%s] has no mapped MAC column", ErrIncompleteVerification, UniTable.TableName)
 	}
 
 	LowerCol := UniTable.VerifyAt
@@ -280,7 +280,10 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 			}
 		}
 		if Found < 0 {
-			return nil //#保护列不在查询结果中,载荷无法还原,整行跳过验签
+			if this.verifyStrict() {
+				return nil, fmt.Errorf("%w: table[%s] query omits protected column[%s]", ErrIncompleteVerification, UniTable.TableName, LowerTxt)
+			}
+			return nil, nil
 		}
 
 		Cols = append(Cols, FieldIdx[Found])
@@ -295,10 +298,13 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 		}
 	}
 	if MacIdx < 0 {
-		return nil
+		if this.verifyStrict() {
+			return nil, fmt.Errorf("%w: table[%s] query omits MAC column[%s]", ErrIncompleteVerification, UniTable.TableName, LowerCol)
+		}
+		return nil, nil
 	}
 
-	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols, ColsName: ColsName}
+	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols, ColsName: ColsName}, nil
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。

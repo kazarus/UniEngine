@@ -27,9 +27,11 @@ type mockDriver struct {
 	insertValues [][]driver.Value
 	queryRows    [][]driver.Value
 	columns      []string
-	nextErr      error //#非空时 rows.Next 返回该错误,模拟读取中断
-	commitErr    error //#非空时事务 Commit 返回该错误,模拟驱动层提交失败
-	rollbackErr  error //#非空时事务 Rollback 返回该错误,模拟驱动层回滚失败
+	nextErr      error  //#非空时 rows.Next 返回该错误,模拟读取中断
+	commitErr    error  //#非空时事务 Commit 返回该错误,模拟驱动层提交失败
+	rollbackErr  error  //#非空时事务 Rollback 返回该错误,模拟驱动层回滚失败
+	probeResult  string //#SQL Server 绑定探针的可选覆盖值;空串表示回显实参
+	probeCount   int
 }
 
 func (d *mockDriver) recordQuery(query string) {
@@ -71,6 +73,22 @@ func (c *mockConn) Prepare(query string) (driver.Stmt, error) {
 	c.d.recordQuery(query)
 	return &mockStmt{d: c.d}, nil
 }
+func (c *mockConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if !strings.Contains(query, "/* UniEngine bind check */") {
+		return nil, driver.ErrSkip
+	}
+	if len(args) != 1 {
+		return nil, fmt.Errorf("binding probe needs one argument, got %d", len(args))
+	}
+	c.d.mu.Lock()
+	c.d.probeCount++
+	result := c.d.probeResult
+	c.d.mu.Unlock()
+	if result == "" {
+		result, _ = args[0].Value.(string)
+	}
+	return &mockProbeRows{value: result}, nil
+}
 func (c *mockConn) Close() error              { return nil }
 func (c *mockConn) Begin() (driver.Tx, error) { return &mockTx{d: c.d}, nil }
 
@@ -105,6 +123,22 @@ func (s *mockStmt) Query(args []driver.Value) (driver.Rows, error) {
 type mockRows struct {
 	d   *mockDriver
 	idx int
+}
+
+type mockProbeRows struct {
+	value string
+	done  bool
+}
+
+func (r *mockProbeRows) Columns() []string { return []string{"value"} }
+func (r *mockProbeRows) Close() error      { return nil }
+func (r *mockProbeRows) Next(dest []driver.Value) error {
+	if r.done {
+		return io.EOF
+	}
+	r.done = true
+	dest[0] = r.value
+	return nil
 }
 
 func (r *mockRows) Columns() []string { return r.d.columns }
