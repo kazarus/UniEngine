@@ -40,7 +40,7 @@ func newVerifyTestEngine(d *mockDriver) *TUniEngine {
 	return eng
 }
 
-// verifyExpect 按内置算法计算给定行的期望 MAC 伴随值
+// verifyExpect 按内置 v1 算法计算给定行的期望 MAC 伴随值(标签随引擎 VerifyMacVer)
 func verifyExpect(t *testing.T, eng *TUniEngine, row TVerifyRow) string {
 	t.Helper()
 	payload := "tbl_verify_row" + verifySep +
@@ -52,7 +52,7 @@ func verifyExpect(t *testing.T, eng *TUniEngine, row TVerifyRow) string {
 	if eror != nil {
 		t.Fatal(eror)
 	}
-	return verifyTextOf(sum)
+	return verifyTextOf(sum, eng.VerifyMacVer)
 }
 
 // #测试1:SetVerify 登记(置位/顺序/错误路径)
@@ -451,7 +451,8 @@ func TestVerifyWithSecretColumn(t *testing.T) {
 	}
 }
 
-// #测试15:行级绑定强制——保护列须含已登记主键,否则"整行搬运"无法检出(评估 §4.8)
+// #测试15:行级绑定强制——保护列须覆盖**全部**已登记主键,否则复合主键的未保护列
+// #被改写仍过验签,"整行搬运"无法检出(评估 §4.8 → 评审 Q2 收紧:至少一个 → 全覆盖)
 func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	//#① 只保护非键列:登记期即拒(fail-fast,而不是留到运行时才发现绑定失效)
 	eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
@@ -465,13 +466,23 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 		t.Fatal("被拒时不应置 VerifyOn")
 	}
 
-	//#② 保护列含主键:通过(载荷含行标识,搬移即可检出)
+	//#② 复合主键只保护其中一列:同样拒绝(未覆盖的 user_indx 被改写仍能过验签)
 	tab2 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2").SetKeys("who_build", "user_indx")
 	tab2.SetVerify("mac_text", "who_build", "data_stat")
-	if tab2.LastError != nil {
-		t.Fatalf("保护列含主键应通过, got %v", tab2.LastError)
+	if tab2.LastError == nil {
+		t.Fatal("复合主键只覆盖一列应拒绝登记")
 	}
-	if !tab2.VerifyOn {
+	if !strings.Contains(tab2.LastError.Error(), "user_indx") {
+		t.Fatalf("错误应列出缺失主键列, got %v", tab2.LastError)
+	}
+
+	//#②b 全部主键纳入保护:通过(载荷含完整行标识,任何主键列搬移/改写均可检出)
+	tab2b := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2b").SetKeys("who_build", "user_indx")
+	tab2b.SetVerify("mac_text", "who_build", "user_indx", "data_stat")
+	if tab2b.LastError != nil {
+		t.Fatalf("覆盖全部主键应通过, got %v", tab2b.LastError)
+	}
+	if !tab2b.VerifyOn {
 		t.Fatal("登记成功应置 VerifyOn")
 	}
 

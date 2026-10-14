@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,10 +39,11 @@ type TUniEngine struct {
 	SecretIter int         //#PBKDF2迭代次数#0用缺省(UniSecretIter);仅影响新写入,读取以密文内嵌值为准
 	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
 
-	VerifyOn   int64       //#开启存储完整性校验#写路径回填MAC伴随列,读路径逐行验签(与TUniTable.VerifyOn同时开启才生效)
-	VerifyBy   string      //#内置HMAC-SHA256密钥#VerifyHook非空时不使用
-	VerifyMode int64       //#验签模式#1=宽容(无MAC标签的存量行跳过验签,回填期用);2=严格(无标签行报错,回填完成后切换);0及其它按1处理
-	VerifyHook TVerifyHook //#应用完整性钩子#为空时使用内置HMAC-SHA256#应用可实现国密HMAC-SM3等
+	VerifyOn     int64       //#开启存储完整性校验#写路径回填MAC伴随列,读路径逐行验签(与TUniTable.VerifyOn同时开启才生效)
+	VerifyBy     string      //#内置HMAC-SHA256密钥#VerifyHook非空时不使用
+	VerifyMode   int64       //#验签模式#1=宽容(无MAC标签的存量行跳过验签,回填期用);2=严格(无标签行报错,回填完成后切换);0及其它按1处理
+	VerifyMacVer int64       //#MAC载荷格式版本#0/1=v1拼接载荷(存量兼容,缺省);2=v2无歧义载荷(值长度前缀,评审Q1)#置2后新写入落MAC2:标签,存量v1行读取仍按v1算法验签#完整防碰撞须全表重签,迁移步骤见README
+	VerifyHook   TVerifyHook //#应用完整性钩子#为空时使用内置HMAC-SHA256#应用可实现国密HMAC-SM3等
 
 	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 
@@ -187,31 +187,67 @@ func (this *TUniEngine) getColParam(FieldName string) string {
 	return quoteIdent(FieldName)
 }
 
-// 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
-var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
+// getSqlQuery 方言占位符转换(评审 Q5:正则替换会误改字符串常量/注释里的 $N,
+// 且 MySQL 全部替成 ? 却不重排实参,乱序/重复编号时错绑)。
+// 现经 rewriteParamPlaceholder 词法扫描,仅代码区的 $N 参与转换;MySQL 分支按
+// 占位符**出现序**重排/复制实参($1 $2 $1 -> ?,?,? + [a1,a2,a1]),编号越界
+// 或实参多余时显式报错。SQL 无代码区 $N(如原生 ?/无占位符)时原样透传。
+// 返回转换后 SQL 与重排后实参(Oracle/透传路径实参原样)。
+func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) (string, []interface{}, error) {
+	if len(Args) == 0 {
+		return SqlQuery, Args, nil
+	}
 
-func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) string {
-	if this.dbFamily() == FmORACLE && len(Args) > 0 {
+	if this.dbFamily() == FmORACLE {
 		if this.debugging() {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
 		}
 
-		// 仅替换参数占位符（$1 -> :1），避免误改 SQL 文本中其它 $ 字符
-		SqlQuery = reParamPlaceholder.ReplaceAllStringFunc(SqlQuery, func(m string) string {
-			return ":" + m[1:]
-		})
+		Result, _, eror := rewriteParamPlaceholder(SqlQuery, phOracle)
+		if eror != nil {
+			return "", nil, eror
+		}
+		return Result, Args, nil
 	}
 
-	if this.dbFamily() == FmMYSQLN && len(Args) > 0 {
-		if this.debugging() {
-			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
+	if this.dbFamily() == FmMYSQLN {
+		Result, Seq, eror := rewriteParamPlaceholder(SqlQuery, phMySQL)
+		if eror != nil {
+			return "", nil, eror
+		}
+		if len(Seq) == 0 {
+			//#原生 ? 占位符或无占位符:不做任何改写与校验,保持既有行为
+			return SqlQuery, Args, nil
 		}
 
-		// 包级预编译正则，消除每次调用 Compile 的开销与静默失败返回空串的路径
-		SqlQuery = reParamPlaceholder.ReplaceAllString(SqlQuery, "?")
+		MaxUsed := 0
+		for _, Number := range Seq {
+			if Number < 1 {
+				return "", nil, fmt.Errorf("UniEngine: invalid placeholder $%d in sql (numbering starts at $1); check your code;", Number)
+			}
+			if Number > len(Args) {
+				return "", nil, fmt.Errorf("UniEngine: placeholder $%d exceeds %d arguments; check your code;", Number, len(Args))
+			}
+			if Number > MaxUsed {
+				MaxUsed = Number
+			}
+		}
+		if len(Args) > MaxUsed {
+			return "", nil, fmt.Errorf("UniEngine: %d arguments but max placeholder is $%d; mixed placeholders or wrong arg count; check your code;", len(Args), MaxUsed)
+		}
+
+		ListArgs := make([]interface{}, 0, len(Seq))
+		for _, Number := range Seq {
+			ListArgs = append(ListArgs, Args[Number-1])
+		}
+
+		if this.debugging() {
+			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"并按出现序重排实参`)
+		}
+		return Result, ListArgs, nil
 	}
 
-	return SqlQuery
+	return SqlQuery, Args, nil
 }
 
 // sqlDebug 统一的 SQL 调试输出（runDebug 开启时）

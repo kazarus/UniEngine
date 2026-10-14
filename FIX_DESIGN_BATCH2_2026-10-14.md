@@ -1,8 +1,10 @@
 # UniEngine 第二批修复设计(Q1 / Q2 / Q5)
 
-> **状态:设计已定稿,待实施。** 基线:评审报告 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68,复评 72)。
-> 第一批修复(Q3/Q4/Q7 + 假断言修正)已落地于 commit `4014962`,全量测试与 race 通过,覆盖率 82.1%。
-> 本批三个 P1 均经评审探针实际复现(探针至今仍 PASS = 缺陷仍在),涉及格式版本与兼容策略,动工前以本文为准。
+> **状态:已实施**(mock 层全量测试+race 通过;Q2/Q5 评审探针已转 FAIL=修复确认,Q1 由 VerifyMacVer=2 回归测试确认)。
+> 遗留:§6 之 Q5"真实驱动验证"用例已写入 `integration/mysql_test.go`(`TestMySQLPlaceholderRewriteStoredValues`),
+> 待可用的 MySQL 凭据后执行(本机 root 密码验证未通过,用户选择跳过,命令见该文件头注释)。
+> 基线:评审报告 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68,复评 72)。
+> 第一批修复(Q3/Q4/Q7 + 假断言修正)已落地于 commit `4014962`。
 
 ## 0. 设计原则
 

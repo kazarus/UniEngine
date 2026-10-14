@@ -18,7 +18,10 @@ func (this *TUniEngine) Execute(SqlQuery string, Args ...interface{}) error {
 }
 
 func (this *TUniEngine) ExecuteCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
-	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
+	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
+	if eror != nil {
+		return eror
+	}
 
 	this.sqlDebug("execute", SqlQuery, Args)
 
@@ -40,7 +43,10 @@ func (this *TUniEngine) ExecuteMust(SqlQuery string, Args ...interface{}) error 
 }
 
 func (this *TUniEngine) ExecuteMustCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
-	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
+	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
+	if eror != nil {
+		return eror
+	}
 
 	this.sqlDebug("execute", SqlQuery, Args)
 
