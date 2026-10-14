@@ -254,6 +254,7 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 - **`RegisterClass` 类型守卫**：裸 `nil`（`ErrNilParam`）与非结构体（map/指针，明确 kind 报错）返回**带 `LastError` 的未注册表**（沿用链式登记约定，不破坏 `*TUniTable` 签名），非法类型不再进入注册表，`NumField` 反射 panic 消除。
 - **测试扩面**：`TestAllEntriesRejectBareNil`（13 入口逐一断言 `errors.Is(ErrNilParam)` 且 recover 兜底不得 panic）、typed nil、`Select` 传值、`RegisterClass` 三类非法输入。既有 `TestWriteMethodsRejectNilPointer` 保留。
 - **P0 收尾（剩余 7 条 panic 路径）**：`SelectL` 传值切片（Append 需可寻址）返回 "needs a pointer param"；`SelectM`/`SelectH` 对 **nil map**（直接传入与经指针间接两种形态）返回 "got a nil map"，对**非 string 键**（`GetMapUnique` 返回 string，键类型不符会 `SetMapIndex` panic）返回 "needs a map with string key"；正向对照测试确认合法形态（string 键 + 已初始化 map，直接与指针两种传参）行为不变。
+- **键语义三分支（对抗性复查修正）**：`Kind()==String` 只是"类型种类"近似——命名字符串键（`type MyKey string`，Kind 仍为 String）此前守卫放行后在 `SetMapIndex` 处 panic（string 不可赋值给 MyKey）；`map[any]T` 则 string 本可赋值却被 Kind 误拒。修正为三分支：**string 可直接赋值（any/空接口）→ 直写；命名 string 类型 → 写时 `Convert`；其余 → 报错**（消息含 "assignable from string"）。新增 3 用例（命名 string 键 / `map[any]T` / 非 string 非命名类型），打破"测试用例与 Kind 判断同构"的覆盖盲区。
 
 ### 已知限制
 

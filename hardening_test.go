@@ -436,3 +436,57 @@ func TestSelectMHValidMapsStillWork(t *testing.T) {
 		t.Errorf("SelectH via pointer: %v len=%d", eror, len(VarViaPtr))
 	}
 }
+
+// #对抗性复查:Kind==String 只是种类近似——命名字符串键此前会 panic,map[any]T 此前被误杀
+type MyKey string
+
+func TestSelectMHNamedStringKeyWorks(t *testing.T) {
+	d := &mockDriver{columns: []string{"id", "name"}, queryRows: [][]driver.Value{{int64(1), "A"}}}
+	eng := newP0Engine()
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	Named := map[MyKey]p0Row{}
+	if eror := eng.SelectM(Named, "select * from t_p0"); eror != nil {
+		t.Fatalf("SelectM named-string key: %v", eror)
+	}
+	if _, Valid := Named["1"]; !Valid {
+		t.Fatalf("named-string key should be written, got %+v", Named)
+	}
+
+	NamedH := map[MyKey]p0Row{}
+	if eror := eng.SelectH(NamedH, nil, "select * from t_p0"); eror != nil {
+		t.Fatalf("SelectH named-string key: %v", eror)
+	}
+	if _, Valid := NamedH[""]; !Valid {
+		t.Fatalf("SelectH named-string key should be written (nil f → empty key), got %+v", NamedH)
+	}
+}
+
+func TestSelectMHAnyKeyWorks(t *testing.T) {
+	d := &mockDriver{columns: []string{"id", "name"}, queryRows: [][]driver.Value{{int64(2), "B"}}}
+	eng := newP0Engine()
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	AnyKey := map[any]p0Row{}
+	if eror := eng.SelectM(AnyKey, "select * from t_p0"); eror != nil {
+		t.Fatalf("SelectM any key (string is assignable to any): %v", eror)
+	}
+	if _, Valid := AnyKey["2"]; !Valid {
+		t.Fatalf("any key should be written, got %+v", AnyKey)
+	}
+}
+
+func TestSelectMHRejectsNonStringAssignableKey(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	//#非 string 且非命名 string(如 int)仍报错,消息含 assignable 语义
+	if eror := eng.SelectM(map[int]p0Row{}, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "assignable from string") {
+		t.Errorf("SelectM(int key) should error, got: %v", eror)
+	}
+	if eror := eng.SelectH(map[float64]p0Row{}, nil, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "assignable from string") {
+		t.Errorf("SelectH(float64 key) should error, got: %v", eror)
+	}
+}
