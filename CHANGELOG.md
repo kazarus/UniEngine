@@ -43,6 +43,31 @@
 - `integration/go.mod` 新增 `github.com/microsoft/go-mssqldb v1.11.2`（连带 `golang.org/x/sync`、`golang.org/x/text` 上移）。
 - **测试连接生命周期统一为 `t.Cleanup`**（在 `newEngine` / `openMSSQL` 内登记）：关闭登记在最早位置，按 LIFO 必定晚于建表后的 `DROP` 执行；此前用 `defer db.Close()` 会让 `DROP` 落在已关闭的连接上而静默失败（表泄漏）。
 
+### 注册 API 标识符白名单（防注入）+ `RegisterPkeys` 返回 nil 缺陷
+
+遗留注册表 API 此前完全不做标识符校验，而它们的参数会被**直接拼进生成的 SQL**（CRUD 表名不引号；MySQL/Oracle 族的列名亦不引号），构成一处与写路径/`Exist*` 不一致的注入面。本批补齐：
+
+- **新增校验**：`RegisterClass`（表名 + struct tag 列名）、`RegisterTable`、`RegisterField`、`RegisterPkeys`（表名与字段名）统一走 `validIdent`；`db:"-"` / `db:"_"` 是只读标记而非列名，**豁免**校验。
+- **新增哨兵 `ErrInvalidFieldName`**（表名沿用 `ErrInvalidTableName`），便于调用方 `errors.Is` 区分表名/字段名违规。
+- **零破坏修法**：非法输入不再注册，改为返回**带 `LastError` 的未注册表**（沿用 `6f771bf` 为 `RegisterClass` 引入的链式约定），四个方法的签名与调用点均不变；链式调用（`.SetKeys()` 等）在 `LastError` 上短路。
+- **`RegisterPkeys` 表未登记时不再返回 `nil`**：旧实现在表不存在时返回 `nil`，链式 `.SetKeys()` 会 **nil 解引用 panic**（实测复现）。现返回带 `ErrUnregisteredClass` 的未注册表。
+- **`Initialize()` 内部登记名改为合法标识符**：旧值 `github.com/kazarus/uniengine/unitable`（含 `/`）会被新的白名单拒绝，改为 `unitable` / `unifield`。该键仅作小写别名（另以类全名 `t.String()` 注册），不影响任何查找路径。
+- **新增回归测试**：`TestRegisterRejectsInvalidIdentifiers`（6 类非法输入逐个断言哨兵 + 非法名不进注册表 + `PrepareRunSQL` 不产出可注入 SQL + 只读标记不被误杀 + 合法注册正向对照）、`TestRegisterPkeysMissingTableNoPanic`。
+
+### 文档更正（README）
+
+- **表名/字段名白名单校验的范围**：原文「**所有**拼入 SQL 的表名/字段名……」在遗留注册表路径上不成立。补齐校验后重写为准确表述：运行时传入的名字（`Register*` 参数、写方法 `TableName`、`Exist*`）与 struct tag 列名均在覆盖范围内。
+- **加解密吞吐**：原文「4KB 档 GCM 吞吐约 0.8-1.2 GB/s」对加密档偏乐观。按实测更正为**加密约 0.75 GB/s、解密约 1.17 GB/s**（16B 档约 23 / 39 MB/s）。
+
+### 代码风格清理与包级 godoc
+
+- **清除工具化残留（零语义变化）**：删除 **30 处**「注释块 + 空行 + 同一注释块」的重复文档注释（合计 65 行冗余——此前批量改写脚本的产物），以及 **200 处**「开括号后紧跟空行」。库本体、`integration/`、`contrib/pgxcopy/` 全部归零，`gofmt` 稳定。
+- **新增包级文档 `doc.go`**：此前 17 个源文件的头注释（`// UniQuery`、`// #查询:...`）紧贴 `package` 子句，被 go/doc 视为 17 段包文档**拼接**在一起，`go doc .` 输出为无结构的碎片。现：
+  - 新增唯一 `doc.go` 承载正式包文档，覆盖**快速开始 / 方言与占位符（含 SQL Server 驱动名陷阱）/ 并发契约（含禁止按值拷贝）/ 错误处理（哨兵清单）/ 应用加密与存储完整性 / 模块布局**；
+  - 其余 17 个文件的头注释与 `package` 子句**解耦**（插入空行），不再污染包文档。`go doc .` 现只输出 `doc.go` 一段。
+- **新增用法示例 `example_test.go`**：`Example`（装配 → 登记 → 写入/查询/事务）与 `ExampleTUniEngine_Secret`（应用加密与 `SecretHook` 接管）。均为**编译期校验**（不带 `Output:` 注释，故 `go test` 只编译不执行，无需数据库）。
+- 验证：`gofmt -l` 空、`go vet ./...` 通过、全量单测 + `-race` + 真库 MSSQL 集成测试全绿。
+
 ### 已知限制
 
 - **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。
