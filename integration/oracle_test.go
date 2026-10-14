@@ -37,7 +37,6 @@ const (
 
 // oracleDSN 组装连接串:优先整串 env;否则按分量拼 go-ora 风格 DSN
 func oracleDSN() string {
-
 	if v := os.Getenv("UNIENGINE_ORACLE_DSN"); v != "" {
 		return v
 	}
@@ -78,7 +77,6 @@ func oracleDriver() string {
 
 // openOracle 建立连接;不可达时跳过(REQUIRED=1 时失败)。连接由 t.Cleanup 关闭。
 func openOracle(t *testing.T) *sql.DB {
-
 	t.Helper()
 
 	dsn := oracleDSN()
@@ -106,7 +104,6 @@ func openOracle(t *testing.T) *sql.DB {
 
 // mssqlEngineOn 的 Oracle 版:在既有连接上建引擎
 func oracleEngineOn(db *sql.DB, colParam string) *UniEngine.TUniEngine {
-
 	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: colParam, Provider: UniEngine.DtORACLE}
 	eng.Initialize()
 
@@ -122,7 +119,6 @@ type oraProbeRow struct {
 
 // setupOracleProbe 重建自建表与视图并登记主键;Cleanup 时 DROP
 func setupOracleProbe(t *testing.T, eng *UniEngine.TUniEngine) {
-
 	t.Helper()
 
 	cleanup := func() {
@@ -154,7 +150,6 @@ func setupOracleProbe(t *testing.T, eng *UniEngine.TUniEngine) {
 
 // rawOraName 绕过引擎读库中真实存储值;不存在返回 ok=false
 func rawOraName(t *testing.T, eng *UniEngine.TUniEngine, id int64) (string, bool) {
-
 	t.Helper()
 
 	var name sql.NullString
@@ -174,7 +169,6 @@ func rawOraName(t *testing.T, eng *UniEngine.TUniEngine, id int64) (string, bool
 // ---------------------------------------------------------------------------
 
 func TestOraclePlaceholderContract(t *testing.T) {
-
 	db := openOracle(t)
 
 	const probeValue = int64(7)
@@ -208,7 +202,6 @@ func TestOraclePlaceholderContract(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOracleRoundTrip(t *testing.T) {
-
 	db := openOracle(t)
 	eng := oracleEngineOn(db, ":")
 	setupOracleProbe(t, eng)
@@ -285,7 +278,6 @@ func TestOracleRoundTrip(t *testing.T) {
 
 // TestOracleWrongColParamFailsLoudly 对照 SQL Server:Oracle 族配错 ColParam 只会硬报错,不损坏数据
 func TestOracleWrongColParamFailsLoudly(t *testing.T) {
-
 	db := openOracle(t)
 
 	for _, colParam := range []string{"$", "?"} {
@@ -312,7 +304,6 @@ func TestOracleWrongColParamFailsLoudly(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOracleMetadata(t *testing.T) {
-
 	db := openOracle(t)
 	eng := oracleEngineOn(db, ":")
 	setupOracleProbe(t, eng)
@@ -364,7 +355,6 @@ func TestOracleMetadata(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOracleSecretRoundTrip(t *testing.T) {
-
 	db := openOracle(t)
 	eng := oracleEngineOn(db, ":")
 	eng.SecretOn = 1

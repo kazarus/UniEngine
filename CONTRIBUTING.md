@@ -30,6 +30,10 @@ go test -cover -count=1 .                     # keep coverage from regressing (C
 # integration (real databases; unset env => the suite skips)
 cd integration && go vet ./... && go test -race -count=1 .
 
+# repo-hygiene gates also run as part of `go test` (see §3): they walk the tree and
+# reject a blank line right after an opening brace, and duplicated doc comments
+go test -run '^TestStyle' -v .
+
 # fuzz targets: seed corpus runs with every `go test`; random exploration is explicit
 go test -run '^$' -fuzz FuzzValidIdent -fuzztime 30s .
 go test -run '^$' -fuzz FuzzUniFieldInitialize -fuzztime 30s .
@@ -74,7 +78,9 @@ across the codebase and keeps `gofmt` clean. Two consequences:
 
 Mechanical artefacts to avoid: duplicated doc comments (a comment block, a blank
 line, then the same block again) and a blank line immediately after an opening
-brace. Both were cleaned up once; do not reintroduce them.
+brace. Both were cleaned up once and then reintroduced by new code, so they are
+now enforced by `style_test.go` — which runs in every `go test`, including the CI
+matrix. You will get a `file:line` from the test rather than a review comment.
 
 ## 4. Invariants that must not regress
 
@@ -101,8 +107,19 @@ change touches a public entry point, check them:
    `*TUniEngine`. Copying shares `mu` but duplicates `tx`/`inTx`, so a clone's
    transaction is invisible to the original.
 6. **Caches must be keyed by every input.** The derived-key cache is keyed by
-   salt+iterations; if you add another input that affects derivation
-   (e.g. a key id), add it to the key.
+   salt + iterations + a fingerprint of `SecretBy`. This was once salt-only, which
+   made a runtime key rotation a silent no-op; the regression test is
+   `TestSecretRotateKeyTakesEffect`. If you add another input that affects
+   derivation, add it to the key.
+7. **Encrypt-side and decrypt-side bounds must match.** The iteration count is
+   capped at `secretIterMax`; the cap is enforced on **both** the write and the
+   read path. A bound enforced on only one side produces ciphertext the engine
+   refuses to read (`TestSecretWriteRejectsOversizedIter`).
+8. **`SetVerify` protected fields must include a registered pkey.**
+   `SetVerify` rejects registration otherwise, because the MAC payload only
+   covers the columns you list — without a key column, moving a whole row
+   (data + MAC) still verifies. Opt out with `TUniTable.VerifyUnkeyed`
+   (before calling `SetVerify`) only if you accept that risk.
 
 ## 5. Adding a database / dialect
 

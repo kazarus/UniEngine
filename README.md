@@ -116,6 +116,9 @@ db.SetMaxIdleConns(10)
 
 //#初始化
 UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provider: UniEngine.DtMYSQLN}
+//#MySQL 族走 information_schema:ExistTable/ExistViews/ExistField/ExistConst/IfDropView 与 AutoKeys 均需库名,
+//#缺省报 `UniEngine: database is not specified`(其余族由连接或库自身元数据获得,无需该字段)
+UniEngineEx.DataBase = "kz2020_gcgl_demo"
 UniEngineEx.Initialize()
 
 //#根据数据库元数据,主动获取主键
@@ -170,9 +173,9 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - 手工注册的字段可用 `.SetSecret("password")` 标记加密
 - 主键字段请勿标记 secreton(密文含随机nonce,无法用于匹配)
 - **secreton 仅支持 string 类型字段**:非 string 字段写入时直接报错(fast-fail),避免"写入密文/读取不解密"的不对称
-- **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调;派生密钥按"盐+迭代数"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
+- **密钥派生**:内置实现以 PBKDF2-HMAC-SHA256(SecretBy, 盐, 迭代数) 派生 AES-256 密钥,缺省 600000 次迭代(OWASP 2023 建议值),`SecretIter` 可调(上限 10000000,越界时**写路径直接报错**而不是产出读不回的密文);派生密钥按"盐+迭代数+密钥指纹"缓存在引擎内,每进程每份盐只付一次派生开销,行级加解密本身仍是纯 AES-GCM,读写吞吐不受影响。**仍建议 SecretBy 使用高熵随机密钥**(KDF 拉伸不能替代密钥熵度,人类口令依旧不推荐)
 - 密文格式:`ENC:` + base64( 盐(16) + 迭代数(4) + 随机nonce + AES-256-GCM密文 );盐与迭代数内嵌密文,读取自包含,跨进程可直接解密;同一明文两次加密结果不同(随机nonce+随机盐)
-- **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖主键与保护列,搬移后读取验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
+- **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,其中**必须至少包含一个已登记主键**(登记期强制,否则报 `LastError`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。把 A 行的数据连同 MAC 一起搬到 B 行,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
 
 ##### 3.1.存量数据鉴别与迁移
 
@@ -195,7 +198,12 @@ for i := range users {
 ```
 
 注意:存量明文若恰好以 `ENC:` 开头会被误判为密文(真实敏感数据概率极低);
-带标签但密钥错误的密文会解密报错(不静默,便于发现密钥轮换问题)。
+带标签但密钥不匹配的密文会解密报错(**不静默**,便于发现密钥轮换问题)。
+
+**关于密钥轮换**:派生密钥以「盐 + 迭代数 + 密钥指纹」为缓存键,故运行时更换 `SecretBy`
+**立即生效**(不会静默沿用旧派生密钥)。但密文格式只内嵌「盐 + 迭代数」、**不含密钥标识**,
+因此轮换后**旧密钥写出的存量密文将无法再解密**——轮换必须配套迁移(用旧密钥读出、
+用新密钥重写),或自行以 `SecretHook` 接管以实现多密钥共存。
 
 ##### 4.从旧版本迁移(SpecialInsert → CopyIn)
 

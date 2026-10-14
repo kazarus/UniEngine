@@ -123,6 +123,36 @@
 
 外部评估指出：GCM 密文未绑定 AAD（表名/主键/列名），库内把 A 行的密文贴到 B 行，纯加密读取路径不会发现。经设计评估，该防护**由已实现的 `SetVerify` 存储完整性校验承担**而非在加密层重做——其 HMAC 载荷域分隔含表名、覆盖主键与保护列，正是行级绑定所需，且两者叠加即闭合该攻击面。加密层保持无上下文（`SelectS` 标量自动解密依赖此特性）。README 加密章节已写明该边界与配合方式。
 
+### 加密写路径迭代数越界 fail-fast（评估 §4.7）
+
+- 缺陷：写路径只做「≤0 取缺省」**不设上限**，而读路径强制 `Iter ≤ secretIterMax`（1e7）。配置越界时引擎会**成功加密却永远读不回**自己的密文（数据丢失级，降回旧配置也无效）；`SecretIter ≥ 2³²` 时内嵌迭代数还被 `uint32` 静默截断；写入侧另有 PBKDF2 线性空转（2³² 次迭代约 6.4 分钟）。既有测试 `TestSecretRejectsAbsurdIterations` 只覆盖**读**侧，从未测写侧。
+- 修复：`SecretDefault` 写分支在派生前校验上界，越界返回 `UniEngine: SecretIter %d exceeds max %d; ciphertext would be unreadable`（**fail-fast**，不产出坏数据）。
+- 回归测试 `TestSecretWriteRejectsOversizedIter`：边界值 `secretIterMax` 必须可往返；越界必须报错且不得返回密文。**该测试在修复前失败**（已双向验证）。
+
+### 派生密钥缓存键并入 SecretBy（评估 §4.6 / §4.9）
+
+- 缺陷：缓存键原为「盐 + 迭代数」，**漏了 `SecretBy`**，导致运行时更换密钥仍命中旧派生密钥——新旧数据全线继续用旧密钥，轮换既不生效也不报错。
+- 修复：键改为「盐 + 迭代数 + **密钥指纹**（`sha256(SecretBy)[:8]`）」。以指纹而非明文入键，避免在缓存映射里额外留存一份密钥明文副本；缓存项数仍以「每份盐 + 迭代数 + 密钥」为界，有界。
+- 回归测试 `TestSecretRotateKeyTakesEffect`：同进程轮换后，新密文必须只能由新密钥解开，且旧密文必须报错。
+- **文档更正**：README 原称「带标签但密钥错误的密文会解密报错（不静默）」——该断言在修复前**同进程轮换场景下不成立**。现补充「轮换立即生效」与「密文不含密钥标识，轮换后旧密文需配套迁移（旧密钥读出、新密钥重写）」两段。
+
+### SetVerify 行级绑定改为登记期强制（评估 §4.8）
+
+- 缺陷：MAC 载荷只覆盖**显式列出的**保护列，主键不会自动并入。此前若只登记非键列，把 A 行的数据连同 MAC 一起搬到 B 行仍能通过验签——**行级绑定失效**，而 README/CHANGELOG 称其「覆盖主键」。
+- 修复：`TUniTable.SetVerify` 登记期要求保护列中至少含一个已登记主键，否则记入 `LastError`（`needs at least one pkey among protected fields for row binding`）。新增逃生口 `TUniTable.VerifyUnkeyed`（在 `SetVerify` 之前置 `true`）供确有理由不绑定行标识的场景。
+- 选择「登记期拒绝」而非「自动并入主键」，是为了**不改变载荷构成**——已按合规方式登记的表，其存量 MAC 仍然有效，避免升级瞬间全表验签失败。
+- 测试：`TestSetVerifyRequiresPkeyForRowBinding`（拒绝 / 含主键放行 / 逃生口三条路径）；`integration/mysql_test.go` 新增 `TestMySQLVerifyRowBinding`，在真库上验证「整行搬运被检出」与「篡改保护列被检出」。
+
+### 仓库卫生门禁（style_test.go）
+
+- 把两类机械残留（行尾 `{` 后紧跟空行、注释块 + 空行 + 同一注释块）固化为可执行断言，随 `go test` 在本地与 CI 矩阵中执行；遍历库本体与 `integration/`、`contrib/`。
+- 背景：这两类残留曾被批量清理（v9），随后又被新代码引入 **19 处**——约定只写在文档里会漂移。
+- 判据排除原始字符串与块注释内部以避免误报；已用临时构造的违规文件验证两处门禁**确实能拦住**。
+
+### 文档：MySQL 元数据 API 的前置要求（评估 §4.10）
+
+- README 的 MySQL 初始化示例补上 `UniEngineEx.DataBase`：`ExistTable`/`ExistViews`/`ExistField`/`ExistConst`/`IfDropView` 与 `AutoKeys` 在 MySQL 族走 `information_schema`，需库名，否则报 `UniEngine: database is not specified`（其余族由连接或库自身元数据获得，无需该字段）。
+
 ### 已知限制
 
 - **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。

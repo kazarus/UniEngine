@@ -33,7 +33,6 @@ const mysqlProbeTable = "uni_it_mysql_probe"
 
 // mysqlEnv 返回 (dsn, database);database 供引擎的 DataBase 字段使用
 func mysqlEnv() (string, string) {
-
 	database := os.Getenv("UNIENGINE_MYSQL_DB")
 
 	if v := os.Getenv("UNIENGINE_MYSQL_DSN"); v != "" {
@@ -59,7 +58,6 @@ func mysqlEnv() (string, string) {
 
 // openMySQL 建立连接;不可达时跳过(REQUIRED=1 时失败)。连接由 t.Cleanup 关闭。
 func openMySQL(t *testing.T) *sql.DB {
-
 	t.Helper()
 
 	dsn, _ := mysqlEnv()
@@ -87,7 +85,6 @@ func openMySQL(t *testing.T) *sql.DB {
 
 // mysqlEngineOn 在既有连接上建引擎;DataBase 用于 information_schema 探测
 func mysqlEngineOn(db *sql.DB, colParam string) *UniEngine.TUniEngine {
-
 	_, database := mysqlEnv()
 
 	eng := &UniEngine.TUniEngine{
@@ -110,7 +107,6 @@ type mysqlProbeRow struct {
 
 // setupMySQLProbe 重建自建表并登记主键;Cleanup 时 DROP
 func setupMySQLProbe(t *testing.T, eng *UniEngine.TUniEngine) {
-
 	t.Helper()
 
 	drop := fmt.Sprintf("drop table if exists %s", mysqlProbeTable)
@@ -140,7 +136,6 @@ func setupMySQLProbe(t *testing.T, eng *UniEngine.TUniEngine) {
 
 // rawMySQLName 绕过引擎读库中真实存储值;不存在返回 ok=false
 func rawMySQLName(t *testing.T, eng *UniEngine.TUniEngine, id int64) (string, bool) {
-
 	t.Helper()
 
 	var name sql.NullString
@@ -160,7 +155,6 @@ func rawMySQLName(t *testing.T, eng *UniEngine.TUniEngine, id int64) (string, bo
 // ---------------------------------------------------------------------------
 
 func TestMySQLPlaceholderContract(t *testing.T) {
-
 	db := openMySQL(t)
 
 	const probeValue = int64(7)
@@ -207,7 +201,6 @@ func firstLineOf(s string) string {
 // ---------------------------------------------------------------------------
 
 func TestMySQLRoundTrip(t *testing.T) {
-
 	db := openMySQL(t)
 	eng := mysqlEngineOn(db, "?")
 	setupMySQLProbe(t, eng)
@@ -288,7 +281,6 @@ func TestMySQLRoundTrip(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMySQLMetadata(t *testing.T) {
-
 	db := openMySQL(t)
 	eng := mysqlEngineOn(db, "?")
 	setupMySQLProbe(t, eng)
@@ -346,7 +338,6 @@ func TestMySQLMetadata(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMySQLSecretRoundTrip(t *testing.T) {
-
 	db := openMySQL(t)
 	eng := mysqlEngineOn(db, "?")
 	eng.SecretOn = 1
@@ -372,5 +363,93 @@ func TestMySQLSecretRoundTrip(t *testing.T) {
 	}
 	if loaded.Secret != "TOP-SECRET" {
 		t.Errorf("解密后 = %q, want \"TOP-SECRET\"", loaded.Secret)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 5. 行级绑定(评估 §4.8):保护列含主键时,"整行搬运"必须被检出
+// ---------------------------------------------------------------------------
+
+const mysqlVerifyTable = "uni_it_mysql_verify"
+
+type mysqlVerifyRow struct {
+	Id      int64  `db:"id"`
+	Name    string `db:"name"`
+	MacText string `db:"mac_text"`
+}
+
+// newMySQLVerifyProbe 建自建表(含 MAC 伴随列)并登记类;返回表对象与引擎
+func newMySQLVerifyProbe(t *testing.T, db *sql.DB) (*UniEngine.TUniTable, *UniEngine.TUniEngine) {
+	t.Helper()
+
+	eng := mysqlEngineOn(db, "?")
+	eng.VerifyOn = 1
+	eng.VerifyBy = "mysql-verify-key"
+	eng.VerifyMode = 1
+
+	drop := fmt.Sprintf("drop table if exists %s", mysqlVerifyTable)
+	if eror := eng.Execute(drop); eror != nil {
+		t.Fatalf("drop: %v", eror)
+	}
+	t.Cleanup(func() { _ = eng.Execute(drop) })
+
+	ddl := fmt.Sprintf(`create table %s (
+		id       bigint       not null,
+		name     varchar(64),
+		mac_text varchar(200) not null default '',
+		primary key (id)
+	) engine=InnoDB default charset=utf8mb4`, mysqlVerifyTable)
+	if eror := eng.Execute(ddl); eror != nil {
+		t.Fatalf("create table: %v", eror)
+	}
+
+	tbl := eng.RegisterClass(mysqlVerifyRow{}, mysqlVerifyTable).SetKeys("id")
+	if tbl.LastError != nil {
+		t.Fatalf("SetKeys: %v", tbl.LastError)
+	}
+
+	return tbl, eng
+}
+
+func TestMySQLVerifyRowBinding(t *testing.T) {
+	db := openMySQL(t)
+
+	//#① 登记期强制:保护列不含主键 → 拒绝(否则"行级绑定"只是纸面承诺)
+	tblReject, _ := newMySQLVerifyProbe(t, db)
+	if tblReject.SetVerify("mac_text", "name").LastError == nil {
+		t.Fatal("保护列不含主键应被登记期拒绝")
+	}
+
+	//#② 含主键:整行搬运(数据连同 MAC 一起搬)必须被检出
+	tbl, eng := newMySQLVerifyProbe(t, db)
+	if eror := tbl.SetVerify("mac_text", "id", "name").LastError; eror != nil {
+		t.Fatalf("SetVerify: %v", eror)
+	}
+
+	for _, Row := range []mysqlVerifyRow{{Id: 1, Name: "A"}, {Id: 2, Name: "B"}} {
+		Item := Row
+		if eror := eng.Insert(&Item, mysqlVerifyTable); eror != nil {
+			t.Fatalf("Insert id=%d: %v", Item.Id, eror)
+		}
+	}
+
+	//#把 2 号的 name 与 mac 一起贴到 1 号(id 是行标识,搬不动)
+	move := fmt.Sprintf("update %s r1, %s r2 set r1.name=r2.name, r1.mac_text=r2.mac_text where r1.id=1 and r2.id=2",
+		mysqlVerifyTable, mysqlVerifyTable)
+	if eror := eng.Execute(move); eror != nil {
+		t.Fatalf("搬运: %v", eror)
+	}
+
+	var got mysqlVerifyRow
+	eror := eng.Select(&got, fmt.Sprintf("select id,name,mac_text from %s where id=?", mysqlVerifyTable), int64(1))
+	if eror == nil {
+		t.Fatalf("保护列含主键时整行搬运应被检出,却通过: %+v", got)
+	}
+	t.Logf("整行搬运被检出: %v", eror)
+
+	//#③ 篡改被保护列(MAC 不动)同样必须被检出
+	_, _ = db.Exec(fmt.Sprintf("update %s set name='TAMPERED' where id=1", mysqlVerifyTable))
+	if eror := eng.Select(&got, fmt.Sprintf("select id,name,mac_text from %s where id=?", mysqlVerifyTable), int64(1)); eror == nil {
+		t.Fatal("篡改被保护列应被检出,却通过")
 	}
 }

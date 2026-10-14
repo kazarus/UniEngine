@@ -28,6 +28,11 @@ type TUniTable struct {
 	VerifyAt  string      //#MAC伴随列(字段名,小写)#如 hmac_text,建议建列 varchar(200) not null default ''
 	ColVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
 
+	//#VerifyUnkeyed 关闭"保护列须含已登记主键"的登记期强制(缺省 false=强制)。
+	//#MAC 载荷只覆盖**显式列出**的列,不含主键时"整行搬运"(数据连同 MAC 一起搬)仍能通过验签,
+	//#行级绑定即失效(见评估报告 §4.8)。确有理由不绑定行标识时,在 SetVerify 之前置 true 自行承担该风险
+	VerifyUnkeyed bool
+
 	HashField map[string]TUniField //ToLower
 	HashPkeys map[string]TUniField //ToLower
 
@@ -320,6 +325,22 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 		HashList[LowerTxt] = true
 		ListCols = append(ListCols, Field)
+	}
+
+	//#行级绑定强制:MAC 载荷只含显式列出的列,不会自动并入主键。保护列里没有主键时,
+	//#"整行搬运"(把 A 行的数据连同 MAC 一起贴到 B 行)仍能通过验签——除非调用方显式放弃绑定
+	if !this.VerifyUnkeyed {
+		HasPkey := false
+		for _, Field := range ListCols {
+			if _, Ok := this.HashPkeys[strings.ToLower(Field.FieldName)]; Ok {
+				HasPkey = true
+				break
+			}
+		}
+		if !HasPkey {
+			this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one pkey among protected fields for row binding; add the pkey column or set VerifyUnkeyed to opt out", this.TableName, LowerCol)
+			return this
+		}
 	}
 
 	this.VerifyOn = true
