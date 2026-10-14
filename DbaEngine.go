@@ -190,22 +190,22 @@ type TCopyInHook func(ctx context.Context, db *sql.DB, TableName string, Columns
 // 支持 schema.table:按 "." 分段逐段加引号,避免整体加引号被当成单个标识符。
 func quoteIdent(name string) string {
 
-	parts := strings.Split(name, ".")
-	for i, part := range parts {
-		parts[i] = `"` + strings.ReplaceAll(part, `"`, `""`) + `"`
+	Parts := strings.Split(name, ".")
+	for i, Part := range Parts {
+		Parts[i] = `"` + strings.ReplaceAll(Part, `"`, `""`) + `"`
 	}
 
-	return strings.Join(parts, ".")
+	return strings.Join(Parts, ".")
 }
 
 // copyInStmt 拼 COPY IN 协议语句,输出与 pq.CopyIn 逐字一致:
 // COPY "table" ("col1", "col2") FROM STDIN
-func copyInStmt(TablName string, columns []string) string {
-	quoted := make([]string, 0, len(columns))
-	for _, col := range columns {
-		quoted = append(quoted, quoteIdent(col))
+func copyInStmt(TablName string, Columns []string) string {
+	Quoted := make([]string, 0, len(Columns))
+	for _, Col := range Columns {
+		Quoted = append(Quoted, quoteIdent(Col))
 	}
-	return "COPY " + quoteIdent(TablName) + " (" + strings.Join(quoted, ", ") + ") FROM STDIN"
+	return "COPY " + quoteIdent(TablName) + " (" + strings.Join(Quoted, ", ") + ") FROM STDIN"
 }
 
 // ---------------------------------------------------------------------------
@@ -226,66 +226,66 @@ type TExistTable4POSTGR struct{}
 
 func (this TExistTable4POSTGR) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(relname) as value from pg_class where relname='%s'"
+	Result := "select count(relname) as value from pg_class where relname='%s'"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
 
 func (this TExistTable4POSTGR) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(relname) as value from pg_class where relname='%s' and relkind='v'"
+	Result := "select count(relname) as value from pg_class where relname='%s' and relkind='v'"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
 
 type TExistTable4SQLSRV struct{}
 
 func (this TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(*) from sysobjects where 1=1 and name='%s'"
+	Result := "select count(*) from sysobjects where 1=1 and name='%s'"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
 
 func (this TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='V'"
+	Result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='V'"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
 
 type TExistTable4ORACLE struct{}
 
 func (this TExistTable4ORACLE) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(*) from all_tables where table_name=upper('%s')"
+	Result := "select count(*) from all_tables where table_name=upper('%s')"
 
-	return fmt.Sprintf(result, TableName)
+	return fmt.Sprintf(Result, TableName)
 }
 
 func (this TExistTable4ORACLE) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string) string {
 
-	result := "select count(*) from user_views where view_name=upper('%s')"
+	Result := "select count(*) from user_views where view_name=upper('%s')"
 
-	return fmt.Sprintf(result, TableName)
+	return fmt.Sprintf(Result, TableName)
 }
 
 type TExistTable4MYSQLN struct{}
 
 func (this TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
+	Result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
-	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
+	return strings.ToLower(fmt.Sprintf(Result, TableName, DataBase))
 }
 
 func (this TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
 
-	result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
+	Result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
-	return strings.ToLower(fmt.Sprintf(result, TableName, DataBase))
+	return strings.ToLower(fmt.Sprintf(Result, TableName, DataBase))
 }
 
 // #for tuniengine get exist field
@@ -297,37 +297,37 @@ type TExistField4POSTGR struct{}
 
 func (this TExistField4POSTGR) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
-	result := "select count(a.attname) as value from pg_attribute a" +
+	Result := "select count(a.attname) as value from pg_attribute a" +
 		"    left join pg_class b on a.attrelid=b.oid where b.relname='%s' and a.attname='%s' and attnum>0"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName), strings.ToLower(FieldName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName), strings.ToLower(FieldName))
 }
 
 type TExistField4SQLSRV struct{}
 
 func (this TExistField4SQLSRV) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
-	result := "select count(*) as value from syscolumns where 1=1 and id=object_id('%s') and  name='%s'"
+	Result := "select count(*) as value from syscolumns where 1=1 and id=object_id('%s') and  name='%s'"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName), strings.ToLower(FieldName))
+	return fmt.Sprintf(Result, strings.ToLower(TableName), strings.ToLower(FieldName))
 }
 
 type TExistField4ORACLE struct{}
 
 func (this TExistField4ORACLE) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string) string {
 
-	result := "select count(*) as value from user_tab_columns where table_name=upper('%s') and column_name=upper('%s')"
+	Result := "select count(*) as value from user_tab_columns where table_name=upper('%s') and column_name=upper('%s')"
 
-	return fmt.Sprintf(result, strings.ToUpper(TableName), strings.ToUpper(FieldName))
+	return fmt.Sprintf(Result, strings.ToUpper(TableName), strings.ToUpper(FieldName))
 }
 
 type TExistField4MYSQLN struct{}
 
 func (this TExistField4MYSQLN) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string, DataBase string) string {
 
-	result := "select count(*) as value from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_name='%s'"
+	Result := "select count(*) as value from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_name='%s'"
 
-	return fmt.Sprintf(result, DataBase, TableName, FieldName)
+	return fmt.Sprintf(Result, DataBase, TableName, FieldName)
 }
 
 // #for tuniengine get exist const
@@ -411,7 +411,7 @@ func (this TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstTy
 	return ""
 }
 
-// #for tuniengine get primary keys
+// #for tuniengine get primary Keys
 type HasGetSqlAutoKeys interface {
 	GetSqlAutoKeys(*TUniEngine, string) (string, error)
 }
@@ -420,35 +420,35 @@ type TAutoKeys4POSTGR struct{}
 
 func (this TAutoKeys4POSTGR) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
-	result := "select attname as field_name from pg_attribute" +
+	Result := "select attname as field_name from pg_attribute" +
 		"    left join pg_class on pg_attribute.attrelid=pg_class.oid" +
 		"    where pg_class.relname='%s' and attnum>0" + // and attstattarget=-1
 		"    and exists (select * from pg_constraint where pg_constraint.conrelid=pg_class.oid and pg_constraint.contype='p' and attnum=any(conkey))"
 
-	return fmt.Sprintf(result, strings.ToLower(TableName)), nil
+	return fmt.Sprintf(Result, strings.ToLower(TableName)), nil
 }
 
 type TAutoKeys4SQLSRV struct{}
 
 func (this TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
-	result := "select c.name as field_name" +
+	Result := "select c.name as field_name" +
 		"    from sys.indexes i" +
 		"    inner join sys.index_columns ic on ic.object_id = i.object_id and ic.index_id = i.index_id" +
 		"    inner join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id" +
 		"    where i.object_id = object_id('%s') and i.is_primary_key = 1" +
 		"    order by ic.index_column_id"
 
-	return fmt.Sprintf(result, TableName), nil
+	return fmt.Sprintf(Result, TableName), nil
 }
 
 type TAutoKeys4ORACLE struct{}
 
 func (this TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 
-	result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s')"
+	Result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s')"
 
-	return fmt.Sprintf(result, TableName), nil
+	return fmt.Sprintf(Result, TableName), nil
 }
 
 type TAutoKeys4MYSQLN struct {
@@ -460,7 +460,7 @@ func (this TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName s
 	if this.DataBase == "" {
 		return "", fmt.Errorf("UniEngine: you should specify attribute [database] when using mysql.")
 	}
-	result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
+	Result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 
-	return fmt.Sprintf(result, this.DataBase, TableName), nil
+	return fmt.Sprintf(Result, this.DataBase, TableName), nil
 }

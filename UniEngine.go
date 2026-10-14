@@ -19,7 +19,7 @@ import (
 //   - while a transaction is active (between Begin and Commit/Cancel), calls
 //     must be serialized — database/sql's *sql.Tx is not safe for concurrent
 //     use, and every statement is routed to that transaction;
-//   - config fields (ColLabel/ColParam/Provider/SecretOn/SecretBy/...) and
+//   - config Fields (ColLabel/ColParam/Provider/SecretOn/SecretBy/...) and
 //     table-structure edits (SetKeys/SetSecret/AutoKeys/PrepareTables/
 //     PrepareRunSQL) should complete before concurrent queries begin.
 type TUniEngine struct {
@@ -180,9 +180,9 @@ func (this *TUniEngine) getColParam(FieldName string) string {
 // 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
 var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
-func (this *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string {
+func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) string {
 
-	if this.dbFamily() == FmORACLE && len(args) > 0 {
+	if this.dbFamily() == FmORACLE && len(Args) > 0 {
 
 		if this.debugging() {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
@@ -194,7 +194,7 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string
 		})
 	}
 
-	if this.dbFamily() == FmMYSQLN && len(args) > 0 {
+	if this.dbFamily() == FmMYSQLN && len(Args) > 0 {
 
 		if this.debugging() {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
@@ -210,60 +210,60 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, args ...interface{}) string
 // sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
 
 // sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
-func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, args interface{}) {
+func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, Args interface{}) {
 
 	if !this.debugging() {
 		return
 	}
 
 	fmt.Printf("UniEngine: %s.sql: %v\n", Kind, SqlQuery)
-	fmt.Printf("UniEngine: %s.val: %v\n", Kind, args)
+	fmt.Printf("UniEngine: %s.val: %v\n", Kind, Args)
 }
 
 func (this *TUniEngine) ProviderName() string {
 
-	var result string
+	var Result string
 
 	switch this.Provider {
 	case DtORACLE:
 		{
-			result = "oracle"
+			Result = "oracle"
 		}
 	case DtDAMENG:
 		{
-			result = "dameng"
+			Result = "dameng"
 		}
 	case DtSQLSRV:
 		{
-			result = "sqlserver"
+			Result = "sqlserver"
 		}
 	case DtPOSTGR:
 		{
-			result = "postgresql"
+			Result = "postgresql"
 		}
 	case DtKINGES:
 		{
-			result = "kingbase"
+			Result = "kingbase"
 		}
 	case DtOPENGS:
 		{
-			result = "opengauss"
+			Result = "opengauss"
 		}
 	case DtPOLODB:
 		{
-			result = "polardb"
+			Result = "polardb"
 		}
 	case DtMYSQLN:
 		{
-			result = "mysql"
+			Result = "mysql"
 		}
 	case DtTAURUS:
 		{
-			result = "taurus"
+			Result = "taurus"
 		}
 	}
 
-	return result
+	return Result
 }
 
 // SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。

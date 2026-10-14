@@ -27,11 +27,11 @@ const (
 )
 
 // #verifyRowCtx 读路径逐行验签的预解析上下文(查询列覆盖保护列+MAC列时才非 nil;
-// #列不全的查询无法验签,整行跳过——与 decryptRow 的 encryIdx 同一预计算模式)
+// #列不全的查询无法验签,整行跳过——与 decryptRow 的 EncryIdx 同一预计算模式)
 type verifyRowCtx struct {
-	tablName string //#注册表名,仅用于报错定位
-	macIdx   int    //#MAC伴随列的结构体字段下标
-	cols     []int  //#保护列的结构体字段下标,顺序=SetVerify登记顺序=载荷顺序
+	TablName string //#注册表名,仅用于报错定位
+	MacIdx   int    //#MAC伴随列的结构体字段下标
+	Cols     []int  //#保护列的结构体字段下标,顺序=SetVerify登记顺序=载荷顺序
 }
 
 // #verifyActive 引擎与表两侧开关同时打开才生效
@@ -60,10 +60,10 @@ func (this *TUniEngine) verifySign(Payload []byte) ([]byte, error) {
 		return nil, errors.New("UniEngine: VerifyOn is on, but VerifyBy is empty")
 	}
 
-	mac := hmac.New(sha256.New, []byte(this.VerifyBy))
-	mac.Write(Payload)
+	Mac := hmac.New(sha256.New, []byte(this.VerifyBy))
+	Mac.Write(Payload)
 
-	return mac.Sum(nil), nil
+	return Mac.Sum(nil), nil
 }
 
 // #verifyFormat 保护列值的规范化:定长类型走 strconv 确定序格式(同值必同串),
@@ -98,23 +98,23 @@ func verifyFormat(FieldValue reflect.Value) ([]byte, error) {
 }
 
 // #verifyPayload 规范化载荷:注册表名 + 分隔符 + 登记序保护列值(域分隔防跨表移植 MAC)
-func verifyPayload(TablName string, cols []int, v reflect.Value) ([]byte, error) {
+func verifyPayload(TablName string, Cols []int, v reflect.Value) ([]byte, error) {
 
-	buf := make([]byte, 0, 128)
-	buf = append(buf, TablName...)
+	Buf := make([]byte, 0, 128)
+	Buf = append(Buf, TablName...)
 
-	for _, idx := range cols {
+	for _, Idx := range Cols {
 
-		buf = append(buf, verifySep...)
+		Buf = append(Buf, verifySep...)
 
-		item, eror := verifyFormat(v.Field(idx))
+		item, eror := verifyFormat(v.Field(Idx))
 		if eror != nil {
 			return nil, eror
 		}
-		buf = append(buf, item...)
+		Buf = append(Buf, item...)
 	}
 
-	return buf, nil
+	return Buf, nil
 }
 
 // #verifyTextOf MAC 伴随值:标签 + base64(原始MAC)
@@ -130,22 +130,22 @@ func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int
 		return nil, nil
 	}
 
-	cols := make([]int, 0, len(UniTable.ColVerify))
+	Cols := make([]int, 0, len(UniTable.ColVerify))
 
 	for _, ItemPara := range UniTable.ColVerify {
 
-		sf, ok := t.FieldByName(ItemPara.AttriName)
-		if !ok {
-			return nil, fmt.Errorf("UniEngine: verify protected field[%s] not found in class[%s]", ItemPara.AttriName, t.String())
+		Sf, Ok := t.FieldByName(ItemPara.AttriName)
+		if !Ok {
+			return nil, fmt.Errorf("UniEngine: verify protected field[%s] not Found in class[%s]", ItemPara.AttriName, t.String())
 		}
 		//#仅支持扁平类:内嵌结构体的提升字段 Index 长度>1(与 selectRowsCtx 同一约束)
-		if len(sf.Index) != 1 {
+		if len(Sf.Index) != 1 {
 			return nil, fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", t.String(), ItemPara.AttriName)
 		}
-		cols = append(cols, sf.Index[0])
+		Cols = append(Cols, Sf.Index[0])
 	}
 
-	return cols, nil
+	return Cols, nil
 }
 
 // #verifySignCols 按已解析下标重算 MAC 并回填结构体的伴随字段。
@@ -153,9 +153,9 @@ func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int
 // #SaveIt 的 saveUpsert→saveByCount 回退链重复调用无副作用。
 // #签名以结构体为源:Update 是整行语义(全部可写列入 SET),更新前须先读后改——
 // #这与本引擎 Update 的既有契约一致
-func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, cols []int) error {
+func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Cols []int) error {
 
-	if len(cols) == 0 || v.Kind() != reflect.Struct {
+	if len(Cols) == 0 || v.Kind() != reflect.Struct {
 		return nil
 	}
 
@@ -164,19 +164,19 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, col
 		return nil
 	}
 
-	payload, eror := verifyPayload(UniTable.TableName, cols, v)
+	Payload, eror := verifyPayload(UniTable.TableName, Cols, v)
 	if eror != nil {
 		return eror
 	}
 
-	sum, eror := this.verifySign(payload)
+	sum, eror := this.verifySign(Payload)
 	if eror != nil {
 		return eror
 	}
 
 	macField := v.FieldByName(MacCol.AttriName)
 	if macField.Kind() != reflect.String {
-		return fmt.Errorf("UniEngine: verify column[%s] maps to a non-string field", MacCol.FieldName)
+		return fmt.Errorf("UniEngine: verify Column[%s] maps to a non-string field", MacCol.FieldName)
 	}
 
 	macField.SetString(verifyTextOf(sum))
@@ -191,17 +191,17 @@ func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) erro
 		return nil
 	}
 
-	cols, eror := this.verifyColsOf(UniTable, v.Type())
+	Cols, eror := this.verifyColsOf(UniTable, v.Type())
 	if eror != nil {
 		return eror
 	}
 
-	return this.verifySignCols(v, UniTable, cols)
+	return this.verifySignCols(v, UniTable, Cols)
 }
 
 // #verifyCtxOf 读路径预解析:SELECT 列覆盖全部保护列与 MAC 列时返回验签上下文,
 // #否则返回 nil(该行跳过验签,partial select 无法还原载荷)
-func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, column []string, fieldIdx []int) *verifyRowCtx {
+func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldIdx []int) *verifyRowCtx {
 
 	if !this.verifyActive(UniTable) {
 		return nil
@@ -212,40 +212,40 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, column []string, fieldI
 		return nil
 	}
 
-	lowerMac := UniTable.VerifyAt
+	LowerCol := UniTable.VerifyAt
 
-	var cols []int
+	var Cols []int
 
 	for _, ItemPara := range UniTable.ColVerify {
 
-		found := -1
-		lowerName := strings.ToLower(ItemPara.FieldName)
+		Found := -1
+		LowerTxt := strings.ToLower(ItemPara.FieldName)
 
-		for ColIndex, ItemCol := range column {
-			if strings.ToLower(ItemCol) == lowerName {
-				found = ColIndex
+		for ColIndex, ItemCol := range Column {
+			if strings.ToLower(ItemCol) == LowerTxt {
+				Found = ColIndex
 				break
 			}
 		}
-		if found < 0 {
+		if Found < 0 {
 			return nil //#保护列不在查询结果中,载荷无法还原,整行跳过验签
 		}
 
-		cols = append(cols, fieldIdx[found])
+		Cols = append(Cols, FieldIdx[Found])
 	}
 
-	macIdx := -1
-	for ColIndex, ItemCol := range column {
-		if strings.ToLower(ItemCol) == lowerMac {
-			macIdx = fieldIdx[ColIndex]
+	MacIdx := -1
+	for ColIndex, ItemCol := range Column {
+		if strings.ToLower(ItemCol) == LowerCol {
+			MacIdx = FieldIdx[ColIndex]
 			break
 		}
 	}
-	if macIdx < 0 {
+	if MacIdx < 0 {
 		return nil
 	}
 
-	return &verifyRowCtx{tablName: UniTable.TableName, macIdx: macIdx, cols: cols}
+	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols}
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。
@@ -258,36 +258,36 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
 		return nil
 	}
 
-	stored := v.Field(RowCtx.macIdx).String()
+	stored := v.Field(RowCtx.MacIdx).String()
 
 	if stored == "" {
 		if this.verifyStrict() {
-			return fmt.Errorf("UniEngine: verify fail: table[%s] row has no mac value (legacy row before backfill?)", RowCtx.tablName)
+			return fmt.Errorf("UniEngine: verify fail: table[%s] row has no mac value (legacy row before backfill?)", RowCtx.TablName)
 		}
 		return nil
 	}
 
 	if !strings.HasPrefix(stored, UniVerifyTag) {
-		return fmt.Errorf("UniEngine: verify fail: table[%s] row mac value is invalid", RowCtx.tablName)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is invalid", RowCtx.TablName)
 	}
 
-	payload, eror := verifyPayload(RowCtx.tablName, RowCtx.cols, v)
+	Payload, eror := verifyPayload(RowCtx.TablName, RowCtx.Cols, v)
 	if eror != nil {
 		return eror
 	}
 
-	sum, eror := this.verifySign(payload)
+	sum, eror := this.verifySign(Payload)
 	if eror != nil {
 		return eror
 	}
 
 	expect, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, UniVerifyTag))
 	if eror != nil {
-		return fmt.Errorf("UniEngine: verify fail: table[%s] row mac value is not base64", RowCtx.tablName)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is not base64", RowCtx.TablName)
 	}
 
 	if !hmac.Equal(expect, sum) {
-		return fmt.Errorf("UniEngine: verify fail: table[%s] row integrity check failed", RowCtx.tablName)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row integrity check failed", RowCtx.TablName)
 	}
 
 	return nil

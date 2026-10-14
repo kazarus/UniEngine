@@ -32,7 +32,7 @@ const (
 	UniSecretIter = 600000
 
 	secretSaltLen = 16                     //#写盐长度(字节)
-	secretHeadLen = secretSaltLen + 4 + 12 //#密文头:盐 + 迭代数(4) + nonce(12)
+	secretHeadLen = secretSaltLen + 4 + 12 //#密文头:盐 + 迭代数(4) + Nonce(12)
 	//#密文内嵌迭代数的合法上限,防御损坏/恶意密文触发超高开销派生
 	secretIterMax = 10000000
 )
@@ -41,8 +41,8 @@ const (
 // #作为指针字段挂在引擎上:引擎按值拷贝时共享同一份缓存,且不触发 vet copylocks
 type secretState struct {
 	mu   sync.Mutex
-	salt []byte            //#本进程写盐,首次加密时懒生成
-	keys map[string][]byte //#"盐|迭代数" -> AES-256 密钥
+	Salt []byte            //#本进程写盐,首次加密时懒生成
+	Keys map[string][]byte //#"盐|迭代数" -> AES-256 密钥
 }
 
 // #懒初始化守卫(仅覆盖建态窗口,不护业务临界区;与 muLazy 同一模式)
@@ -54,7 +54,7 @@ func (this *TUniEngine) secretStateOf() *secretState {
 	defer muSecretState.Unlock()
 
 	if this.secret == nil {
-		this.secret = &secretState{keys: make(map[string][]byte)}
+		this.secret = &secretState{Keys: make(map[string][]byte)}
 	}
 
 	return this.secret
@@ -73,72 +73,72 @@ func (this *TUniEngine) secretIterOf() int {
 // #writeSalt 本进程写盐(懒生成;本进程所有新密文共用,读取侧从密文内嵌盐恢复)
 func (this *TUniEngine) writeSalt() ([]byte, error) {
 
-	st := this.secretStateOf()
+	St := this.secretStateOf()
 
-	st.mu.Lock()
-	defer st.mu.Unlock()
+	St.mu.Lock()
+	defer St.mu.Unlock()
 
-	if st.salt == nil {
-		salt := make([]byte, secretSaltLen)
-		if _, eror := io.ReadFull(rand.Reader, salt); eror != nil {
+	if St.Salt == nil {
+		Salt := make([]byte, secretSaltLen)
+		if _, eror := io.ReadFull(rand.Reader, Salt); eror != nil {
 			return nil, eror
 		}
-		st.salt = salt
+		St.Salt = Salt
 	}
 
-	return st.salt, nil
+	return St.Salt, nil
 }
 
 // #deriveKey PBKDF2-HMAC-SHA256 派生 AES-256 密钥;按"盐+迭代数"缓存。
 // #首个到达的调用持锁派生,并发等待者随后直接命中缓存(避免惊群重复派生);
 // #密钥常驻内存是该形态加密的标准代价,与任何进程内密钥持有等价
-func (this *TUniEngine) deriveKey(salt []byte, iter int) ([]byte, error) {
+func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 
-	st := this.secretStateOf()
+	St := this.secretStateOf()
 
-	cacheKey := string(salt) + "|" + strconv.Itoa(iter)
+	CacheKey := string(Salt) + "|" + strconv.Itoa(Iter)
 
-	st.mu.Lock()
-	defer st.mu.Unlock()
+	St.mu.Lock()
+	defer St.mu.Unlock()
 
-	if key, Valid := st.keys[cacheKey]; Valid {
-		return key, nil
+	if Key, Valid := St.Keys[CacheKey]; Valid {
+		return Key, nil
 	}
 
-	key, eror := pbkdf2.Key(sha256.New, this.SecretBy, salt, iter, 32)
+	Key, eror := pbkdf2.Key(sha256.New, this.SecretBy, Salt, Iter, 32)
 	if eror != nil {
 		return nil, eror
 	}
 
-	st.keys[cacheKey] = key
+	St.Keys[CacheKey] = Key
 
-	return key, nil
+	return Key, nil
 }
 
-// #gcmOpen 以给定密钥做 AES-256-GCM 解密(data 为 nonce+密文)
-func gcmOpen(key, data []byte) ([]byte, error) {
+// #gcmOpen 以给定密钥做 AES-256-GCM 解密(Data 为 Nonce+密文)
+func gcmOpen(Key, Data []byte) ([]byte, error) {
 
-	block, eror := aes.NewCipher(key)
+	Block, eror := aes.NewCipher(Key)
 	if eror != nil {
 		return nil, eror
 	}
 
-	gcm, eror := cipher.NewGCM(block)
+	Gcm, eror := cipher.NewGCM(Block)
 	if eror != nil {
 		return nil, eror
 	}
 
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize {
-		return nil, errors.New("UniEngine: decrypt fail,cipher text is too short")
+	NonceSize := Gcm.NonceSize()
+	if len(Data) < NonceSize {
+		return nil, errors.New("UniEngine: decrypt fail,cipher Text is too short")
 	}
 
-	plainText, eror := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	PlainText, eror := Gcm.Open(nil, Data[:NonceSize], Data[NonceSize:], nil)
 	if eror != nil {
 		return nil, fmt.Errorf("UniEngine: decrypt fail: %w", eror)
 	}
 
-	return plainText, nil
+	return PlainText, nil
 }
 
 // #加密入口:SecretOn=0 时直接返回原值(不加密/不解密)
@@ -174,44 +174,44 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 
 	if Encrypt {
 
-		salt, eror := this.writeSalt()
+		Salt, eror := this.writeSalt()
 		if eror != nil {
 			return "", eror
 		}
 
-		iter := this.secretIterOf()
+		Iter := this.secretIterOf()
 
-		key, eror := this.deriveKey(salt, iter)
+		Key, eror := this.deriveKey(Salt, Iter)
 		if eror != nil {
 			return "", eror
 		}
 
-		block, eror := aes.NewCipher(key)
+		Block, eror := aes.NewCipher(Key)
 		if eror != nil {
 			return "", eror
 		}
 
-		gcm, eror := cipher.NewGCM(block)
+		Gcm, eror := cipher.NewGCM(Block)
 		if eror != nil {
 			return "", eror
 		}
 
-		nonce := make([]byte, gcm.NonceSize())
-		if _, eror = io.ReadFull(rand.Reader, nonce); eror != nil {
+		Nonce := make([]byte, Gcm.NonceSize())
+		if _, eror = io.ReadFull(rand.Reader, Nonce); eror != nil {
 			return "", eror
 		}
 
-		cipherText := gcm.Seal(nil, nonce, []byte(Value), nil)
+		CipherText := Gcm.Seal(nil, Nonce, []byte(Value), nil)
 
-		payload := make([]byte, 0, secretHeadLen+len(cipherText))
-		payload = append(payload, salt...)
-		var iterBuf [4]byte
-		binary.BigEndian.PutUint32(iterBuf[:], uint32(iter))
-		payload = append(payload, iterBuf[:]...)
-		payload = append(payload, nonce...)
-		payload = append(payload, cipherText...)
+		Payload := make([]byte, 0, secretHeadLen+len(CipherText))
+		Payload = append(Payload, Salt...)
+		var IterBuf [4]byte
+		binary.BigEndian.PutUint32(IterBuf[:], uint32(Iter))
+		Payload = append(Payload, IterBuf[:]...)
+		Payload = append(Payload, Nonce...)
+		Payload = append(Payload, CipherText...)
 
-		return UniSecretTag + base64.StdEncoding.EncodeToString(payload), nil
+		return UniSecretTag + base64.StdEncoding.EncodeToString(Payload), nil
 	}
 
 	//#存量数据鉴别:无标签的值视为存量明文,直通返回(不尝试解密)
@@ -220,41 +220,41 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 	}
 
 	//#密文:盐与迭代数内嵌,读取自包含(跨进程/跨密文均可解)
-	data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
+	Data, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(Value, UniSecretTag))
 	if eror != nil {
 		return "", fmt.Errorf("UniEngine: decrypt fail: %w", eror)
 	}
-	if len(data) < secretHeadLen {
-		return "", errors.New("UniEngine: decrypt fail,cipher text is too short")
+	if len(Data) < secretHeadLen {
+		return "", errors.New("UniEngine: decrypt fail,cipher Text is too short")
 	}
 
-	salt := data[:secretSaltLen]
-	iter := int(binary.BigEndian.Uint32(data[secretSaltLen : secretSaltLen+4]))
-	if iter <= 0 || iter > secretIterMax {
-		return "", errors.New("UniEngine: decrypt fail,invalid iterations in cipher text")
+	Salt := Data[:secretSaltLen]
+	Iter := int(binary.BigEndian.Uint32(Data[secretSaltLen : secretSaltLen+4]))
+	if Iter <= 0 || Iter > secretIterMax {
+		return "", errors.New("UniEngine: decrypt fail,invalid iterations in cipher Text")
 	}
 
-	key, eror := this.deriveKey(salt, iter)
+	Key, eror := this.deriveKey(Salt, Iter)
 	if eror != nil {
 		return "", eror
 	}
 
-	plainText, eror := gcmOpen(key, data[secretSaltLen+4:])
+	PlainText, eror := gcmOpen(Key, Data[secretSaltLen+4:])
 	if eror != nil {
 		return "", eror
 	}
 
-	return string(plainText), nil
+	return string(PlainText), nil
 }
 
 // #查询结果解密:把标记了 secreton 的字段,从密文还原为明文
-func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable, column []string) error {
+func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable, Column []string) error {
 
 	if this.SecretOn == 0 {
 		return nil
 	}
 
-	for _, ItemPara := range column {
+	for _, ItemPara := range Column {
 
 		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 		if !Valid || !UniField.SecretOn {
@@ -278,16 +278,16 @@ func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable
 }
 
 // #decryptRow 按预解析的字段下标解密(热路径;DecryptResult 的无查找版本,
-// #encryIdx 由 selectRowsCtx 在行循环前一次性算好)
-func (this *TUniEngine) decryptRow(Result reflect.Value, encryIdx []int) error {
+// #EncryIdx 由 selectRowsCtx 在行循环前一次性算好)
+func (this *TUniEngine) decryptRow(Result reflect.Value, EncryIdx []int) error {
 
 	if this.SecretOn == 0 {
 		return nil
 	}
 
-	for _, idx := range encryIdx {
+	for _, Idx := range EncryIdx {
 
-		FieldValue := Result.Field(idx)
+		FieldValue := Result.Field(Idx)
 		if FieldValue.Kind() != reflect.String {
 			continue
 		}

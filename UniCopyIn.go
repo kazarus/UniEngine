@@ -39,12 +39,12 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 	}
 
 	//#完整性:保护列下标解析一次,逐行重算 MAC 回填伴随字段(CopyInP/SpecialInsertL* 分页均汇入本路径)
-	verifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
+	VerifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
 	if eror != nil {
 		return eror
 	}
 	for m := 0; m < v.Len(); m++ {
-		if eror := this.verifySignCols(v.Index(m), UniTable, verifyCols); eror != nil {
+		if eror := this.verifySignCols(v.Index(m), UniTable, VerifyCols); eror != nil {
 			return eror
 		}
 	}
@@ -52,19 +52,19 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
-	if x, ok := v.Index(0).Interface().(HasGetSqlCopyInL); ok {
+	if x, Ok := v.Index(0).Interface().(HasGetSqlCopyInL); Ok {
 		SqlQuery = x.GetSqlCopyInL(this, TablName, int64(v.Len()))
-	} else if x, ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); ok {
+	} else if x, Ok := v.Index(0).Interface().(HasSpecialGetSqlInsertL); Ok {
 		//#兼容旧版接口
 		SqlQuery = x.SpecialGetSqlInsertL(this, TablName, int64(v.Len()))
 	}
 
-	if x, ok := v.Index(0).Interface().(HasCopyInSetSqlValuesL); ok {
+	if x, Ok := v.Index(0).Interface().(HasCopyInSetSqlValuesL); Ok {
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
 			x.CopyInSetSqlValuesL(this, EtInsert, f, &SqlValue)
 		}
-	} else if x, ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); ok {
+	} else if x, Ok := v.Index(0).Interface().(HasSpecialSetSqlValuesL); Ok {
 		//#兼容旧版接口
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
@@ -74,12 +74,12 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 	if len(SqlQuery) == 0 && len(SqlValue) == 0 {
 
-		fields := UniTable.writableFields()
-		if len(fields) == 0 {
+		Fields := UniTable.writableFields()
+		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
 		}
 
-		for _, ItemPara := range fields {
+		for _, ItemPara := range Fields {
 			SqlQuery = append(SqlQuery, ItemPara.FieldName)
 		}
 
@@ -87,22 +87,22 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 			f := v.Index(m)
 
-			var row = make([]interface{}, 0)
+			var Row = make([]interface{}, 0)
 
-			for _, ItemPara := range fields {
+			for _, ItemPara := range Fields {
 
 				if UniTable.secretColumn(ItemPara) {
 					Value, eror := this.secretEncrypt(f.FieldByName(ItemPara.AttriName))
 					if eror != nil {
 						return eror
 					}
-					row = append(row, Value)
+					Row = append(Row, Value)
 					continue
 				}
-				row = append(row, f.FieldByName(ItemPara.AttriName).Interface())
+				Row = append(Row, f.FieldByName(ItemPara.AttriName).Interface())
 			}
 
-			SqlValue = append(SqlValue, row)
+			SqlValue = append(SqlValue, Row)
 		}
 	}
 
@@ -133,22 +133,22 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 	Sql4Text := copyInStmt(TablName, SqlQuery)
 
-	st, eror := this.prepareCtx(ctx, Sql4Text)
+	St, eror := this.prepareCtx(ctx, Sql4Text)
 	if eror != nil {
 		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
-	defer st.Close()
+	defer St.Close()
 
 	// 执行所有行
-	for _, row := range SqlValue {
-		_, eror = st.ExecContext(ctx, row...)
+	for _, Row := range SqlValue {
+		_, eror = St.ExecContext(ctx, Row...)
 		if eror != nil {
 			return eror
 		}
 	}
 
 	// 完成 COPY 的收尾调用(空参数)
-	_, eror = st.ExecContext(ctx)
+	_, eror = St.ExecContext(ctx)
 	if eror != nil {
 		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
