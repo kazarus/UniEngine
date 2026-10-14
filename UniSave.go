@@ -19,129 +19,129 @@ const (
 )
 
 // upsertStmt 按方言生成原生 UPSERT 语句,消除 SaveIt 两步(count 后写入)之间的并发窗口。
-// 参数只传一遍(列序:keys 在前,cols 在后)。返回 ok=false 表示当前方言不支持,
+// 参数只传一遍(列序:Keys 在前,Cols 在后)。返回 Ok=false 表示当前方言不支持,
 // 调用方回退 count-then-dispatch。
 //
 // 注意:MySQL 不在此列——ON DUPLICATE KEY UPDATE 由任一唯一键触发而非仅主键,
 // 与 SaveIt 的主键语义不等价,故 MySQL 一律回退旧路径。
 
 // upsertStmt 按方言生成原生 UPSERT 语句,消除 SaveIt 两步(count 后写入)之间的并发窗口。
-// 参数只传一遍(列序:keys 在前,cols 在后)。返回 ok=false 表示当前方言不支持,
+// 参数只传一遍(列序:Keys 在前,Cols 在后)。返回 Ok=false 表示当前方言不支持,
 // 调用方回退 count-then-dispatch。
 //
 // 注意:MySQL 不在此列——ON DUPLICATE KEY UPDATE 由任一唯一键触发而非仅主键,
 // 与 SaveIt 的主键语义不等价,故 MySQL 一律回退旧路径。
-func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniField) (string, bool) {
+func (this *TUniEngine) upsertStmt(Mode int, TablName string, Keys, Cols []TUniField) (string, bool) {
 
-	if len(keys) == 0 {
+	if len(Keys) == 0 {
 		return "", false
 	}
 
-	var colList []string
-	var valList []string
+	var ColList []string
+	var ValList []string
 	ColIndex := 1
-	for _, list := range [][]TUniField{keys, cols} {
-		for _, ItemPara := range list {
-			colList = append(colList, this.getColParam(ItemPara.FieldName))
-			valList = append(valList, this.getValParam(ColIndex))
+	for _, List := range [][]TUniField{Keys, Cols} {
+		for _, ItemPara := range List {
+			ColList = append(ColList, this.getColParam(ItemPara.FieldName))
+			ValList = append(ValList, this.getValParam(ColIndex))
 			ColIndex++
 		}
 	}
 
-	var keyList []string
-	for _, ItemPara := range keys {
-		keyList = append(keyList, this.getColParam(ItemPara.FieldName))
+	var KeyList []string
+	for _, ItemPara := range Keys {
+		KeyList = append(KeyList, this.getColParam(ItemPara.FieldName))
 	}
 
-	updateMode := Mode == upsertModeUpdate && len(cols) > 0
+	UpdateMode := Mode == upsertModeUpdate && len(Cols) > 0
 
 	switch this.dbFamily() {
 
 	case FmPOSTGR:
 		{
 			//#PG:excluded 伪表复用本次插入值,无需重复传参
-			if !updateMode {
+			if !UpdateMode {
 				return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do nothing",
-					TablName, strings.Join(colList, ","), strings.Join(valList, ","), strings.Join(keyList, ",")), true
+					TablName, strings.Join(ColList, ","), strings.Join(ValList, ","), strings.Join(KeyList, ",")), true
 			}
 
-			var setList []string
-			for _, ItemPara := range cols {
+			var SetList []string
+			for _, ItemPara := range Cols {
 				SqlCol := this.getColParam(ItemPara.FieldName)
-				setList = append(setList, SqlCol+"=excluded."+SqlCol)
+				SetList = append(SetList, SqlCol+"=excluded."+SqlCol)
 			}
 
 			return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do update set %s",
-				TablName, strings.Join(colList, ","), strings.Join(valList, ","), strings.Join(keyList, ","), strings.Join(setList, ",")), true
+				TablName, strings.Join(ColList, ","), strings.Join(ValList, ","), strings.Join(KeyList, ","), strings.Join(SetList, ",")), true
 		}
 
 	case FmORACLE:
 		{
 			//#Oracle:MERGE,源数据放 dual 子查询,参数只传一遍
-			var selectList []string
+			var SelectList []string
 			ColIndex = 1
-			for _, list := range [][]TUniField{keys, cols} {
-				for _, ItemPara := range list {
-					selectList = append(selectList, fmt.Sprintf("%s %s", this.getValParam(ColIndex), ItemPara.FieldName))
+			for _, List := range [][]TUniField{Keys, Cols} {
+				for _, ItemPara := range List {
+					SelectList = append(SelectList, fmt.Sprintf("%s %s", this.getValParam(ColIndex), ItemPara.FieldName))
 					ColIndex++
 				}
 			}
 
-			var onList []string
-			for _, ItemPara := range keys {
-				onList = append(onList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
+			var OnList []string
+			for _, ItemPara := range Keys {
+				OnList = append(OnList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
 			}
 
-			var insertVals []string
-			for _, list := range [][]TUniField{keys, cols} {
-				for _, ItemPara := range list {
-					insertVals = append(insertVals, "src."+ItemPara.FieldName)
+			var InsertVals []string
+			for _, List := range [][]TUniField{Keys, Cols} {
+				for _, ItemPara := range List {
+					InsertVals = append(InsertVals, "src."+ItemPara.FieldName)
 				}
 			}
 
-			cSQL := fmt.Sprintf("merge into %s t using (select %s from dual) src on (%s)",
-				TablName, strings.Join(selectList, ","), strings.Join(onList, " and "))
+			SQL := fmt.Sprintf("merge into %s t using (select %s from dual) src on (%s)",
+				TablName, strings.Join(SelectList, ","), strings.Join(OnList, " and "))
 
-			if updateMode {
-				var setList []string
-				for _, ItemPara := range cols {
-					setList = append(setList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
+			if UpdateMode {
+				var SetList []string
+				for _, ItemPara := range Cols {
+					SetList = append(SetList, "t."+ItemPara.FieldName+"=src."+ItemPara.FieldName)
 				}
-				cSQL = cSQL + " when matched then update set " + strings.Join(setList, ",")
+				SQL = SQL + " when matched then update set " + strings.Join(SetList, ",")
 			}
 
-			return cSQL + " when not matched then insert ( " + strings.Join(colList, ",") + " ) values ( " + strings.Join(insertVals, ",") + " )", true
+			return SQL + " when not matched then insert ( " + strings.Join(ColList, ",") + " ) values ( " + strings.Join(InsertVals, ",") + " )", true
 		}
 
 	case FmSQLSRV:
 		{
 			//#SQLServer:MERGE + HOLDLOCK,表值构造器传参一遍
-			var onList []string
-			for _, ItemPara := range keys {
+			var OnList []string
+			for _, ItemPara := range Keys {
 				SqlCol := this.getColParam(ItemPara.FieldName)
-				onList = append(onList, "t."+SqlCol+"=src."+SqlCol)
+				OnList = append(OnList, "t."+SqlCol+"=src."+SqlCol)
 			}
 
-			var insertVals []string
-			for _, list := range [][]TUniField{keys, cols} {
-				for _, ItemPara := range list {
-					insertVals = append(insertVals, "src."+this.getColParam(ItemPara.FieldName))
+			var InsertVals []string
+			for _, List := range [][]TUniField{Keys, Cols} {
+				for _, ItemPara := range List {
+					InsertVals = append(InsertVals, "src."+this.getColParam(ItemPara.FieldName))
 				}
 			}
 
-			cSQL := fmt.Sprintf("merge into %s with (holdlock) as t using (values ( %s )) as src ( %s ) on (%s)",
-				TablName, strings.Join(valList, ","), strings.Join(colList, ","), strings.Join(onList, " and "))
+			SQL := fmt.Sprintf("merge into %s with (holdlock) as t using (values ( %s )) as src ( %s ) on (%s)",
+				TablName, strings.Join(ValList, ","), strings.Join(ColList, ","), strings.Join(OnList, " and "))
 
-			if updateMode {
-				var setList []string
-				for _, ItemPara := range cols {
+			if UpdateMode {
+				var SetList []string
+				for _, ItemPara := range Cols {
 					SqlCol := this.getColParam(ItemPara.FieldName)
-					setList = append(setList, "t."+SqlCol+"=src."+SqlCol)
+					SetList = append(SetList, "t."+SqlCol+"=src."+SqlCol)
 				}
-				cSQL = cSQL + " when matched then update set " + strings.Join(setList, ",")
+				SQL = SQL + " when matched then update set " + strings.Join(SetList, ",")
 			}
 
-			return cSQL + " when not matched then insert ( " + strings.Join(colList, ",") + " ) values ( " + strings.Join(insertVals, ",") + " );", true
+			return SQL + " when not matched then insert ( " + strings.Join(ColList, ",") + " ) values ( " + strings.Join(InsertVals, ",") + " );", true
 		}
 	}
 
@@ -155,37 +155,37 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 // (GetSqlUpdate/GetSqlInsert/SetSqlValues)存在时,自定义语句无法转为 UPSERT,回退旧路径。
 func canNativeSave(v reflect.Value) bool {
 
-	if _, ok := v.Interface().(HasGetSqlUpdate); ok {
+	if _, Ok := v.Interface().(HasGetSqlUpdate); Ok {
 		return false
 	}
-	if _, ok := v.Interface().(HasGetSqlInsert); ok {
+	if _, Ok := v.Interface().(HasGetSqlInsert); Ok {
 		return false
 	}
-	if _, ok := v.Interface().(HasSetSqlValues); ok {
+	if _, Ok := v.Interface().(HasSetSqlValues); Ok {
 		return false
 	}
 
 	return true
 }
 
-// saveUpsert 方言原生 UPSERT 执行(keys/cols 按确定序收集,参数只传一遍)。
-// 返回 done=false 表示方言不支持,调用方回退 count-then-dispatch。
+// saveUpsert 方言原生 UPSERT 执行(Keys/Cols 按确定序收集,参数只传一遍)。
+// 返回 Done=false 表示方言不支持,调用方回退 count-then-dispatch。
 
-// saveUpsert 方言原生 UPSERT 执行(keys/cols 按确定序收集,参数只传一遍)。
-// 返回 done=false 表示方言不支持,调用方回退 count-then-dispatch。
+// saveUpsert 方言原生 UPSERT 执行(Keys/Cols 按确定序收集,参数只传一遍)。
+// 返回 Done=false 表示方言不支持,调用方回退 count-then-dispatch。
 func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string, Mode int) (bool, error) {
 
-	keys := UniTable.pkeyFields()
+	Keys := UniTable.pkeyFields()
 
-	var cols []TUniField
+	var Cols []TUniField
 	for _, ItemPara := range UniTable.writableFields() {
-		if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
+		if _, Valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; Valid {
 			continue
 		}
-		cols = append(cols, ItemPara)
+		Cols = append(Cols, ItemPara)
 	}
 
-	if len(keys) == 0 {
+	if len(Keys) == 0 {
 		return false, nil
 	}
 
@@ -194,37 +194,37 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 		return false, eror
 	}
 
-	cSQL, ok := this.upsertStmt(Mode, TablName, keys, cols)
-	if !ok {
+	SQL, Ok := this.upsertStmt(Mode, TablName, Keys, Cols)
+	if !Ok {
 		return false, nil
 	}
 
 	//#主键值一律明文(on conflict 的匹配即 WHERE 语义);仅数据列参与应用加密
-	values := make([]interface{}, 0, len(keys)+len(cols))
-	for _, ItemPara := range keys {
-		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+	Values := make([]interface{}, 0, len(Keys)+len(Cols))
+	for _, ItemPara := range Keys {
+		Values = append(Values, v.FieldByName(ItemPara.AttriName).Interface())
 	}
-	for _, ItemPara := range cols {
+	for _, ItemPara := range Cols {
 		if UniTable.secretColumn(ItemPara) {
 			Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
 			if eror != nil {
 				return false, eror
 			}
-			values = append(values, Value)
+			Values = append(Values, Value)
 			continue
 		}
-		values = append(values, v.FieldByName(ItemPara.AttriName).Interface())
+		Values = append(Values, v.FieldByName(ItemPara.AttriName).Interface())
 	}
 
-	this.sqlDebug("upsert", cSQL, values)
+	this.sqlDebug("upsert", SQL, Values)
 
-	st, eror := this.prepareCtx(ctx, cSQL)
+	St, eror := this.prepareCtx(ctx, SQL)
 	if eror != nil {
 		return false, eror
 	}
-	defer st.Close()
+	defer St.Close()
 
-	if _, eror := st.ExecContext(ctx, values...); eror != nil {
+	if _, eror := St.ExecContext(ctx, Values...); eror != nil {
 		return false, fmt.Errorf("UniEngine: upsert fail: %w", eror)
 	}
 
@@ -236,21 +236,21 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 // countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
 func (this *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string) (int64, error) {
 
-	var keyCols []string
+	var KeyCols []string
 	SqlValue := make([]interface{}, 0)
 
 	ColIndex := 1
 	for _, ItemPara := range UniTable.pkeyFields() {
-		keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+		KeyCols = append(KeyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 		SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		ColIndex = ColIndex + 1
 	}
 
-	if len(keyCols) == 0 {
+	if len(KeyCols) == 0 {
 		return 0, fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
-	SqlQuery := fmt.Sprintf("select count(1) from %s where %s", TablName, strings.Join(keyCols, " and "))
+	SqlQuery := fmt.Sprintf("select count(1) from %s where %s", TablName, strings.Join(KeyCols, " and "))
 
 	return this.SelectDCtx(ctx, SqlQuery, SqlValue...)
 }
@@ -297,11 +297,11 @@ func (this *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, TableName 
 	//#默认路径走方言原生 UPSERT,消除 count 与写入之间的并发窗口;
 	//#钩子类/不支持的方言回退旧的 count-then-dispatch
 	if canNativeSave(v) {
-		done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeUpdate)
+		Done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeUpdate)
 		if eror != nil {
 			return eror
 		}
-		if done {
+		if Done {
 			return nil
 		}
 	}
@@ -321,11 +321,11 @@ func (this *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}
 	}
 
 	if canNativeSave(v) {
-		done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeSkip)
+		Done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeSkip)
 		if eror != nil {
 			return eror
 		}
-		if done {
+		if Done {
 			return nil
 		}
 	}

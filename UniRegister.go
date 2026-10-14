@@ -58,7 +58,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 	}
 
 	// 同时以小写表名（PrepareTables/PrepareRunSQL 路径）与类全名（SaveIt/Insert/Delete/Select* 路径）注册，
-	// 统一两套 key 的可见性；两者指向同一表
+	// 统一两套 Key 的可见性；两者指向同一表
 	this.HashTabl[strings.ToLower(TableName)] = UniTable
 	this.HashTabl[t.String()] = UniTable
 
@@ -241,57 +241,57 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 		}
 	case EtInsert:
 		{
-			var colList []string
-			var valList []string
+			var ColList []string
+			var ValList []string
 			ColIndex := 1
 			for _, ItemPara := range UniTable.orderedField() {
 				if ItemPara.ReadOnly {
 					continue
 				}
-				colList = append(colList, this.getColParam(ItemPara.FieldName))
-				valList = append(valList, this.getValParam(ColIndex))
+				ColList = append(ColList, this.getColParam(ItemPara.FieldName))
+				ValList = append(ValList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
 				ListField = append(ListField, ItemPara)
 			}
 
-			if len(colList) > 0 {
-				SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, strings.Join(colList, ","), strings.Join(valList, ","))
+			if len(ColList) > 0 {
+				SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, strings.Join(ColList, ","), strings.Join(ValList, ","))
 				UniTable.SqlInsert = SqlResult
 			}
 		}
 	case EtUpdate:
 		{
-			var setList []string
-			var keyList []string
+			var SetList []string
+			var KeyList []string
 			ColIndex := 1
 			for _, ItemPara := range UniTable.orderedField() {
 				if ItemPara.ReadOnly {
 					continue
 				}
 
-				if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
+				if _, Valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; Valid {
 					ItemPara.PkeyOnly = true
 					ListField = append(ListField, ItemPara)
 					continue
 				}
 
-				setList = append(setList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+				SetList = append(SetList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
 				ListField = append(ListField, ItemPara)
 			}
 
 			for _, ItemPara := range UniTable.orderedPkeys() {
-				keyList = append(keyList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+				KeyList = append(KeyList, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 			}
 
-			if len(setList) == 0 {
+			if len(SetList) == 0 {
 				return "", ListField, UniTable.ListPkeys, fmt.Errorf("UniEngine: no updatable column for table:%s", UniTable.TableName)
 			}
 
-			SqlResult = fmt.Sprintf("update %s set %s where 1=1 and %s", UniTable.TableName, strings.Join(setList, ","), strings.Join(keyList, " and "))
+			SqlResult = fmt.Sprintf("update %s set %s where 1=1 and %s", UniTable.TableName, strings.Join(SetList, ","), strings.Join(KeyList, " and "))
 			UniTable.SqlUpdate = SqlResult
 		}
 	}

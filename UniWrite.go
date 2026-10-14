@@ -15,9 +15,9 @@ import (
 
 // resolveTarget 统一写方法的公共前置：解析可选的表名参数(TableName[0],空切片时用
 // 注册表中的默认表名)、反射取元素类型并查注册表、标识符校验。
-// wantKind 指定期望的容器种类(Insert 传 Struct,InsertL/CopyInL 传 Slice,
-// 无需检查传 reflect.Invalid);needPkeys 要求类已注册主键。
-func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []string, wantKind reflect.Kind, needPkeys bool) (*TUniTable, reflect.Value, string, error) {
+// WantKind 指定期望的容器种类(Insert 传 Struct,InsertL/CopyInL 传 Slice,
+// 无需检查传 reflect.Invalid);NeedPkeys 要求类已注册主键。
+func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []string, WantKind reflect.Kind, NeedPkeys bool) (*TUniTable, reflect.Value, string, error) {
 
 	var TablName string
 	if len(TableName) > 0 {
@@ -34,12 +34,12 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] got a nil pointer param; check your code;", Method)
 	}
 
-	if wantKind == reflect.Slice {
+	if WantKind == reflect.Slice {
 		if t.Kind() != reflect.Slice {
 			return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] needs a slice param; check your code;", Method)
 		}
 		t = t.Elem()
-	} else if wantKind == reflect.Struct && t.Kind() != reflect.Struct {
+	} else if WantKind == reflect.Struct && t.Kind() != reflect.Struct {
 		return nil, reflect.Value{}, "", fmt.Errorf("UniEngine: method [%s] only returns a struct; may be you should try [InsertL]", Method)
 	}
 
@@ -47,7 +47,7 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 	if UniTable == nil {
 		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrUnregisteredClass, t.String())
 	}
-	if needPkeys && len(UniTable.HashPkeys) == 0 {
+	if NeedPkeys && len(UniTable.HashPkeys) == 0 {
 		return nil, reflect.Value{}, "", fmt.Errorf("%w: %s", ErrNoPkeys, t.String())
 	}
 
@@ -89,28 +89,28 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, ok := v.Interface().(HasGetSqlUpdate); ok {
+	if x, Ok := v.Interface().(HasGetSqlUpdate); Ok {
 		SqlQuery = x.GetSqlUpdate(this, TablName)
 	}
-	if x, ok := v.Interface().(HasSetSqlValues); ok {
+	if x, Ok := v.Interface().(HasSetSqlValues); Ok {
 		x.SetSqlValues(this, EtUpdate, &SqlValue)
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		var setCols []string
-		var keyCols []string
+		var SetCols []string
+		var KeyCols []string
 		xValue := make([]interface{}, 0)
 		zValue := make([]interface{}, 0)
 
 		ColIndex := 1
 		for _, ItemPara := range UniTable.writableFields() {
 
-			if _, valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; valid {
+			if _, Valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; Valid {
 				continue
 			}
 
-			setCols = append(setCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+			SetCols = append(SetCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 
 			if ItemPara.SecretOn {
 				Value, eror := this.secretEncrypt(v.FieldByName(ItemPara.AttriName))
@@ -125,31 +125,31 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 		}
 
 		for _, ItemPara := range UniTable.pkeyFields() {
-			keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+			KeyCols = append(KeyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 			zValue = append(zValue, v.FieldByName(ItemPara.AttriName).Interface())
 			ColIndex = ColIndex + 1
 		}
 
-		if len(setCols) == 0 {
+		if len(SetCols) == 0 {
 			return fmt.Errorf("UniEngine: no updatable column in class registered: %s", UniTable.TableName)
 		}
-		if len(keyCols) == 0 {
+		if len(KeyCols) == 0 {
 			return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 		}
 
-		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 and %s", TablName, strings.Join(setCols, ","), strings.Join(keyCols, " and "))
+		SqlQuery = fmt.Sprintf("update %s set %s where 1=1 and %s", TablName, strings.Join(SetCols, ","), strings.Join(KeyCols, " and "))
 		SqlValue = append(xValue, zValue...)
 	}
 
 	this.sqlDebug("update", SqlQuery, SqlValue)
 
-	st, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer st.Close()
+	defer St.Close()
 
-	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: update fail: %w", eror)
 	}
 
@@ -175,27 +175,27 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, ok := v.Interface().(HasGetSqlInsert); ok {
+	if x, Ok := v.Interface().(HasGetSqlInsert); Ok {
 		SqlQuery = x.GetSqlInsert(this, TablName)
 	}
-	if x, ok := v.Interface().(HasSetSqlValues); ok {
+	if x, Ok := v.Interface().(HasSetSqlValues); Ok {
 		x.SetSqlValues(this, EtInsert, &SqlValue)
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		fields := UniTable.writableFields()
-		if len(fields) == 0 {
+		Fields := UniTable.writableFields()
+		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
 		}
 
-		var colList []string
-		var valList []string
+		var ColList []string
+		var ValList []string
 		ColIndex := 1
-		for _, ItemPara := range fields {
+		for _, ItemPara := range Fields {
 
-			colList = append(colList, this.getColParam(ItemPara.FieldName))
-			valList = append(valList, this.getValParam(ColIndex))
+			ColList = append(ColList, this.getColParam(ItemPara.FieldName))
+			ValList = append(ValList, this.getValParam(ColIndex))
 			ColIndex = ColIndex + 1
 
 			if UniTable.secretColumn(ItemPara) {
@@ -209,18 +209,18 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 			SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		}
 
-		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(colList, ","), strings.Join(valList, ","))
+		SqlQuery = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", TablName, strings.Join(ColList, ","), strings.Join(ValList, ","))
 	}
 
 	this.sqlDebug("insert", SqlQuery, SqlValue)
 
-	st, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer st.Close()
+	defer St.Close()
 
-	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: insert fail: %w", eror)
 	}
 
@@ -243,12 +243,12 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 	}
 
 	//#完整性:保护列下标解析一次,逐行重算 MAC 回填伴随字段
-	verifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
+	VerifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
 	if eror != nil {
 		return eror
 	}
 	for m := 0; m < v.Len(); m++ {
-		if eror := this.verifySignCols(v.Index(m), UniTable, verifyCols); eror != nil {
+		if eror := this.verifySignCols(v.Index(m), UniTable, VerifyCols); eror != nil {
 			return eror
 		}
 	}
@@ -256,11 +256,11 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, ok := v.Index(0).Interface().(HasGetSqlInsertL); ok {
+	if x, Ok := v.Index(0).Interface().(HasGetSqlInsertL); Ok {
 		SqlQuery = x.GetSqlInsertL(this, TablName, int64(v.Len()))
 	}
 
-	if x, ok := v.Index(0).Interface().(HasSetSqlValuesL); ok {
+	if x, Ok := v.Index(0).Interface().(HasSetSqlValuesL); Ok {
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
 			x.SetSqlValuesL(this, EtInsert, f, &SqlValue)
@@ -269,26 +269,26 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
 
-		fields := UniTable.writableFields()
-		if len(fields) == 0 {
+		Fields := UniTable.writableFields()
+		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
 		}
 
-		var colList []string
-		for _, ItemPara := range fields {
-			colList = append(colList, this.getColParam(ItemPara.FieldName))
+		var ColList []string
+		for _, ItemPara := range Fields {
+			ColList = append(ColList, this.getColParam(ItemPara.FieldName))
 		}
 
-		var rowList []string
+		var RowList []string
 		ColIndex := 1
 		for m := 0; m < v.Len(); m++ {
 
 			f := v.Index(m)
 
-			var valList []string
-			for _, ItemPara := range fields {
+			var ValList []string
+			for _, ItemPara := range Fields {
 
-				valList = append(valList, this.getValParam(ColIndex))
+				ValList = append(ValList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
 				if UniTable.secretColumn(ItemPara) {
@@ -304,28 +304,28 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 			if this.dbFamily() == FmORACLE {
 				//#Oracle:INSERT ALL 多行语法
-				rowList = append(rowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(colList, ","), strings.Join(valList, ",")))
+				RowList = append(RowList, fmt.Sprintf("into %s ( %s ) values ( %s )", TablName, strings.Join(ColList, ","), strings.Join(ValList, ",")))
 			} else {
-				rowList = append(rowList, fmt.Sprintf("( %s )", strings.Join(valList, ",")))
+				RowList = append(RowList, fmt.Sprintf("( %s )", strings.Join(ValList, ",")))
 			}
 		}
 
 		if this.dbFamily() == FmORACLE {
-			SqlQuery = fmt.Sprintf("insert all %s select 1 from dual", strings.Join(rowList, " "))
+			SqlQuery = fmt.Sprintf("insert all %s select 1 from dual", strings.Join(RowList, " "))
 		} else {
-			SqlQuery = fmt.Sprintf("insert into %s ( %s ) values %s", TablName, strings.Join(colList, ","), strings.Join(rowList, ","))
+			SqlQuery = fmt.Sprintf("insert into %s ( %s ) values %s", TablName, strings.Join(ColList, ","), strings.Join(RowList, ","))
 		}
 	}
 
 	this.sqlDebug("insert", SqlQuery, SqlValue)
 
-	st, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer st.Close()
+	defer St.Close()
 
-	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: insert fail: %w (hint: too many parameters? try [InsertP])", eror)
 	}
 
@@ -343,31 +343,31 @@ func (this *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName 
 		return eror
 	}
 
-	var keyCols []string
+	var KeyCols []string
 	SqlValue := make([]interface{}, 0)
 
 	ColIndex := 1
 	for _, ItemPara := range UniTable.pkeyFields() {
-		keyCols = append(keyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
+		KeyCols = append(KeyCols, this.getColParam(ItemPara.FieldName)+"="+this.getValParam(ColIndex))
 		SqlValue = append(SqlValue, v.FieldByName(ItemPara.AttriName).Interface())
 		ColIndex = ColIndex + 1
 	}
 
-	if len(keyCols) == 0 {
+	if len(KeyCols) == 0 {
 		return fmt.Errorf("%w: %s", ErrNoPkeys, UniTable.TableName)
 	}
 
-	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, strings.Join(keyCols, " and "))
+	SqlQuery := fmt.Sprintf("delete from %s where %s", TablName, strings.Join(KeyCols, " and "))
 
 	this.sqlDebug("delete", SqlQuery, SqlValue)
 
-	st, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
-	defer st.Close()
+	defer St.Close()
 
-	if _, eror = st.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: delete fail: %w", eror)
 	}
 
