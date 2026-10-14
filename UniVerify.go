@@ -19,9 +19,9 @@ import (
 type TVerifyHook func(Payload []byte) ([]byte, error)
 
 const (
-	// #MAC 标签:v1=内置 HMAC-SHA256 + 载荷规范 v1(表名+登记序保护列值);
+	// #MAC 标签:内置 HMAC-SHA256,载荷=表名+登记序保护列值(分隔符 verifySep);
 	// #读取自识别,带标签的值必验,不带标签的存量行按 VerifyMode 处理
-	UniVerifyTag = "MAC1:"
+	UniVerifyTag = "MAC:"
 	// #载荷分隔符(ASCII 单元分隔符):授权键/状态列取值均为业务字符,不含该控制符
 	verifySep = "\x1f"
 )

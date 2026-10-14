@@ -58,23 +58,23 @@ func (this *TUniTable) orderedField() []TUniField {
 	list := make([]TUniField, 0, len(this.HashField))
 
 	for _, ItemPara := range this.ListField {
-		lowerName := strings.ToLower(ItemPara.FieldName)
-		if _, Valid := this.HashField[lowerName]; !Valid || seen[lowerName] {
+		LowerTxt := strings.ToLower(ItemPara.FieldName)
+		if _, Valid := this.HashField[LowerTxt]; !Valid || seen[LowerTxt] {
 			continue
 		}
-		seen[lowerName] = true
+		seen[LowerTxt] = true
 		list = append(list, ItemPara)
 	}
 
 	var rest []string
-	for lowerName := range this.HashField {
-		if !seen[lowerName] {
-			rest = append(rest, lowerName)
+	for LowerTxt := range this.HashField {
+		if !seen[LowerTxt] {
+			rest = append(rest, LowerTxt)
 		}
 	}
 	sort.Strings(rest)
-	for _, lowerName := range rest {
-		list = append(list, this.HashField[lowerName])
+	for _, LowerTxt := range rest {
+		list = append(list, this.HashField[LowerTxt])
 	}
 
 	return list
@@ -92,23 +92,23 @@ func (this *TUniTable) orderedPkeys() []TUniField {
 	list := make([]TUniField, 0, len(this.HashPkeys))
 
 	for _, ItemPara := range this.ListPkeys {
-		lowerName := strings.ToLower(ItemPara.FieldName)
-		if _, Valid := this.HashPkeys[lowerName]; !Valid || seen[lowerName] {
+		LowerTxt := strings.ToLower(ItemPara.FieldName)
+		if _, Valid := this.HashPkeys[LowerTxt]; !Valid || seen[LowerTxt] {
 			continue
 		}
-		seen[lowerName] = true
+		seen[LowerTxt] = true
 		list = append(list, ItemPara)
 	}
 
 	var rest []string
-	for lowerName := range this.HashPkeys {
-		if !seen[lowerName] {
-			rest = append(rest, lowerName)
+	for LowerTxt := range this.HashPkeys {
+		if !seen[LowerTxt] {
+			rest = append(rest, LowerTxt)
 		}
 	}
 	sort.Strings(rest)
-	for _, lowerName := range rest {
-		list = append(list, this.HashPkeys[lowerName])
+	for _, LowerTxt := range rest {
+		list = append(list, this.HashPkeys[LowerTxt])
 	}
 
 	return list
@@ -118,29 +118,31 @@ func (this *TUniTable) orderedPkeys() []TUniField {
 // RegisterField 直写的字段无 AttriName,不参与反射赋值路径。
 func (this *TUniTable) writableFields() []TUniField {
 
-	var fields []TUniField
+	var result []TUniField
+
 	for _, ItemPara := range this.orderedField() {
 		if ItemPara.ReadOnly || ItemPara.AttriName == "" {
 			continue
 		}
-		fields = append(fields, ItemPara)
+		result = append(result, ItemPara)
 	}
 
-	return fields
+	return result
 }
 
 // pkeyFields 返回可用于 where 定位的主键列(有 AttriName 映射),按确定序。
 func (this *TUniTable) pkeyFields() []TUniField {
 
-	var keys []TUniField
+	var result []TUniField
+
 	for _, ItemPara := range this.orderedPkeys() {
 		if ItemPara.AttriName == "" {
 			continue
 		}
-		keys = append(keys, ItemPara)
+		result = append(result, ItemPara)
 	}
 
-	return keys
+	return result
 }
 
 // secretColumn 判断写入路径是否对该列应用加密:主键值一律保持明文
@@ -187,9 +189,9 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 			return this
 		}
 
-		lowerName := strings.ToLower(fieldName)
-		if _, exists := this.HashPkeys[lowerName]; !exists {
-			this.HashPkeys[lowerName] = Field
+		LowerTxt := strings.ToLower(fieldName)
+		if _, exists := this.HashPkeys[LowerTxt]; !exists {
+			this.HashPkeys[LowerTxt] = Field
 			this.ListPkeys = append(this.ListPkeys, Field)
 		}
 	}
@@ -212,22 +214,22 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 			return this
 		}
 
-		lowerName := strings.ToLower(fieldName)
+		LowerTxt := strings.ToLower(fieldName)
 
-		Field, Valid := this.HashField[lowerName]
+		Field, Valid := this.HashField[LowerTxt]
 		if !Valid {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerTxt)
 			return this
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
-		if _, isPkey := this.HashPkeys[lowerName]; isPkey {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, lowerName)
+		if _, isPkey := this.HashPkeys[LowerTxt]; isPkey {
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, LowerTxt)
 			return this
 		}
 
 		Field.SecretOn = true
-		this.HashField[lowerName] = Field
+		this.HashField[LowerTxt] = Field
 
 		//#表级标记同步置位(任一列被标记即认为该表含加密字段)
 		this.SecretOn = true
@@ -235,7 +237,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 		//#加密列清单同步登记(重复 SetSecret 同列不重复登记)
 		var Seen bool
 		for i := range this.ColSecret {
-			if strings.ToLower(this.ColSecret[i].FieldName) == lowerName {
+			if strings.ToLower(this.ColSecret[i].FieldName) == LowerTxt {
 				Seen = true
 				break
 			}
@@ -246,7 +248,7 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 
 		//#ListField 是 HashField 的另一份副本,须同步标记,否则 PrepareRunSQL 路径会读到旧值
 		for i := range this.ListField {
-			if strings.ToLower(this.ListField[i].FieldName) == lowerName {
+			if strings.ToLower(this.ListField[i].FieldName) == LowerTxt {
 				this.ListField[i].SecretOn = true
 			}
 		}
@@ -262,77 +264,77 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 // #写路径自动重算 MacField 回填,读路径逐行验签(平台:等保/密评 访问控制信息存储完整性)
 // #载荷含注册表名做域分隔,MAC 不可跨表移植;保护列可含主键列与 secreton 列
 // #(secreton 列参与载荷的是解密后的明文,与读路径先解密后验签的顺序一致)
-func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
+func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 	if this.LastError != nil {
 		return this
 	}
 
-	lowerMac := strings.ToLower(MacField)
+	LowerCol := strings.ToLower(VerifyAt)
 
-	MacCol, Valid := this.HashField[lowerMac]
+	FieldCol, Valid := this.HashField[LowerCol]
 	if !Valid {
-		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerCol)
 		return this
 	}
-	if MacCol.AttriName == "" {
-		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; mac column needs a writable string field", this.TableName, lowerMac)
+	if FieldCol.AttriName == "" {
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; mac column needs a writable string field", this.TableName, LowerCol)
 		return this
 	}
-	if MacCol.ReadOnly {
-		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is readonly; mac column must be writable", this.TableName, lowerMac)
+	if FieldCol.ReadOnly {
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is readonly; mac column must be writable", this.TableName, LowerCol)
 		return this
 	}
-	if _, isPkey := this.HashPkeys[lowerMac]; isPkey {
-		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; mac column is engine-computed and can not be a pkey", this.TableName, lowerMac)
+	if _, isPkey := this.HashPkeys[LowerCol]; isPkey {
+		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; mac column is engine-computed and can not be a pkey", this.TableName, LowerCol)
 		return this
 	}
 	//#MAC 值写入 string 字段;其它类型无法回填,登记期直接拒绝
 	if this.ClassType != nil {
-		if sf, ok := this.ClassType.FieldByName(MacCol.AttriName); !ok || sf.Type.Kind() != reflect.String {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; mac column must be string", this.TableName, lowerMac)
+		if sf, ok := this.ClassType.FieldByName(FieldCol.AttriName); !ok || sf.Type.Kind() != reflect.String {
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; mac column must be string", this.TableName, LowerCol)
 			return this
 		}
 	}
 
 	if len(Fields) == 0 {
-		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, lowerMac)
+		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, LowerCol)
 		return this
 	}
 
-	var ListProtected = make([]TUniField, 0, len(Fields))
-	var HashSeen = make(map[string]bool, len(Fields))
+	var ListCols = make([]TUniField, 0, len(Fields))
+	var HashList = make(map[string]bool, len(Fields))
 
 	for _, ItemPara := range Fields {
 
-		lowerName := strings.ToLower(ItemPara)
+		LowerTxt := strings.ToLower(ItemPara)
 
-		if lowerName == lowerMac {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is the mac column itself; it can not protect itself", this.TableName, lowerName)
+		if LowerTxt == LowerCol {
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is the mac column itself; it can not protect itself", this.TableName, LowerTxt)
 			return this
 		}
 
-		Field, Valid := this.HashField[lowerName]
+		Field, Valid := this.HashField[LowerTxt]
 		if !Valid {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerTxt)
 			return this
 		}
 		if Field.AttriName == "" {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected fields must map to class attributes", this.TableName, lowerName)
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected fields must map to class attributes", this.TableName, LowerTxt)
 			return this
 		}
-		if HashSeen[lowerName] {
-			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, lowerName)
+		if HashList[LowerTxt] {
+			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, LowerTxt)
 			return this
 		}
 
-		HashSeen[lowerName] = true
-		ListProtected = append(ListProtected, Field)
+		HashList[LowerTxt] = true
+		ListCols = append(ListCols, Field)
 	}
 
 	this.VerifyOn = true
-	this.VerifyAt = lowerMac
-	this.ColVerify = ListProtected
+	this.VerifyAt = LowerCol
+	this.ColVerify = ListCols
 
 	return this
 }
@@ -391,9 +393,9 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 			return fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, ItemPara.FieldName)
 		}
 
-		lowerName := strings.ToLower(ItemPara.FieldName)
-		if _, exists := this.HashPkeys[lowerName]; !exists {
-			this.HashPkeys[lowerName] = ItemCopy
+		LowerTxt := strings.ToLower(ItemPara.FieldName)
+		if _, exists := this.HashPkeys[LowerTxt]; !exists {
+			this.HashPkeys[LowerTxt] = ItemCopy
 			this.ListPkeys = append(this.ListPkeys, ItemCopy)
 		}
 		CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
