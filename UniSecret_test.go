@@ -896,3 +896,36 @@ func TestSelectSDecrypt(t *testing.T) {
 		t.Fatalf("legacy plaintext should pass through, got %q", got)
 	}
 }
+
+// #测试32:ListSecret 加密列清单——tag 与 SetSecret 双路径登记,重复 SetSecret 去重
+func TestListSecretColumns(t *testing.T) {
+	eng := newSecretTestEngine(&mockDriver{})
+
+	//#tag 路径:TTestUser.Password 带 secreton 标记,注册即登记(类声明序)
+	tbl := eng.RegisterClass(TTestUser{}, "test_user_list")
+	if len(tbl.ListSecret) != 1 || tbl.ListSecret[0].FieldName != "password" {
+		t.Fatalf("tag path should register [password], got %+v", tbl.ListSecret)
+	}
+
+	//#SetSecret 路径:手工登记另一列
+	type tDualSecret struct {
+		UserName string `db:"user_name"`
+		Password string `db:"password"`
+		Remark   string `db:"remark"`
+	}
+	tbl2 := eng.RegisterClass(tDualSecret{}, "t_dual_secret")
+	if eror := tbl2.SetSecret("password", "remark").Err; eror != nil {
+		t.Fatalf("SetSecret: %v", eror)
+	}
+	if len(tbl2.ListSecret) != 2 {
+		t.Fatalf("expect 2 secret columns, got %+v", tbl2.ListSecret)
+	}
+
+	//#去重:重复 SetSecret 同一列,清单不增长
+	if eror := tbl2.SetSecret("password").Err; eror != nil {
+		t.Fatalf("SetSecret again: %v", eror)
+	}
+	if len(tbl2.ListSecret) != 2 {
+		t.Fatalf("duplicate SetSecret should not grow ListSecret, got %+v", tbl2.ListSecret)
+	}
+}
