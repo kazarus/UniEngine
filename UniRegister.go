@@ -53,7 +53,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 		//#tag 标记的加密列(db:"...,secreton")同步置位表级 SecretOn 并登记加密列清单,与 SetSecret 路径一致
 		if UniField.SecretOn {
 			UniTable.SecretOn = true
-			UniTable.ListSecret = append(UniTable.ListSecret, UniField)
+			UniTable.ColSecret = append(UniTable.ColSecret, UniField)
 		}
 	}
 

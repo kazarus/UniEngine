@@ -41,7 +41,7 @@ func (this *TUniEngine) verifyActive(UniTable *TUniTable) bool {
 		return false
 	}
 
-	return UniTable.VerifyAt != "" && len(UniTable.ListVerify) > 0
+	return UniTable.VerifyAt != "" && len(UniTable.ColVerify) > 0
 }
 
 // #verifyStrict 严格模式:无标签的存量行按篡改处理(存量回填完成后切换)
@@ -130,9 +130,9 @@ func (this *TUniEngine) verifyColsOf(UniTable *TUniTable, t reflect.Type) ([]int
 		return nil, nil
 	}
 
-	cols := make([]int, 0, len(UniTable.ListVerify))
+	cols := make([]int, 0, len(UniTable.ColVerify))
 
-	for _, ItemPara := range UniTable.ListVerify {
+	for _, ItemPara := range UniTable.ColVerify {
 
 		sf, ok := t.FieldByName(ItemPara.AttriName)
 		if !ok {
@@ -216,7 +216,7 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, column []string, fieldI
 
 	var cols []int
 
-	for _, ItemPara := range UniTable.ListVerify {
+	for _, ItemPara := range UniTable.ColVerify {
 
 		found := -1
 		lowerName := strings.ToLower(ItemPara.FieldName)

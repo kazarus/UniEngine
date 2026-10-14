@@ -66,14 +66,14 @@ func TestSetVerifyRegister(t *testing.T) {
 	if !tab.VerifyOn || tab.VerifyAt != "mac_text" {
 		t.Fatalf("SetVerify should mark table: %+v", tab)
 	}
-	if len(tab.ListVerify) != 4 {
-		t.Fatalf("SetVerify should keep 4 protected fields, got %d", len(tab.ListVerify))
+	if len(tab.ColVerify) != 4 {
+		t.Fatalf("SetVerify should keep 4 protected fields, got %d", len(tab.ColVerify))
 	}
 	//#登记顺序=载荷顺序,不得漂移
 	want := []string{"who_build", "user_indx", "data_stat", "mast_name"}
 	for i, name := range want {
-		if tab.ListVerify[i].FieldName != name {
-			t.Fatalf("protected order broken at %d: %s != %s", i, tab.ListVerify[i].FieldName, name)
+		if tab.ColVerify[i].FieldName != name {
+			t.Fatalf("protected order broken at %d: %s != %s", i, tab.ColVerify[i].FieldName, name)
 		}
 	}
 }
