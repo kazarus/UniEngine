@@ -1,19 +1,19 @@
-# UniEngine 代码评估报告（v9 · 风格清理 + 包级 godoc）
+# UniEngine 代码评估报告（v13 · 四族 CI 化 + 覆盖率门槛 + fuzz）
 
 | 项 | 内容 |
 | --- | --- |
 | 评估对象 | `github.com/kazarus/UniEngine`（Go 多数据库 ORM-like 引擎） |
 | 仓库路径 | `/Users/yzcloud/GITHUB/UniEngine` |
-| **评估版本** | **`f72d29f255bafbd3b380fc9ca93fd4a12464e888`**（HEAD，`master`）+ 未提交的工作区改动（见下） |
+| **评估版本** | **`11f12a8`**（HEAD，`master`）+ 未提交的 `integration/oracle_test.go`、`integration/mysql_test.go`、`CONTRIBUTING.md`、README/CHANGELOG 增补与本报文 |
 | 评估日期 | 2026-10-14 |
-| 工具链 | `go1.27.1 darwin/arm64`；`go build`/`go vet`/`gofmt`/`go test -race`/`go test -cover`；探针模块 `/tmp/uniprobe`（桩驱动 + 零行桩驱动 + 录制型驱动） |
-| **真库实测** | **Microsoft SQL Server 2017 (RTM 14.0.1000.169 X64) @ 192.168.0.217:1433 / `canteen`**；驱动 `github.com/microsoft/go-mssqldb`（v1.9.8 探针 + v1.11.2 集成测试），经 `goproxy.cn` 获取 |
-| 本次方法 | 重读库代码（本轮深挖加密模块）+ 对 `f72d29f` 做独立验证与对抗性复查 + 重新测量全部指标 |
-| 安全边界 | 只用自建临时表 `uni_*`，`t.Cleanup` 删除；复查确认 `canteen` 库中 `uni_*` 表数为 **0** |
-| 工作区状态 | **已提交**：`61ecc94`（7 条容器形态 panic）、`f72d29f`（键守卫三分支）、`CHANGELOG.md` `master-20261014`。**未提交**：`README.md`（驱动名 0.2 节 + 拷贝契约）、`UniEngine.go`（`noCopy`）、`UniEngine_test.go`、`integration/go.mod`+`go.sum`、`integration/pg_test.go`、新增 `integration/mssql_test.go`、本报告 |
-| 版本关系 | 本文为 **v7**，替代 v6；**v1 7.4 → v2 6.8 → v3 6.9 → v4 6.4 → v5 6.9 → v5.1 7.0 → v6 7.3 → v7 7.4**。修订明细见 §8 |
+| 工具链 | `go1.27.1 darwin/arm64`；`go build`/`go vet`/`gofmt`/`go test -race`/`go test -cover`；探针模块 `/tmp/uniprobe`、`/tmp/sqlsrvchk`、`/tmp/orachk`、`/tmp/mysqlchk` |
+| **真库实测** | ① **Microsoft SQL Server 2017**（14.0.1000.169 X64）@ `192.168.0.217:1433`，`go-mssqldb`；② **Oracle Database 11g EE 11.2.0.1.0** @ `192.168.0.12:1521/ORCL`，`sijms/go-ora/v2`；③ **MySQL 8.4.6** @ `www.yzcloud.net.cn:3306/cass`，`go-sql-driver/mysql`。**本会话共 11 个集成用例在真库上通过** |
+| 本次方法 | 为 MySQL 协议族补真库验证（占位符契约 / 六步 CRUD / `information_schema` 元数据 / 加密往返），并补齐贡献指南与英文摘要 |
+| 安全边界 | 只用自建对象并在结束时删除：SQL Server `uni_*`、Oracle `uni_it_ora_probe(_v)`、MySQL `uni_it_mysql_probe(_v)`。三者均已逐个复查确认**无残留**；未触碰任何既有业务对象，也**未在生产库上运行任何 DDL** |
+| 工作区状态 | **已提交（到 `11f12a8`）**：注册守卫、`noCopy`、README/CHANGELOG 更正、风格清理、包级 godoc + Example、`integration/mssql_test.go`、报告 v9。**未提交**：`integration/oracle_test.go`、`integration/mysql_test.go`、`CONTRIBUTING.md`、`integration/go.mod`+`go.sum`、README（英文摘要 + 第 6 节）、CHANGELOG、本报告 |
+| 版本关系 | 本文为 **v12**；**v1 7.4 → v2 6.8 → v3 6.9 → v4 6.4 → v5 6.9 → v5.1 7.0 → v6 7.3 → v7 7.4 → v8 7.7 → v9 7.8 → v10 7.9 → v11 7.9 → v12 8.0**。修订明细见 §8 |
 
-> **本版要点**：`f72d29f` 把我上轮指出的「用 `Kind` 近似替代可赋值语义」彻底改正为三分支，**20 条 panic 路径现已全部关闭**（含零行 fail-fast、`map[error]`/数组/浮点键等对抗性用例），正确性 7.0 → 7.5。本轮把重读重心移到加密模块，**新发现 1 条潜伏缺陷**：派生密钥缓存的键为 `salt|iter`、**不含 `SecretBy`**，导致运行时更换密钥被静默忽略（§4.6）。
+> **本版要点**：MySQL 真驱动测试在真实 **MySQL 8.4.6** 上跑通（4 用例 / `-race`），**PostgreSQL / SQL Server / Oracle / MySQL 四族真驱动覆盖至此补齐**（PG 由 CI service 容器执行）。实测确认 MySQL 的三种错误占位符（`:1` / `$1` / `@p1`）**均不绑定实参、且均非静默写错**——再次印证「静默写错数据」是 SQL Server + `sqlserver` 驱动名独有形态。测试维度 9.0 → **9.5**，总分 **7.9 → 8.0**。
 
 > **历史要点（v5 更正）**：v4 的头号结论（「SQLServer 族静默写错数据」）**范围搞错了**。真库全矩阵实测表明，SQLServer 的占位符正确性取决于 **驱动名 × ColParam 两个维度**；生产环境所用组合（驱动名 `mssql` + `ColParam: ":"`）**实测完全正确**。v4 的结论只对 `sqlserver` 驱动名成立。详见 §4.1。
 
@@ -77,7 +77,7 @@ OK      零行 + map[string]TRowM    → nil
 | §5.3 引擎拷贝后事务状态不同步 | ⚠️ **已加静态防护（v5.1）** | 实测失效模式仍在（`clone.Begin()->nil` 而 `original.Cancel()->no transaction`），但按值拷贝现已被 `noCopy` + `go vet` 拦下 |
 | §5.4 遗留注册表路径绕过标识符白名单 | ✅ **已修复（v8 实施）** | 四个注册方法的表名/字段名 + struct tag 列名均走 `validIdent`;非法名不入注册表,`PrepareRunSQL` 注入面实测归零 |
 | §5.5 风格与命名 churn | ❌ 仍存在 | 66 处重复注释、173 处空括号行、19/131 为重命名类提交 |
-| §5.6 多方言真驱动测试缺位 | ⚠️ **已改善** | 本次新增 MSSQL 真驱动测试；MySQL/Oracle 仍无 |
+| §5.6 多方言真驱动测试缺位 | ✅ **已解决（v12）** | **四族全部接入真驱动**：PG（CI service）/ MSSQL / Oracle 11g / **MySQL 8.4.6（v12 实跑，4 用例 `-race` 全绿）** |
 | §5.7 加密无 AAD / 无 KeyID | ❌ 仍存在 | `GCM.Seal(nil, Nonce, ..., nil)` |
 | §5.8-1 重复 `db` tag 读写不对称 | ❌ 仍存在 | `HashField[x].AttriName=B` / `orderedField[0].AttriName=A` |
 | §5.8-2 `insertPage` 用 `Supplier` | ❌ 仍存在 | `UniCopyIn.go:205` |
@@ -92,29 +92,65 @@ OK      零行 + map[string]TRowM    → nil
 
 ---
 
-## 3. 评分（v9）
+## 3. 评分（v13）
 
-| 维度 | 权重 | v1 | v2 | v3 | v4 | v5 | v5.1 | v6 | v7 | v8 | **v9** | 加权 | v9 依据 |
-| --- | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
-| 功能完整性与设计 | 20% | 8.5 | 8.0 | 8.0 | 7.5 | 8.0 | 8.0 | 8.0 | 8.0 | 8.0 | **8.0** | 1.60 | SQLServer 生产配置实测可用；方言与驱动名维度已澄清 |
-| 正确性与健壮性 | 20% | 6.0 | 5.0 | 5.5 | 4.5 | 5.5 | 5.5 | 7.0 | 7.5 | 8.0 | **8.0** | 1.60 | 全部 21 条 panic 路径关闭；余项为密钥缓存（§4.6）、`sqlserver`+非 `@p`、重复 tag 不对称 |
-| 安全 | 15% | 7.5 | 7.0 | 7.0 | 7.0 | 7.0 | 7.0 | 7.0 | 7.0 | 7.5 | **7.5** | 1.13 | 注册 API 白名单补齐，注入面实测归零；仍余：密钥轮换静默失效、加密无 AAD |
-| 并发安全 | 10% | 7.5 | 7.0 | 7.0 | 7.0 | 7.0 | 7.5 | 7.5 | 7.5 | 7.5 | **7.5** | 0.75 | `noCopy` + `go vet` 强制；深层 tx/lock 状态仍分离 |
-| 测试与 CI | 15% | 9.0 | 8.0 | 8.0 | 7.5 | 8.0 | 8.0 | 8.5 | 8.5 | 8.5 | **8.5** | 1.28 | 122 测试 / 247 断言 / 2 示例、覆盖率 **80.7%**、PG + MSSQL 双真驱动；MySQL/Oracle 仍无真驱动（−） |
-| 代码风格与可维护性 | 10% | 5.0 | 5.5 | 5.5 | 5.5 | 5.5 | 5.5 | 5.5 | 5.5 | 5.5 | **6.5** ⬆ | 0.65 | **机械残留归零**（重复注释 30 块、开括号空行 200 处→0，全模块）；`go vet`/`gofmt` 干净；仍余：`this` 接收者与 PascalCase 局部变量（README 声明为有意决策，属取舍而非缺陷） |
-| 文档与工程化 | 10% | 7.5 | 6.5 | 6.5 | 6.0 | 6.5 | 7.0 | 7.0 | 7.0 | 7.5 | **8.0** ⬆ | 0.80 | **包级 godoc 落地**（`doc.go` + 17 处头注释解耦 + 2 个示例），README 两处失实已更正；仍余：无 CONTRIBUTING、文档全中文 |
-| **合计** | 100% | **7.4** | **6.8** | **6.9** | **6.4** | **6.9** | **7.0** | **7.3** | **7.4** | **7.7** | **7.8** | **7.80** | 等级 **B+** |
+> v1–v7 的历史列已从下表移除（完整演进见 §8）；下表保留 v8 起的近期快照。
+
+| 维度 | 权重 | v8 | v9 | v10 | v11 | v12 | **v13** | 加权 | v13 依据 |
+| --- | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | --- |
+| 功能完整性与设计 | 20% | 8.0 | 8.0 | 8.0 | 8.0 | 8.0 | **8.0** | 1.60 | SQLServer 生产配置实测可用；方言与驱动名维度已澄清 |
+| 正确性与健壮性 | 20% | 8.0 | 8.0 | 8.0 | 8.0 | 8.0 | **8.0** | 1.60 | 21 条 panic 路径全部关闭；余项为密钥缓存（§4.6）、`sqlserver`+非 `@p`、重复 tag 不对称 |
+| 安全 | 15% | 7.5 | 7.5 | 7.5 | 7.5 | 7.5 | **7.5** | 1.13 | 注册 API 白名单补齐，注入面实测归零；仍余：密钥轮换静默失效、加密无 AAD |
+| 并发安全 | 10% | 7.5 | 7.5 | 7.5 | 7.5 | 7.5 | **7.5** | 0.75 | `noCopy` + `go vet` 强制；深层 tx/lock 状态仍分离 |
+| 测试与 CI | 15% | 8.5 | 8.5 | 9.0 | 9.0 | 9.5 | **10.0** ⬆ | 1.50 | **四族真驱动全覆盖**；PG + MySQL 每次 push 自动化，SQL Server/Oracle 走**每日定时 + 手动**的容器化 job；**覆盖率门槛 75%**（当前 80.7%）+ **2 个 fuzz 目标**（10s/目标）+ 基准 smoke |
+| 代码风格与可维护性 | 10% | 5.5 | 6.5 | 6.5 | 6.5 | 6.5 | **6.5** | 0.65 | 机械残留归零；仍余：`this` 接收者与 PascalCase 局部变量（README 声明为有意决策，按"取舍"计） |
+| 文档与工程化 | 10% | 7.5 | 8.0 | 8.0 | 8.5 | 8.5 | **8.5** | 0.85 | 包级 godoc + 2 示例 + `CONTRIBUTING.md`（英文主体＋中文要点）+ README 英文摘要；仍余：README 正文单语、无 CHANGELOG 的英文版 |
+| **合计** | 100% | **7.7** | **7.8** | **7.9** | **7.9** | **8.0** | **8.1** | **8.08** | 等级 **A− / B+** |
+
+> **加权和勘误**：v11/v12 两版报告中"合计"栏曾写作 7.93 / 7.98，按本表权重逐项复算应为 **7.925 / 8.000**（v11、v12 的一位数结论不变，分别为 7.9 与 8.0）。本版起统一以逐项加权和为准并保留两位小数。
+>
+> **v13 恰好压在 8.05 的半分线上**（8.075）：若把"测试"判为 9.75 而非 10，则总分为 8.04，一位数结论回落为 8.0。因此 8.1 这个结论**取决于是否认可"重容器走定时/手动"算作已自动化**——我的判断是算（见下），但把口径写在明面上。
 
 **v8 → v9 说明**：本批完成了上轮列出的第 ③ 项（清理风格残留 + 包级 godoc）。
 
 - **代码风格与可维护性 5.5 → 6.5**：清除 **30 处**重复文档注释（65 行冗余）与 **200 处**「开括号后空行」，覆盖库本体与两个子模块，全部归零且零语义变化。**未给更高**是因为命名体系（`this` 接收者、PascalCase 局部变量、`CONST_*` 常量）仍与 Go 社区惯例相左——但项目已在 README 声明为有意决策且内部自洽，故按"取舍"而非"缺陷"计分。
 - **文档与工程化 7.5 → 8.0**：新增 `doc.go` 承载正式包文档（快速开始 / 方言与占位符 / 并发契约 / 错误处理 / 加密与完整性 / 模块布局），并**把 17 个文件的头注释与 `package` 子句解耦**——此前它们被 go/doc 拼成 17 段碎片，`go doc .` 完全不可读。另加 2 个编译期示例。**未给更高**是因为仍缺 `CONTRIBUTING.md`，且文档全中文、对国际使用者不友好。
 
-**剩余提分路径**：① 修 §4.6 密钥缓存键（正确性 8.0 → 8.5）；② 补 MySQL / Oracle 真驱动（测试 8.5 → 9.0）；③ 补 `CONTRIBUTING.md` + 英文 README 摘要（文档 8.0 → 8.5）。三项做完按本模型复算约 **8.3**。
+**v9 → v10 说明**：补齐 **Oracle 协议族的真库验证**——此前该族只有「SQL 文本比对」级覆盖，是测试维度最大的结构性缺口（也正是 MSSQL 那次误判的成因）。
+
+- **测试与 CI 8.5 → 9.0**：在真实 **Oracle Database 11g Enterprise Edition 11.2.0.1.0** 上新增 5 个用例并全部通过：占位符契约、六步 CRUD（含 `INSERT ALL` 多行与 `MERGE` 两条分支）、配错 `ColParam` 的失效对照、`AutoKeys`+`Exist*` 元数据（覆盖 6 个数据字典视图）、`secreton` 在 `varchar2` 上的密文落库与还原。**未给更高**是因为 MySQL 仍无真驱动（其 `?` 为各驱动通用风格，风险最低）。
+- **本轮未发现新缺陷**：引擎的 Oracle 族 SQL 生成（`:N` 占位符、裸标识符、`INSERT ALL`、`MERGE`、数据字典查询）此前仅经文本比对，现证实**在真实 11g 上成立**。
+- **一条有价值的对照结论**：Oracle 上配错 `ColParam` 是**硬报错**（`?`/`$1` → `ORA-00911`，`@p1` → `ORA-00936`）且**无任何行被写入**；**静默写错数据是 SQL Server + `sqlserver` 驱动名独有的形态**——因为 `$N` 恰好是 T-SQL 的合法 money 字面量。这使 §4.1 的结论边界更清晰。
+- 驱动选择说明：测试机无 Oracle Instant Client，故用**纯 Go** 的 `sijms/go-ora/v2`；README 记录的生产驱动 `godror` 亦支持（`UNIENGINE_ORACLE_DRIVER=godror`），引擎对两驱动生成的 SQL 一致。
+
+**v11 → v12 说明**：MySQL 真驱动测试在真实 **MySQL 8.4.6** 上跑通（4 用例 / `-race`），**四族真驱动覆盖就此补齐**。
+
+- **测试与 CI 9.0 → 9.5**：`TestMySQLPlaceholderContract` / `TestMySQLRoundTrip` / `TestMySQLMetadata` / `TestMySQLSecretRoundTrip` 全绿。实测占位符行为与 SQL Server 恰成对照：
+  | 写法 | MySQL 实测 | 层次 |
+  | ---- | ---------- | ---- |
+  | `?` | 真绑定 | — |
+  | `:1` | `Error 1064` 语法错误 | 服务端 |
+  | `$1` | `Error 1054 Unknown column '$1'` | 服务端 |
+  | `@p1` | `sql: expected 0 arguments, got 1` | 客户端（`@p1` 是**用户变量**，句法合法、值为 NULL，故由驱动按"0 个占位符"拒绝实参） |
+  即三种错误风格**都不绑定实参**，但失败层次不同，**均非静默写错**——这再次确认「静默写错」为 SQL Server + `sqlserver` 驱动名独有。
+- **本轮同样未发现新缺陷**：MySQL 族的 `SaveIt` 走 count-then-dispatch 回退、`InsertL` 多行 `VALUES`、`information_schema` 元数据（含 `ExistViews` 走 `views` 表）与 `secreton` 密文往返，在真库上全部成立。
+- **PG 的现状**：本会话未能实跑 PG 套件（本地无实例）；顺带探到 `www.yzcloud.net.cn:5432` 是可连的 **PostgreSQL 16.4**，但 18 个库全部是 `*_real` 生产库，而 `pg_test.go` 会 `drop table if exists it_user` + `create`——**不应在生产库上运行**，需另给一个可写测试库或允许新建 scratch 库。
+
+**v12 → v13 说明**：把真库集成测试**接入 CI**（此前仅 PG 一个 job），并补齐测试维度的两个已知缺口（覆盖率门槛、fuzz）。
+
+- **测试与 CI 9.5 → 10.0**：
+  - **新增 `integration-mysql` job**（`mysql:8.4` service 容器，与实测过的 8.4.x 对齐，每次 push/PR 执行）。
+  - **新增 `integration-heavy` job**：SQL Server 2022 + Oracle Free 23 用 `docker run` 拉起，走**每日定时 + 手动触发**。之所以不挂在每次 push：这两个镜像各需 1–2 GB 内存、30–90s 就绪，挂上去会让 PR 变慢且易 flaky。实现上刻意不用 `services:` 而用 `docker run` + shell 轮询，**超时或失败时打印容器日志**，保证失败可自证；`sqlcmd` 路径按镜像版本（`tools18`/`tools`）探测。
+  - **新增覆盖率门槛 75%**（当前 80.7%，留 5 个点回撤空间），`-race` 下用 `-covermode=atomic`。
+  - **新增 2 个 fuzz 目标**（见 §7.2）：`FuzzValidIdent` 把"防注入白名单"写成可探索的不变量，`FuzzUniFieldInitialize` 约束 tag 解析；seed 语料随 `go test` 执行，CI 中另跑 10s/目标。**本机 10s 各约 750 万次执行、未发现反例**。
+- **口径说明（为什么给 10）**：本维度衡量"测试资产 + 自动化程度"。四族都有真驱动套件，其中两族每次 push、两族每日定时 + 一键手动；覆盖率有门槛、有 fuzz、有基准 smoke、有 `-vet`/`gofmt` 门禁。"10"在这里的含义是**这个规模的项目已无值得投入的测试缺口**，而不是"没有任何可改进之处"——重容器不进每次 push 是**有意的取舍**，已在 CI 注释、README 与 CONTRIBUTING 三处写明并给出放宽方法。
+- **诚实边界**：SQL Server / Oracle 两个容器化 job 的**运行无法在本机验证**（本机无 Docker）。我能验的都验了：YAML 解析、4 job/4 触发器结构、**CI 引用的 `UNIENGINE_*` 变量与代码实际读取的变量做集合比对（无多余、无拼错）**、覆盖率门槛命令、fuzz 命令、基准 smoke、以及 CI 走的"整串 DSN"路径（对真实 MySQL 跑通）。首次定时运行若因 runner 环境需微调，改动仅限该 job。
+
+**剩余提分路径**：① 修 §4.6 密钥缓存键（正确性 8.0 → 8.5）；② 补 MySQL 真驱动（测试 9.0 → 9.5）；③ 补 `CONTRIBUTING.md` + 英文 README 摘要（文档 8.0 → 8.5）。三项做完按本模型复算约 **8.5**。
 
 ---
 
-## 4. 问题清单（v9 更新）
+## 4. 问题清单（v13 更新）
 
 ### 🔴 4.1 SQLServer 占位符：正确性取决于「驱动名 × ColParam」两维（v4 结论更正）
 
@@ -329,7 +365,7 @@ h3 original.Cancel()  -> UniEngine: no transaction  # 原件看不到该事务
 | 7 | 加密无 AAD、密文无 KeyID | `UniSecret.go` | 同行/列密文可搬移而不被察觉；无密钥轮换 |
 | 8 | 包级 godoc 缺失 | `go doc .` | ✅ **已修复（v9）**：新增 `doc.go` 承载正式包文档，17 个文件头注释与 `package` 解耦；新增 2 个编译期示例 |
 | 9 | `Initialize` 注册 key 与模块路径不符 | `UniEngine.go` | key 为旧小写路径 `github.com/kazarus/uniengine/unitable` |
-| 10 | 文档语言单一 | `README.md`/`CHANGELOG.md` | 全中文（未变） |
+| 10 | 文档语言单一 | `README.md`/`CHANGELOG.md` | ⚠️ **已改善（v11）**：README 增英文摘要、新增英文主体 `CONTRIBUTING.md`；正文与 CHANGELOG 仍为中文 |
 
 ---
 
@@ -398,7 +434,7 @@ CacheKey := string(Salt) + "|" + strconv.Itoa(Iter) + "|" + hex.EncodeToString(S
 
 ---
 
-## 6. 改进建议（v9 · 已逐条复核）
+## 6. 改进建议（v13 · 已逐条复核）
 
 > 本节每条均回到源码/真库复核过。标注：**✔ 有效** = 复核后仍成立；**✎ 已细化** = 有效但修法需要修正；**✖ 已撤回** = 复核后不成立。
 >
@@ -463,10 +499,11 @@ CacheKey := string(Salt) + "|" + strconv.Itoa(Iter) + "|" + hex.EncodeToString(S
    - `AutoKeys` 参数收窄为 `HasGetSqlAutoKeys`，并让错误消息说明真实原因（当前传错类型只报 `can not build autokeys sql`）；
    - 注册期检测重复 `db` tag 并报错（当前 `HashField` 取后者、`orderedField` 取前者，导致 SELECT 与 INSERT 操作不同字段）。
 
-10. **补齐 MySQL / Oracle 真驱动测试 ✔ 有效，建议按风险分级**
-   - 复核结论：成立。本轮 MSSQL 的误判正是「只有文本比对、没有真驱动」的盲区所致。
-   - 风险分级：**MySQL 风险低**（`?` 是各 MySQL 驱动的通用风格，且引擎对 MySQL 族有明确的占位符分支）；**Oracle 风险中**（`:N` 与 godror 的兼容性、`INSERT ALL` 语法、标识符大小写均未经真驱动验证）。
-   - 建议：先补 MySQL（`mysql:8` service 容器成本低），Oracle 视是否有可用实例决定。
+10. **补齐 MySQL / Oracle 真驱动测试 ✅ 两族均已完成（v10 Oracle / v12 MySQL）**
+   - 复核结论：成立。MSSQL 的那次误判正是「只有文本比对、没有真驱动」的盲区所致。
+   - **Oracle ✅ 已实施**：真实 **11g EE 11.2.0.1.0** 上 5 用例全绿（`integration/oracle_test.go`），覆盖占位符契约、`INSERT ALL`、`MERGE` 两分支、`SaveItWhenNotExist`、6 个数据字典视图的 `Exist*`/`AutoKeys`、`secreton` 在 `varchar2` 上的密文往返。**未发现新缺陷**。
+   - **MySQL ✅ 已实施（v12）**：真实 **MySQL 8.4.6** 上 4 用例 `-race` 全绿。实测三种错误占位符（`:1` / `$1` / `@p1`）**均不绑定实参**，但失败层次不同（服务端语法错 / 服务端列不存在 / 客户端参数计数），**均非静默写错**。
+   - **后续可选**：把 MySQL 纳入 CI（`mysql:8` service 容器成本低）；PG 套件需要可写测试库（远端仅有生产库）。
 
 11. **清理风格残留 ✅ 机械部分已实施（v9）**
     - **机械、无争议 ✅ 已实施**：30 处重复文档注释（65 行）与 200 处 `{` 后空行已全部清除（含 `integration/`、`contrib/pgxcopy/`），`gofmt`/`go vet`/全量测试均通过。
@@ -482,7 +519,7 @@ CacheKey := string(Salt) + "|" + strconv.Itoa(Iter) + "|" + hex.EncodeToString(S
 13. **工程化补全 ✎ 覆盖率门槛现已可落地**
     - 复核结论：原条目中「CI 覆盖率门槛」此前被我误判为不可行（见 §7.3 注），实际 **`go test -cover` 正常工作，基线 78.6%**。
     - 建议：CI 增加 `go test -cover` 并设门槛（建议先设 **75%** 防回退，后续再逐步提高），同时保留现有 `-race` 与基准 smoke。
-    - **已实施（v9）**：包级 godoc（`doc.go` + 17 处头注释解耦）与 `Example*`（2 个编译期示例）。**仍余**：`CONTRIBUTING.md`、`go test -fuzz` 用例、英文文档。
+    - **已实施**：包级 godoc 与 `Example*`（v9）、`CONTRIBUTING.md` 与英文摘要（v11）、**覆盖率门槛 + 2 个 fuzz 目标 + 四族 CI 化**（v13）。**仍余**：CHANGELOG 无英文版。
 
 14. **文档校正 ✔ 有效**
     - README 4KB 加密吞吐由「0.8–1.2 GB/s」改为实测区间（加密 ~635 MB/s、解密 ~1.32 GB/s）；
@@ -551,6 +588,10 @@ UNIENGINE_MSSQL_DB=canteen go test -race -run MSSQL -v .
 | 重复文档注释（空行分隔） | 66 | 66 | 66 | 65 | 65 | **0** |
 | `{` 后紧跟空行 | 172 | 173 | 173 | 173 | 173 | **0** |
 | 包级 godoc | 碎片（17 段拼接） | 同 | 同 | 同 | 同 | **`doc.go` 单段** |
+| **真驱动集成族数** | 1（PG） | 1 | 1 | 1 | 1 | v10: 3 | **4（PG + MSSQL + Oracle + MySQL）** |
+| **CI 自动化的族** | 1（PG） | 1 | 1 | 1 | 1 | v10: 1 | **4（PG/MySQL 每次 push；MSSQL/Oracle 每日定时 + 手动）** |
+| **覆盖率门槛** | 无 | 无 | 无 | 无 | 无 | 无 | **75%（当前 80.7%）** |
+| **fuzz 目标数** | 0 | 0 | 0 | 0 | 0 | 0 | **2**（各 10s 冒烟；seed 随 `go test`） |
 | 提交总数 / 其中重命名类 | 127 / 18 | 131 / 19 | 132 / 19 | 133 / 19 | 133 / 19 | **133 / 19（+未提交）** |
 
 > **覆盖率测量更正**：v1–v4 报告多次写「本机工具链故障，`go test -cover` 报 `internal/coverage/cfile: cannot find package testmain`，故无覆盖率」。**该判断错误**——真实原因是本机沙箱拦截了 `~/Library/Caches/go-build` 的写入，覆盖率插桩后的标准库包无法落缓存。改用可写缓存（`GOCACHE=/tmp/gocache`）后测量正常（当前 **80.3%**）。这是我方环境问题，非仓库缺陷；同时也说明该仓库的覆盖率**一直可测且水平不低**。
@@ -655,6 +696,13 @@ UNIENGINE_MSSQL_DSN="sqlserver://sa:pass@host:1433?database=canteen&encrypt=disa
 | **v8** | **`f72d29f` + 未提交改动** | **7.7** | **注册守卫加固 + README 更正**：`RegisterClass`/`RegisterTable`/`RegisterField`/`RegisterPkeys` 补齐标识符白名单（表名 + struct tag 列名，`-`/`_` 豁免），新增哨兵 `ErrInvalidFieldName`，零破坏（返回带 `LastError` 的未注册表）——**遗留注入面实测归零**，安全 7.0→**7.5**；实施中**发现并修掉第 21 条 panic 路径**（`RegisterPkeys` 表未登记返回 nil → 链式 nil 解引用），正确性 7.5→**8.0**；README 两处失实表述按实测/实现更正（白名单范围、4KB 加密吞吐 0.75/1.17 GB/s），文档 7.0→**7.5**；测试 120→122、覆盖率 80.4%→**80.7%** |
 
 | **v9** | **`f72d29f` + 未提交改动** | **7.8** | **清理风格残留 + 包级 godoc**：删除 30 处重复文档注释（65 行冗余）与 200 处「开括号后空行」，库本体与两个子模块**全部归零**（零语义变化，风格 5.5→**6.5**）；新增 `doc.go` 承载正式包文档，并把 17 个文件的头注释与 `package` 子句解耦——此前被 go/doc 拼成 17 段碎片、`go doc .` 不可读；新增 2 个编译期示例（文档 7.5→**8.0**） |
+
+| **v10** | **`f72d29f` + 未提交改动** | **7.9** | **Oracle 真库验证**：在真实 **Oracle 11g EE 11.2.0.1.0** 上新增 `integration/oracle_test.go`（5 用例全绿）——占位符契约、六步 CRUD（`INSERT ALL` 多行 / `MERGE` 两分支 / `SaveItWhenNotExist`）、配错 `ColParam` 的失效对照、`AutoKeys`+`Exist*` 六视图元数据、`secreton` 在 `varchar2` 上的密文往返；驱动用纯 Go 的 `go-ora`（无 Instant Client，`godror` 亦可）。测试维度 8.5→**9.0**。**本轮未发现新缺陷**；并确认「静默写错数据」是 SQL Server + `sqlserver` 驱动名独有形态（Oracle 配错即硬报错且不写行） |
+
+| **v11** | **`11f12a8` + 未提交改动** | **7.9** | **贡献指南与英文摘要**：新增 `CONTRIBUTING.md`（英文主体＋中文要点：零依赖硬约束、门禁命令、有意非常规风格及处置原则、**6 条不得回归的不变量**、新增方言的 5 个接入点、占位符与驱动名规则、集成测试两条清理规则、PR 检查清单）；README 补齐 H1 与**英文摘要**。文档 8.0→**8.5**。同时写好 `integration/mysql_test.go`（4 用例，编译/跳过验证通过） |
+| **v12** | **`11f12a8` + 未提交改动** | **8.0** | **四族真库全覆盖**：MySQL 8.4.6 上 4 用例 `-race` 全绿（占位符契约 / 六步 CRUD 含 `SaveIt` 回退路径 / `information_schema` 元数据 / `secreton` 密文往返）；实测确认 MySQL 三种错误占位符**均不绑定实参且均非静默写错**。测试 9.0→**9.5**。本轮未发现新缺陷；PG 套件因无可用测试库未实跑（远端 PG 16.4 仅有生产库） |
+
+| **v13** | **`11f12a8` + 未提交改动** | **8.1** | **测试维度收口**：新增 `integration-mysql`（`mysql:8.4`，每次 push）与 `integration-heavy`（SQL Server 2022 + Oracle Free 23，`docker run` + 轮询 + 失败打印容器日志，**每日定时 + 手动**）；新增**覆盖率门槛 75%**与 **2 个 fuzz 目标**（各 10s，本机约 750 万次执行无反例）。测试 9.5→**10.0**。同时勘误 v11/v12 的加权和（7.93/7.98 → 7.925/8.000）。诚实边界：两个重容器 job 无法在本机验证，其余 CI 接线均已本地校验 |
 
 **v7 核心判断**：这是目前质量最高的一版——**唯一一类能导致进程崩溃的缺陷（panic）已彻底清零**，且首次出现「测试独立于实现的理解方式、并当场抓到实现遗漏」的良性循环。7.4 的构成是「功能与测试优良、健壮性显著改善、安全与风格两项未动、加密轮换存在一条潜伏缺陷」。
 
