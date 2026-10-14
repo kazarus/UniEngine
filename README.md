@@ -1,3 +1,33 @@
+# UniEngine
+
+> **English summary** — UniEngine is a **zero-dependency**, ORM-like engine built
+> on Go's `database/sql`. It maps struct tags to columns and drives SQL
+> generation from a registry, targeting **PostgreSQL / SQL Server / Oracle /
+> MySQL** plus compatible forks (KingbaseES, DM, openGauss, PolarDB, Taurus).
+>
+> - **Dialects by protocol family** (`TDbFamily`), not per driver: placeholders,
+>   identifier quoting, metadata catalogues, native UPSERT (`ON CONFLICT` /
+>   `MERGE`), `INSERT ALL` and `COPY` all branch on the family.
+> - **Context everywhere**: every query/write method has a `...Ctx` variant.
+> - **Application-layer encryption**: `secreton` columns are encrypted on write
+>   and decrypted on read (PBKDF2-HMAC-SHA256 → AES-256-GCM, self-contained
+>   ciphertext); `SecretHook` lets you plug in your own KMS or SM-crypto.
+>   Optional **storage-integrity verification** (`SetVerify`) signs protected
+>   columns into an HMAC companion column and verifies them per row on read.
+> - **Concurrency**: query/write paths are safe for concurrent use; calls must be
+>   serialized only while a transaction is open. The engine must always be used
+>   as `*TUniEngine` — by-value copies are rejected by `go vet`.
+> - **⚠️ SQL Server pitfall**: the placeholder must match the *driver name*. With
+>   `mssql` the driver rewrites `:`/`$`/`?` to `@pN`; with `sqlserver` only `@pN`
+>   works, and `$N` is silently treated as a **money literal** — the statement
+>   "succeeds" while writing wrong data. See §0.2 (Chinese) for the full table.
+> - **Tests**: 120+ unit tests (~80% statement coverage, mock driver) plus
+>   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
+>   `integration/` (separate module, skipped when no server is reachable).
+>
+> Contributing guide: **[CONTRIBUTING.md](CONTRIBUTING.md)** (English, with a
+> Chinese summary at the end). The rest of this README is in Chinese.
+
 #### 0.项目简介
 
 UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 PostgreSQL / SQLServer / Oracle / MySQL,以及金仓 / 达梦 / openGauss / PolarDB / Taurus 等。
@@ -212,21 +242,46 @@ go test -bench . -benchmem -run '^$'
 
 #### 6.真实数据库集成测试
 
-`integration/` 是**独立 Go 模块**(自带 go.mod),用真实 PostgreSQL(pgx 驱动)验证
-COPY 协议、原生 UPSERT、应用加密、元数据探测与事务的真实驱动行为——库本体保持零第三方依赖不受影响。
+`integration/` 是**独立 Go 模块**(自带 go.mod),用真实数据库验证各协议族的真实驱动行为——库本体保持零第三方依赖不受影响。覆盖 **PostgreSQL / SQL Server / Oracle / MySQL** 四族:
+
+| 文件 | 驱动 | 覆盖内容 |
+| ---- | ---- | -------- |
+| `pg_test.go` | `pgx` | COPY 协议(on conflict UPSERT / CopyInL+CopyInP / ENC 密文落库与还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚) |
+| `mssql_test.go` | `go-mssqldb` | **驱动名 × ColParam 绑定矩阵**(`mssql` 预处理 `?`/`:N`/`$N` → `@pN`;`sqlserver` 仅认 `@pN`)+ 四组合六步 CRUD + `sqlserver`+`$` 静默写错数据的复现用例(默认跳过) |
+| `oracle_test.go` | `go-ora`(纯 Go;`godror` 亦可) | `:N` 占位符契约(错误风格**硬报错**,无静默写错)+ CRUD / `INSERT ALL` 多行 / `MERGE` 两条分支 / `AutoKeys`+`Exist*` 元数据 / ENC 加密落库与还原 |
+| `mysql_test.go` | `go-sql-driver/mysql` | `?` 占位符契约(三种错误风格**均不绑定实参**且均非静默写错)+ 六步 CRUD(含 `SaveIt` 的 count-then-dispatch 回退)+ `information_schema` 元数据 / ENC 加密落库与还原 |
 
 ```sh
-# 本地运行(需要可达的 PostgreSQL;连不上时自动跳过)
-UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" \
-  go test ./integration/ -v
+# PostgreSQL(连不上时自动跳过;REQUIRED=1 则强制失败,CI 即如此)
+UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" go test ./integration/ -v
 
-# 不可达时强制失败而非跳过(CI 即如此)
-UNIENGINE_PG_REQUIRED=1 go test ./integration/ -v
+# SQL Server:分量式(口令含 @/#/$/% 时自动 URL 转义)或整串 DSN
+UNIENGINE_MSSQL_HOST=127.0.0.1 UNIENGINE_MSSQL_USER=sa UNIENGINE_MSSQL_PASS='...' \
+UNIENGINE_MSSQL_DB=demo go test ./integration/ -run MSSQL -v
+
+# Oracle:分量式或整串 DSN;驱动默认纯 Go 的 go-ora,用 godror 时设 UNIENGINE_ORACLE_DRIVER=godror
+UNIENGINE_ORACLE_HOST=127.0.0.1 UNIENGINE_ORACLE_USER=scott UNIENGINE_ORACLE_PASS='tiger' \
+UNIENGINE_ORACLE_SERVICE=ORCL go test ./integration/ -run Oracle -v
+
+# MySQL:分量式或整串 DSN;元数据用例(Exist*/AutoKeys)需要库名,故分量模式下须给 UNIENGINE_MYSQL_DB
+UNIENGINE_MYSQL_HOST=127.0.0.1 UNIENGINE_MYSQL_USER=root UNIENGINE_MYSQL_PASS='...' \
+UNIENGINE_MYSQL_DB=demo go test ./integration/ -run MySQL -v
 ```
 
-CI 中由 `integration-pg` job 提供 `postgres:16-alpine` service 容器自动执行;
-覆盖用例见 `integration/pg_test.go`(CRUD / on conflict UPSERT / CopyInL+CopyInP /
-ENC 密文落库与读取还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚)。
+四族各有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致。
+
+**CI 覆盖**(`.github/workflows/ci.yml`):
+
+| job | 族 | 触发 | 说明 |
+| --- | -- | ---- | ---- |
+| `build-test` | — | 每次 push/PR | Go 1.24–1.27 矩阵:`build`/`vet`/`gofmt`/`test -race` + **覆盖率门槛 75%** + 基准 smoke + 10s fuzz smoke |
+| `integration-pg` | PostgreSQL 16 | 每次 push/PR | `postgres:16-alpine` service 容器 |
+| `integration-mysql` | MySQL 8.4 | 每次 push/PR | `mysql:8.4` service 容器 |
+| `integration-heavy` | SQL Server 2022 + Oracle Free 23 | **每日定时 + 手动** | 重容器(各 1–2 GB / 30–90s 就绪),不阻塞 PR,次日暴露腐化;失败时打印容器日志 |
+
+所有集成用例**只操作自建临时表**(`it_*` / `uni_it_*`)并在结束时删除,不触碰既有业务对象。
+SQL Server 与 Oracle 用手动/定时方式而非每次 push,是针对容器体量的有意取舍;若 runner 资源充足,
+放宽 `integration-heavy` 的 `if` 即可转为常态。
 
 #### 7.pgx 驱动与 COPY 协议
 

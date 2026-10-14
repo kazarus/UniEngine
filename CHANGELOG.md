@@ -68,6 +68,57 @@
 - **新增用法示例 `example_test.go`**：`Example`（装配 → 登记 → 写入/查询/事务）与 `ExampleTUniEngine_Secret`（应用加密与 `SecretHook` 接管）。均为**编译期校验**（不带 `Output:` 注释，故 `go test` 只编译不执行，无需数据库）。
 - 验证：`gofmt -l` 空、`go vet ./...` 通过、全量单测 + `-race` + 真库 MSSQL 集成测试全绿。
 
+### Oracle 真驱动集成测试（integration/oracle_test.go）
+
+补齐 Oracle 协议族的真库验证——此前该族只有「SQL 文本比对」级覆盖，是测试维度最大的结构性缺口。在真实 **Oracle Database 11g Enterprise Edition 11.2.0.1.0** 上全部通过：
+
+- **驱动**：`github.com/sijms/go-ora/v2`（**纯 Go**，无需 Oracle Instant Client）；README 记录的生产驱动 `godror` 亦支持（`UNIENGINE_ORACLE_DRIVER=godror`）。引擎对 Oracle 族生成 `:N` + 裸标识符，两驱动一致。
+- `TestOraclePlaceholderContract`：`:1` 真绑定；`?` / `$1` → `ORA-00911`，`@p1` → `ORA-00936`。
+  - **重要对照**：Oracle 上用错 `ColParam` 是**硬报错**，**不存在** SQL Server 那种「`$N` 被当字面量静默写错」的形态。
+- `TestOracleRoundTrip`：Insert / Update / Delete / `SaveIt`（`MERGE` 的 matched 与 not matched 两条分支）/ `SaveItWhenNotExist`（已存在时不变）/ `InsertL`（**`INSERT ALL` 多行语法**）/ `SelectL`，均逐行绕过引擎读回校验。
+- `TestOracleWrongColParamFailsLoudly`：配错 `ColParam` 时引擎报错且**无任何行被写入**（显式对照 SQL Server 的静默写入）。
+- `TestOracleMetadata`：`ExistTable` / `ExistViews`（视图与表互不误判）/ `ExistField` / `ExistConst`（显式命名主键）/ `AutoKeys(TAutoKeys4ORACLE)`，覆盖引擎使用的全部 Oracle 数据字典视图（`all_tables` / `user_views` / `user_tab_columns` / `user_constraints` / `user_cons_columns` / `user_tab_cols`）。
+- `TestOracleSecretRoundTrip`：`secreton` 列在 `varchar2(1024)` 中落库为 `ENC:` 密文，经引擎读回还原为明文。
+- 环境口径与 pg/mssql 一致（`UNIENGINE_ORACLE_*` 分量或整串 DSN + `_REQUIRED=1`）；只操作自建表 `uni_it_ora_probe` 与视图 `uni_it_ora_probe_v`（含显式命名主键），结束时 DROP——已复查确认无残留对象。
+- `integration/go.mod` 新增 `github.com/sijms/go-ora/v2 v2.9.0`；库本体仍零第三方依赖。README 第 6 节改为按族列出三个集成测试文件与各自的运行方式。
+
+### 贡献指南与英文摘要（面向外部贡献者）
+
+- 新增 **`CONTRIBUTING.md`**（英文主体，文末附中文要点）：项目布局与「库本体零依赖」硬约束；构建/测试/CI 门禁命令；**有意非常规的编码风格**及其处置原则（要改就单独一次机械式提交并配 `gofumpt`/`revive`，不要零散改名）；**6 条不得回归的不变量**（公共入口不 panic / 形态校验用可赋值性而非 `Kind` / 注册 API 不返回 `nil` / 标识符白名单 / 引擎不得按值拷贝 / 缓存键须覆盖全部输入）；**新增方言的 5 个接入点**；**占位符与驱动名规则**（含 SQL Server 静默写错陷阱，明确要求真库验证）；集成测试的环境变量矩阵与两条清理规则（`t.Cleanup` 登记顺序、只动自建 `uni_it_*` 对象）；提交与 PR 检查清单；报 bug 需附的信息。
+- **README 增加英文摘要**：补齐缺失的 H1 标题，并以引用块给出英文概览（定位与零依赖、协议族、context 变体、应用加密与存储完整性、并发契约与禁止按值拷贝、**SQL Server 占位符陷阱**、测试规模），链接到 `CONTRIBUTING.md`。
+
+### MySQL 真驱动集成测试（integration/mysql_test.go）
+
+- 新增 `integration/mysql_test.go`：
+  - `TestMySQLPlaceholderContract`：`?` 真绑定；`:1` / `$1` / `@p1` **不得等于实参**——注意 `@p1` 在 MySQL 里是**用户变量**（句法合法、值为 NULL），故不能断言「必然报错」，只能断言「绝不绑定」；这与 SQL Server 的 `$N`（money 字面量）同属「句法合法的错误占位符」，值得固化。
+  - `TestMySQLRoundTrip`：六步 CRUD，含 `SaveIt` 的 **count-then-dispatch 回退路径**（MySQL 不在 `upsertStmt` 内，因为任一唯一键都会触发 `ON DUPLICATE KEY`，与主键语义不等价）与 `SaveItWhenNotExist` 不覆盖已存在行。
+  - `TestMySQLMetadata`：`information_schema` 探测（`ExistTable`/`ExistViews` 走 `views` 而非 `tables`/`ExistField`/`ExistConst(CtPK,"PRIMARY")`/`AutoKeys(TAutoKeys4MYSQLN)`），需引擎 `DataBase` 有值。
+  - `TestMySQLSecretRoundTrip`：`secreton` 列落库为 `ENC:` 密文并经引擎还原。
+- 连接超时设为 15s（覆盖「DNS 解析 + TCP 连接」；公网域名解析偶发偏慢）。
+- `integration/go.mod` 新增 `github.com/go-sql-driver/mysql`；库本体仍零第三方依赖。
+- **已在真实 MySQL 上全部通过**（**MySQL 8.4.6**，默认认证插件 `caching_sha2_password`；4 用例 / `-race`）。实测的占位符行为，与 SQL Server 恰成对照：
+  | 写法 | 实测结果 |
+  | ---- | -------- |
+  | `?` | 真绑定 |
+  | `:1` | `Error 1064` 语法错误 |
+  | `$1` | `Error 1054 Unknown column '$1'` |
+  | `@p1` | `sql: expected 0 arguments, got 1`（`@p1` 是**用户变量**，句法合法故服务端不报错，由驱动按「0 个占位符」拒绝实参） |
+  即 MySQL 上三种错误风格**都不绑定实参**，但失败层次不同（服务端语法错 / 服务端列不存在 / 客户端参数计数）——**均非静默写错**。至此 **PostgreSQL / SQL Server / Oracle / MySQL 四族的真驱动集成测试全部就位**（PG 由 CI 的 service 容器执行）。
+
+### CI：MySQL 纳入每次 push + 覆盖率门槛 + fuzz + 重容器定时/手动
+
+- **新增 `integration-mysql` job**（`mysql:8.4` service 容器，与实测过的 8.4.x 对齐）：`UNIENGINE_MYSQL_REQUIRED=1` 保证不可静默跳过；同时设 `UNIENGINE_MYSQL_DB`（`Exist*`/`AutoKeys` 走 `information_schema` 需要库名）。PG job 保持原样（轻量容器，每次 push）。
+- **新增覆盖率门槛**：`build-test` 的测试步骤产出 `-coverprofile`，门禁为 **75%**（当前 80.7%，留 5 个点回撤空间），防止静默劣化；`-race` 下使用 `-covermode=atomic`。
+- **新增 fuzz 冒烟**（见下节）：矩阵中每个 Go 版本各跑 10s/目标；seed 语料则随每次 `go test` 执行。
+- **新增 `integration-heavy` job**（SQL Server 2022 + Oracle Free 23）：容器各需 1–2 GB 内存、30–90s 就绪，故走**每日定时 + 手动触发**而非每次 push——不阻塞 PR，但次日即可暴露腐化。实现要点：用 `docker run` 而非 `services:`，以便在 shell 内轮询就绪并在超时/失败时**打印容器日志**；`sqlcmd` 路径按镜像版本（`tools18`/`tools`）探测；Oracle 使用镜像自带的 `/opt/oracle/healthcheck.sh`。若 runner 资源充足，放宽该 job 的 `if` 即可转为常态。
+- 校验方式：YAML 经解析校验（4 job / 4 触发器）；**CI 引用的 `UNIENGINE_*` 变量与测试代码实际读取的变量做集合比对，无多余、无拼错**；覆盖率门槛命令、fuzz 命令、基准 smoke、以及 CI 走的「整串 DSN」代码路径均已在本机对真实库跑通。**SQL Server/Oracle 两个重容器 job 无法在本机验证**（本机无 Docker），首次定时运行可能需要按 runner 环境微调。
+
+### 模糊测试（fuzz_test.go）
+
+- `FuzzValidIdent`：把「防注入白名单」的性质写成可自动探索的不变量——**凡 `validIdent` 放行，必不含任何危险字符**（引号/分号/空白/注释起手/反斜杠/`$`/`?`/`:`/`@`/反引号等），且长度非 0、仅由白名单字符构成。反向不变量（白名单外一律拒绝）由既有 `TestValidIdent` 用例表覆盖。
+- `FuzzUniFieldInitialize`：tag 解析的两个不变量——`FieldName` 永不含逗号；首段为 `-`/`_` 时必置只读。
+- seed 语料随 `go test` 执行；随机探索需显式 `-fuzz`（CI 中 10s/目标）。**本机 10s 实测各约 750 万次执行、未发现反例**。
+
 ### 已知限制
 
 - **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。
