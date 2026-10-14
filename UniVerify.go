@@ -171,6 +171,12 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Col
 		return fmt.Errorf("UniEngine: verify Column[%s] maps to a non-string field", MacCol.FieldName)
 	}
 
+	//#按值传入的行不可寻址,MAC 无法回填调用方结构体;必须在此返回普通错误,
+	//#而不是让 SetString 产生反射 panic(评审 Q4;此处先于 SQL 组装,错误即不执行)
+	if !macField.CanSet() {
+		return fmt.Errorf("UniEngine: verify Column[%s.%s] is not addressable; pass the row as a pointer so the MAC can be backfilled", UniTable.TableName, MacCol.FieldName)
+	}
+
 	macField.SetString(verifyTextOf(sum))
 
 	return nil

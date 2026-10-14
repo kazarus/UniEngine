@@ -207,10 +207,11 @@ func TestRegisterClassSetKeysPersists(t *testing.T) {
 }
 
 // SetKeys 对未注册字段应返回 error(旧代码会 panic)。
+// SetKeys 是链式 API,返回 *TUniTable 而非 error,错误在 LastError 上。
 func TestSetKeysUnregisteredFieldReturnsError(t *testing.T) {
 	e := newTestEngine()
 	tbl := e.RegisterClass(mockRow{}, "mock_row")
-	err := tbl.SetKeys("no_such_field")
+	err := tbl.SetKeys("no_such_field").LastError
 	if err == nil {
 		t.Fatal("expected error for unregistered field, got nil")
 	}

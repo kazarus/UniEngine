@@ -28,6 +28,8 @@ type mockDriver struct {
 	queryRows    [][]driver.Value
 	columns      []string
 	nextErr      error //#非空时 rows.Next 返回该错误,模拟读取中断
+	commitErr    error //#非空时事务 Commit 返回该错误,模拟驱动层提交失败
+	rollbackErr  error //#非空时事务 Rollback 返回该错误,模拟驱动层回滚失败
 }
 
 func (d *mockDriver) recordQuery(query string) {
@@ -70,13 +72,23 @@ func (c *mockConn) Prepare(query string) (driver.Stmt, error) {
 	return &mockStmt{d: c.d}, nil
 }
 func (c *mockConn) Close() error              { return nil }
-func (c *mockConn) Begin() (driver.Tx, error) { return &mockTx{}, nil }
+func (c *mockConn) Begin() (driver.Tx, error) { return &mockTx{d: c.d}, nil }
 
-// #mockTx 供事务路径测试(Begin/Commit/Cancel)
-type mockTx struct{}
+// #mockTx 供事务路径测试(Begin/Commit/Cancel);经 mockDriver 注入驱动层失败
+type mockTx struct{ d *mockDriver }
 
-func (tx *mockTx) Commit() error   { return nil }
-func (tx *mockTx) Rollback() error { return nil }
+func (tx *mockTx) Commit() error {
+	if tx.d != nil && tx.d.commitErr != nil {
+		return tx.d.commitErr
+	}
+	return nil
+}
+func (tx *mockTx) Rollback() error {
+	if tx.d != nil && tx.d.rollbackErr != nil {
+		return tx.d.rollbackErr
+	}
+	return nil
+}
 
 type mockStmt struct{ d *mockDriver }
 
