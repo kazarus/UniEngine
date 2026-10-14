@@ -324,9 +324,15 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 		return errors.New("UniEngine: method [SelectM] needs a map param; may be you should try [SelectL]")
 	}
 
-	//#GetMapUnique 返回 string,键类型必须匹配(SetMapIndex 键类型不符会 panic)
-	if t.Key().Kind() != reflect.String {
-		return fmt.Errorf("UniEngine: method [SelectM] needs a map with string key, but got key kind [%s]; check your code;", t.Key().Kind())
+	//#键语义校验(对抗性复查):Kind==String 只是"类型种类"近似——命名字符串类型
+	//#(type MyKey string)Kind 仍为 String,直接写 string 值会不可赋值 panic;
+	//#map[any]T 则 string 本可赋值,Kind 拒绝属误杀。三分支:
+	//#string 可直接赋值(any/接口) → 直写;命名 string 类型 → 写时 Convert;其余 → 报错
+	KeyType := t.Key()
+	KeyDirect := reflect.TypeOf("").AssignableTo(KeyType)
+	KeyConvert := !KeyDirect && KeyType.Kind() == reflect.String
+	if !KeyDirect && !KeyConvert {
+		return fmt.Errorf("UniEngine: method [SelectM] needs a map key assignable from string (string key or named string type), but got key type [%s]; check your code;", KeyType)
 	}
 
 	//#nil map(直接传入或经指针间接)无法写入,SetMapIndex 会 panic
@@ -343,7 +349,11 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 
 	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
 		MapUnique := Row.Interface().(HasGetMapUnique).GetMapUnique()
-		Result.SetMapIndex(reflect.ValueOf(MapUnique), Row)
+		KeyValue := reflect.ValueOf(MapUnique)
+		if !KeyDirect {
+			KeyValue = KeyValue.Convert(KeyType)
+		}
+		Result.SetMapIndex(KeyValue, Row)
 		return nil
 	}, Args...)
 }
@@ -371,9 +381,12 @@ func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapU
 		return errors.New("UniEngine: method [SelectH] needs a map param; may be you should try [SelectL]")
 	}
 
-	//#键类型与 nil map 校验同 SelectM(评审 P0 剩余 panic 路径)
-	if t.Key().Kind() != reflect.String {
-		return fmt.Errorf("UniEngine: method [SelectH] needs a map with string key, but got key kind [%s]; check your code;", t.Key().Kind())
+	//#键语义校验同 SelectM 三分支(对抗性复查:Kind 近似会漏命名 string 键/误杀 map[any]T)
+	KeyType := t.Key()
+	KeyDirect := reflect.TypeOf("").AssignableTo(KeyType)
+	KeyConvert := !KeyDirect && KeyType.Kind() == reflect.String
+	if !KeyDirect && !KeyConvert {
+		return fmt.Errorf("UniEngine: method [SelectH] needs a map key assignable from string (string key or named string type), but got key type [%s]; check your code;", KeyType)
 	}
 	if Map := reflect.Indirect(reflect.ValueOf(i)); Map.Kind() == reflect.Map && Map.IsNil() {
 		return errors.New("UniEngine: method [SelectH] got a nil map; initialize the map before calling; check your code;")
@@ -387,7 +400,11 @@ func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapU
 		if f != nil {
 			MapUnique = f(Row.Interface())
 		}
-		Result.SetMapIndex(reflect.ValueOf(MapUnique), Row)
+		KeyValue := reflect.ValueOf(MapUnique)
+		if !KeyDirect {
+			KeyValue = KeyValue.Convert(KeyType)
+		}
+		Result.SetMapIndex(KeyValue, Row)
 		return nil
 	}, Args...)
 }
