@@ -18,7 +18,10 @@ import (
 
 // selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
 func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst sql.Scanner, Args []interface{}) error {
-	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
+	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
+	if eror != nil {
+		return eror
+	}
 
 	this.sqlDebug("select", SqlQuery, Args)
 
@@ -50,7 +53,10 @@ func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst 
 // sink 第二参数为列→字段下标(热路径预计算结果,钩子路径传原始空切片)——
 // 单 struct 目标用它做按列合并,其余容器目标忽略即可。
 func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type, HasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
-	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
+	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
+	if eror != nil {
+		return eror
+	}
 
 	TablName := elemType.String()
 	UniTable := this.tableByType(TablName)

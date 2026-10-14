@@ -78,7 +78,10 @@ func TestGetSqlQueryOracle(t *testing.T) {
 	e.Provider = DtORACLE
 	e.ColParam = ":"
 	in := "select $1 from t where x=$2"
-	out := e.getSqlQuery(in, 1, 2)
+	out, _, eror := e.getSqlQuery(in, 1, 2)
+	if eror != nil {
+		t.Fatal(eror)
+	}
 	if out != "select :1 from t where x=:2" {
 		t.Fatalf("oracle replace: %q", out)
 	}
@@ -89,9 +92,15 @@ func TestGetSqlQueryMySQL(t *testing.T) {
 	e.Provider = DtMYSQLN
 	e.ColParam = "?"
 	in := "select $1 from t where x=$2"
-	out := e.getSqlQuery(in, 1, 2)
+	out, args, eror := e.getSqlQuery(in, 1, 2)
+	if eror != nil {
+		t.Fatal(eror)
+	}
 	if out != "select ? from t where x=?" {
 		t.Fatalf("mysql replace: %q", out)
+	}
+	if len(args) != 2 || args[0] != 1 || args[1] != 2 {
+		t.Fatalf("mysql reordered args: %v", args)
 	}
 }
 
@@ -99,9 +108,12 @@ func TestGetSqlQueryNoArgsUnchanged(t *testing.T) {
 	e := newTestEngine()
 	e.Provider = DtMYSQLN
 	in := "select $1 from t"
-	out := e.getSqlQuery(in)
-	if out != in {
-		t.Fatalf("no-args should be unchanged: %q", out)
+	out, args, eror := e.getSqlQuery(in)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if out != in || len(args) != 0 {
+		t.Fatalf("no-args should be unchanged: %q %v", out, args)
 	}
 }
 

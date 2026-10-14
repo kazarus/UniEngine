@@ -453,3 +453,69 @@ func TestMySQLVerifyRowBinding(t *testing.T) {
 		t.Fatal("篡改被保护列应被检出,却通过")
 	}
 }
+
+// TestMySQLPlaceholderRewriteStoredValues 评审 Q5 真库验收:$N 方言转换经词法扫描后,
+// 乱序/重复编号按出现序正确绑定、字符串常量与注释原样保留、非法编号在引擎层显式报错;
+// 落库值以**绕过引擎的原生 database/sql 读写**核对,不依赖引擎自身读路径。
+func TestMySQLPlaceholderRewriteStoredValues(t *testing.T) {
+	db := openMySQL(t)
+	eng := mysqlEngineOn(db, "?")
+
+	drop := "drop table if exists uni_it_mysql_q5"
+	if eror := eng.Execute(drop); eror != nil {
+		t.Fatalf("drop: %v", eror)
+	}
+	t.Cleanup(func() {
+		if eror := eng.Execute(drop); eror != nil {
+			t.Logf("cleanup: drop 失败: %v", eror)
+		}
+	})
+
+	if eror := eng.Execute(`create table uni_it_mysql_q5 (
+		id     bigint       not null,
+		amount bigint       not null default 0,
+		note   varchar(100) not null default '',
+		primary key (id)
+	) engine=InnoDB default charset=utf8mb4`); eror != nil {
+		t.Fatalf("create table: %v", eror)
+	}
+
+	//#① 乱序+常量+注释:amount=$2 绑 99,note='$1' 保持字面量,where id=$1 匹配 7;
+	//#行尾块注释里的 $2 若被误改写,? 数将超过实参数,驱动直接报错
+	if _, eror := db.Exec("insert into uni_it_mysql_q5 (id) values (7)"); eror != nil {
+		t.Fatal(eror)
+	}
+	if eror := eng.Execute("update uni_it_mysql_q5 set amount=$2, note='$1' where id=$1 /* $2 */", 7, 99); eror != nil {
+		t.Fatalf("乱序改写执行失败: %v", eror)
+	}
+	var amount int64
+	var note string
+	if eror := db.QueryRow("select amount, note from uni_it_mysql_q5 where id=7").Scan(&amount, &note); eror != nil {
+		t.Fatal(eror)
+	}
+	if amount != 99 || note != "$1" {
+		t.Fatalf("乱序改写落库值错误: amount=%d(应为 99), note=%q(应为 \"$1\")", amount, note)
+	}
+
+	//#② 重复编号:$1+$1 -> 5+5=10 落到 id=$2(=8) 的行
+	if _, eror := db.Exec("insert into uni_it_mysql_q5 (id) values (8)"); eror != nil {
+		t.Fatal(eror)
+	}
+	if eror := eng.Execute("update uni_it_mysql_q5 set amount=$1+$1 where id=$2", 5, 8); eror != nil {
+		t.Fatalf("重复编号执行失败: %v", eror)
+	}
+	if eror := db.QueryRow("select amount from uni_it_mysql_q5 where id=8").Scan(&amount); eror != nil {
+		t.Fatal(eror)
+	}
+	if amount != 10 {
+		t.Fatalf("重复编号落库值错误: amount=%d(应为 10)", amount)
+	}
+
+	//#③ 非法编号/实参多余:引擎层显式报错,语句不触库
+	if eror := eng.Execute("select $3 from uni_it_mysql_q5", 1, 2); eror == nil {
+		t.Fatal("编号超实参数应报错")
+	}
+	if eror := eng.Execute("update uni_it_mysql_q5 set amount=$1 where id=$1", 7, 99); eror == nil {
+		t.Fatal("实参多余应报错")
+	}
+}
