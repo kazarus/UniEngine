@@ -119,6 +119,10 @@
 - `FuzzUniFieldInitialize`：tag 解析的两个不变量——`FieldName` 永不含逗号；首段为 `-`/`_` 时必置只读。
 - seed 语料随 `go test` 执行；随机探索需显式 `-fuzz`（CI 中 10s/目标）。**本机 10s 实测各约 750 万次执行、未发现反例**。
 
+### 密文搬移防护的设计边界（文档化）
+
+外部评估指出：GCM 密文未绑定 AAD（表名/主键/列名），库内把 A 行的密文贴到 B 行，纯加密读取路径不会发现。经设计评估，该防护**由已实现的 `SetVerify` 存储完整性校验承担**而非在加密层重做——其 HMAC 载荷域分隔含表名、覆盖主键与保护列，正是行级绑定所需，且两者叠加即闭合该攻击面。加密层保持无上下文（`SelectS` 标量自动解密依赖此特性）。README 加密章节已写明该边界与配合方式。
+
 ### 已知限制
 
 - **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。
