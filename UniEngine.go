@@ -340,14 +340,16 @@ func (this *TUniEngine) Cancel() error {
 		return ErrNoTransaction
 	}
 
-	if eror := this.tx.Rollback(); eror != nil {
-		return eror
-	}
-
+	//#sql.Tx 一旦调用 Commit/Rollback 即进入终态:即使驱动返回错误,该事务上的
+	//#后续操作也只会得到 ErrTxDone。引擎引用必须无条件回收,而非仅在成功分支——
+	//#否则 BeginCtx 的 context 取消触发 database/sql 自动回滚后,Cancel 返回
+	//#ErrTxDone 而引擎仍滞留"事务中",实例永久不可用(评审 Q3)。
+	//#底层错误原样返回,由调用方 errors.Is 判别
+	eror := this.tx.Rollback()
 	this.tx = nil
 	this.inTx = false
 
-	return nil
+	return eror
 }
 
 func (this *TUniEngine) Commit() error {
@@ -358,14 +360,13 @@ func (this *TUniEngine) Commit() error {
 		return ErrNoTransaction
 	}
 
-	if eror := this.tx.Commit(); eror != nil {
-		return eror
-	}
-
+	//#同 Cancel:提交失败(驱动错误/已被超时回滚)后事务同样进入终态,
+	//#引擎引用无条件回收,实例可继续执行并重新 Begin(评审 Q3)
+	eror := this.tx.Commit()
 	this.tx = nil
 	this.inTx = false
 
-	return nil
+	return eror
 }
 
 func (this *TUniEngine) RunDebug(Value bool) error {

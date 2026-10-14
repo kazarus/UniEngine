@@ -53,6 +53,10 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 
 	n := t.NumField()
 
+	//#已见列名(小写)→首个 Go 字段名:同一列名映射多个字段时,HashField 取最后、
+	//#orderedField 取先,写入与读取会填到不同字段(评审 Q7),登记期直接拒绝
+	SeenCols := make(map[string]string, n)
+
 	var UniTable = &TUniTable{}
 	UniTable.HashField = make(map[string]TUniField, 0)
 	UniTable.HashPkeys = make(map[string]TUniField, 0)
@@ -77,11 +81,17 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 			continue
 		}
 
-		//#"db:\"-\" / db:\"_\"" 是只读标记,不是列名,豁免校验;其余列名走白名单
+		//#"db:\"-\" / db:\"_\"" 是只读标记,不是列名,豁免校验(多个标记字段共存合法);其余列名走白名单
 		if UniField.FieldName != "-" && UniField.FieldName != "_" {
 			if eror := identGuard(ErrInvalidFieldName, fmt.Sprintf("RegisterClass field tag on %s", f.Name), UniField.FieldName); eror != nil {
 				return invalidTable(TableName, eror)
 			}
+
+			LowerTxt := strings.ToLower(UniField.FieldName)
+			if PrevAttri, Dup := SeenCols[LowerTxt]; Dup {
+				return invalidTable(TableName, fmt.Errorf("UniEngine: RegisterClass duplicate column [%s] on table [%s]: fields [%s] and [%s]; each column must map to exactly one field", UniField.FieldName, TableName, PrevAttri, f.Name))
+			}
+			SeenCols[LowerTxt] = f.Name
 		}
 
 		UniTable.HashField[strings.ToLower(UniField.FieldName)] = UniField
@@ -352,9 +362,3 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 
 	return SqlResult, ListField, UniTable.ListPkeys, nil
 }
-
-// ---------------------------------------------------------------------------
-// 查询公共核心
-// ---------------------------------------------------------------------------
-
-// selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
