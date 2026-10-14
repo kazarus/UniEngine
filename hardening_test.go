@@ -2,6 +2,7 @@ package UniEngine
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -277,6 +278,8 @@ type p0Row struct {
 	Name string `db:"name"`
 }
 
+func (r p0Row) GetMapUnique() string { return fmt.Sprintf("%d", r.Id) }
+
 func newP0Engine() *TUniEngine {
 	d := &mockDriver{}
 	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
@@ -368,5 +371,68 @@ func TestRegisterClassRejectsNonStruct(t *testing.T) {
 	//#合法注册不受影响
 	if tbl := eng.RegisterClass(p0Row{}, "t_p0"); tbl.LastError != nil {
 		t.Errorf("valid registration broken: %v", tbl.LastError)
+	}
+}
+
+// #评审 P0 收尾:SelectL 非指针 / SelectM,H nil map 与非 string 键——7 条剩余 panic 路径
+func TestSelectLRequiresPointer(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	if eror := eng.SelectL([]p0Row{}, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "needs a pointer param") {
+		t.Errorf("SelectL with value slice should demand pointer, got: %v", eror)
+	}
+}
+
+func TestSelectMHRejectsNilMap(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	//#直接 nil map
+	var Direct map[string]p0Row
+	if eror := eng.SelectM(Direct, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "nil map") {
+		t.Errorf("SelectM(nil map) should error, got: %v", eror)
+	}
+	if eror := eng.SelectH(Direct, nil, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "nil map") {
+		t.Errorf("SelectH(nil map) should error, got: %v", eror)
+	}
+
+	//#经指针间接的 nil map
+	VarViaPtr := &Direct
+	if eror := eng.SelectM(VarViaPtr, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "nil map") {
+		t.Errorf("SelectM(ptr->nil map) should error, got: %v", eror)
+	}
+	if eror := eng.SelectH(VarViaPtr, nil, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "nil map") {
+		t.Errorf("SelectH(ptr->nil map) should error, got: %v", eror)
+	}
+}
+
+func TestSelectMHRequiresStringKey(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	if eror := eng.SelectM(map[int]p0Row{}, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "string key") {
+		t.Errorf("SelectM(int-key map) should error, got: %v", eror)
+	}
+	if eror := eng.SelectH(map[int64]p0Row{}, nil, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "string key") {
+		t.Errorf("SelectH(int64-key map) should error, got: %v", eror)
+	}
+}
+
+// #正向对照:string 键 + 已初始化 map(直接与指针两种形态)正常工作
+func TestSelectMHValidMapsStillWork(t *testing.T) {
+	d := &mockDriver{columns: []string{"id", "name"}, queryRows: [][]driver.Value{{int64(1), "A"}}}
+	eng := newP0Engine()
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	Direct := map[string]p0Row{}
+	if eror := eng.SelectM(Direct, "select * from t_p0"); eror != nil || len(Direct) != 1 {
+		t.Errorf("SelectM direct map: %v len=%d", eror, len(Direct))
+	}
+
+	VarViaPtr := map[string]p0Row{}
+	if eror := eng.SelectH(&VarViaPtr, nil, "select * from t_p0"); eror != nil || len(VarViaPtr) != 1 {
+		t.Errorf("SelectH via pointer: %v len=%d", eror, len(VarViaPtr))
 	}
 }

@@ -2,6 +2,52 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
+## master-20261014
+
+### SQL Server 占位符：正确性取决于「驱动名 × ColParam」（文档澄清 + 真库实测）
+
+在真实 SQL Server 2017 上对 `{mssql, sqlserver} × {":", "$", "?", "@p"}` 共 8 个组合做六步 CRUD 端到端验证后，澄清并补齐 SQL Server 占位符文档。**此前 README 只给 `ColParam` 取值、未说明它还取决于驱动名，是把使用者引向静默数据损坏的缺口。**
+
+- **`README.md` 驱动表 SQLServer 行**：占位符由 `$` / `$1` 改为 `:` / `:1`（与生产环境所用驱动名 `mssql` 一致）。
+- **新增 `README.md` `0.2.SQL Server 驱动名与占位符`**：给出对照表、两种驱动名的配置示例与危险组合警示：
+
+| `sql.Open` 驱动名 | 引擎 `ColParam` | 实测结果 |
+| --- | --- | --- |
+| `mssql`（官方标记 deprecated，但仍注册） | `:` / `$` / `?` | ✅ 三者皆可：驱动内部经 `internal/querytext.ParseParams` 统一改写为 `@pN` |
+| `mssql` | `@p` | ❌ `sql: expected 0 arguments, got N` |
+| `sqlserver`（现代名） | `@p` | ✅ 唯一可用 |
+| `sqlserver` | `:` / `?` | ❌ 服务端报语法错误 |
+| `sqlserver` | `$` | ⚠️ **静默写错数据**（见「已知限制」） |
+
+- **两种驱动名下不存在通用取值**：`@p` 在 `mssql` 下报 `expected 0 arguments`，而 `:`/`$`/`?` 在 `sqlserver` 下报语法错误或静默写错。故处置方式只能是「文档说明（本次）」+「按驱动名选择 `ColParam`」，**不能改为一个新的占位符常量**。
+- 现代等价写法（与 `mssql` 同语义，同样只接受 `:`/`$`/`?`）：`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`。
+
+### 禁止引擎按值拷贝（破坏性变更）
+
+`TUniEngine` 新增内部类型 `noCopy` 的**具名字段**，使按值拷贝在 `go vet`（copylocks 分析器）阶段即被拦下，而非留到运行期：
+
+- **原因**：`mu`/`secret` 是指针字段（拷贝时共享），而 `Db`/`ColLabel`/`ColParam`/`Provider`/`tx`/`inTx` 是值字段（拷贝时独立）。副本与原件因此出现「锁共享、事务状态不共享」的错配——副本 `Begin` 之后原件仍认为无事务，原件上的写入会**绕过该事务**直接落到连接池。
+- **表现**：`passes lock by value: UniEngine.TUniEngine contains UniEngine.noCopy`；import 本包的外部调用方在各自 `go vet` 时同样会被提示。
+- **破坏面**：新增导出结构体字段会使**非具名（unkeyed）复合字面量**编译失败；使用具名字段（`TUniEngine{Db: db, ColLabel: "db", ...}`）或 `*TUniEngine` 不受影响。本仓库已核查无 unkeyed 用法。
+- **注意**：这是 vet 期约束而非编译错误；`go vet ./...` 已在本仓库 CI 门禁中。`README.md` 并发说明已同步补充该契约。
+- 包内唯一按值拷贝点（测试助手 `newTestEngine()`）已改为返回 `*TUniEngine`。
+
+### SQL Server 真驱动集成测试（integration/mssql_test.go）
+
+新增 `integration/mssql_test.go`，把上述结论固化为可回归资产（库本体保持零第三方依赖，驱动只进独立模块）：
+
+- `TestMSSQLPlaceholderContract`：8 个子用例固化「驱动名 × 占位符风格」绑定矩阵（如 `$1` 在 `sqlserver` 下解析为 money 字面量 `"1.0000"`、`@p1` 在 `mssql` 下报 `expected 0 arguments`）。
+- `TestMSSQLRoundTripMatrix`：4 个可用组合各跑六步 CRUD（Insert / Update / SaveIt 插入 / SaveIt 更新 / InsertL / Delete）+ 绕过引擎的原生读回校验。
+- `TestMSSQLDefectSqlserverNoAt`：复现 `sqlserver` + 非 `@p` 的失效，不变式为「引擎返回 `nil` ⇒ 目标行必须按意图写入」。默认跳过，`UNIENGINE_MSSQL_DEFECT=1` 开启；缺陷修复后应翻转为常开。
+- **环境口径**与 `pg_test.go` 一致：`UNIENGINE_MSSQL_DSN`，或分量 `UNIENGINE_MSSQL_HOST/PORT/USER/PASS/DB`（口令含 `@`/`#`/`$`/`%` 时自动 URL 转义）；不可达默认跳过，`UNIENGINE_MSSQL_REQUIRED=1` 则失败。
+- `integration/go.mod` 新增 `github.com/microsoft/go-mssqldb v1.11.2`（连带 `golang.org/x/sync`、`golang.org/x/text` 上移）。
+- **测试连接生命周期统一为 `t.Cleanup`**（在 `newEngine` / `openMSSQL` 内登记）：关闭登记在最早位置，按 LIFO 必定晚于建表后的 `DROP` 执行；此前用 `defer db.Close()` 会让 `DROP` 落在已关闭的连接上而静默失败（表泄漏）。
+
+### 已知限制
+
+- **SQL Server 占位符与驱动名强耦合，引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。
+- **`sqlserver` + `$` 的历史数据需审计**：该组合下写入的值取自占位符序号（`$1`→1、`$2`→`"2.00"`），INSERT 写错值、UPDATE 改错行、DELETE 删错行，且引擎一律返回 `nil`。可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串。
+
 ## master-20261013
 
 ### 存储完整性校验（UniVerify）
@@ -207,6 +253,7 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 - **`Select` 传值（非指针）返回明确错误**（"needs a pointer param"），替代逐列回写时 `reflect.Value.Set` 不可寻址 panic。
 - **`RegisterClass` 类型守卫**：裸 `nil`（`ErrNilParam`）与非结构体（map/指针，明确 kind 报错）返回**带 `LastError` 的未注册表**（沿用链式登记约定，不破坏 `*TUniTable` 签名），非法类型不再进入注册表，`NumField` 反射 panic 消除。
 - **测试扩面**：`TestAllEntriesRejectBareNil`（13 入口逐一断言 `errors.Is(ErrNilParam)` 且 recover 兜底不得 panic）、typed nil、`Select` 传值、`RegisterClass` 三类非法输入。既有 `TestWriteMethodsRejectNilPointer` 保留。
+- **P0 收尾（剩余 7 条 panic 路径）**：`SelectL` 传值切片（Append 需可寻址）返回 "needs a pointer param"；`SelectM`/`SelectH` 对 **nil map**（直接传入与经指针间接两种形态）返回 "got a nil map"，对**非 string 键**（`GetMapUnique` 返回 string，键类型不符会 `SetMapIndex` panic）返回 "needs a map with string key"；正向对照测试确认合法形态（string 键 + 已初始化 map，直接与指针两种传参）行为不变。
 
 ### 已知限制
 

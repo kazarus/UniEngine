@@ -286,6 +286,11 @@ func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery 
 	if t.Kind() != reflect.Slice {
 		return errors.New("UniEngine: method [SelectL] needs a slice param; may be you should try [Select]")
 	}
+
+	//#切片逐行 Append 回写需要可寻址,传值会 reflect.Value.Set panic
+	if reflect.ValueOf(i).Kind() != reflect.Ptr {
+		return errors.New("UniEngine: method [SelectL] needs a pointer param; check your code;")
+	}
 	t = t.Elem()
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
@@ -317,6 +322,16 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 
 	if t.Kind() != reflect.Map {
 		return errors.New("UniEngine: method [SelectM] needs a map param; may be you should try [SelectL]")
+	}
+
+	//#GetMapUnique 返回 string,键类型必须匹配(SetMapIndex 键类型不符会 panic)
+	if t.Key().Kind() != reflect.String {
+		return fmt.Errorf("UniEngine: method [SelectM] needs a map with string key, but got key kind [%s]; check your code;", t.Key().Kind())
+	}
+
+	//#nil map(直接传入或经指针间接)无法写入,SetMapIndex 会 panic
+	if Map := reflect.Indirect(reflect.ValueOf(i)); Map.Kind() == reflect.Map && Map.IsNil() {
+		return errors.New("UniEngine: method [SelectM] got a nil map; initialize the map before calling; check your code;")
 	}
 	t = t.Elem()
 
@@ -354,6 +369,14 @@ func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapU
 
 	if t.Kind() != reflect.Map {
 		return errors.New("UniEngine: method [SelectH] needs a map param; may be you should try [SelectL]")
+	}
+
+	//#键类型与 nil map 校验同 SelectM(评审 P0 剩余 panic 路径)
+	if t.Key().Kind() != reflect.String {
+		return fmt.Errorf("UniEngine: method [SelectH] needs a map with string key, but got key kind [%s]; check your code;", t.Key().Kind())
+	}
+	if Map := reflect.Indirect(reflect.ValueOf(i)); Map.Kind() == reflect.Map && Map.IsNil() {
+		return errors.New("UniEngine: method [SelectH] got a nil map; initialize the map before calling; check your code;")
 	}
 	t = t.Elem()
 
