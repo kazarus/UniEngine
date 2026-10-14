@@ -21,11 +21,11 @@ type TUniTable struct {
 	SqlDelete string `db:"sql_delete" json:"sqlDelete"`
 
 	SecretOn   bool        //#是否含加密字段#SetSecret或tag检测到加密列时置位#层级:TUniEngine.SecretOn→TUniTable.SecretOn→TUniField.SecretOn
-	ListSecret []TUniField //#栏目加密
+	ColSecret []TUniField //#栏目加密
 
 	VerifyOn   bool        //#是否含完整性保护字段#SetVerify登记时置位
 	VerifyAt   string      //#MAC伴随列(字段名,小写)#如 mac_text,建议建列 varchar(64) NOT NULL DEFAULT ''
-	ListVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
+	ColVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
 
 	HashField map[string]TUniField //ToLower
 	HashPkeys map[string]TUniField //ToLower
@@ -234,14 +234,14 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 
 		//#加密列清单同步登记(重复 SetSecret 同列不重复登记)
 		var Seen bool
-		for i := range this.ListSecret {
-			if strings.ToLower(this.ListSecret[i].FieldName) == lowerName {
+		for i := range this.ColSecret {
+			if strings.ToLower(this.ColSecret[i].FieldName) == lowerName {
 				Seen = true
 				break
 			}
 		}
 		if !Seen {
-			this.ListSecret = append(this.ListSecret, Field)
+			this.ColSecret = append(this.ColSecret, Field)
 		}
 
 		//#ListField 是 HashField 的另一份副本,须同步标记,否则 PrepareRunSQL 路径会读到旧值
@@ -332,7 +332,7 @@ func (this *TUniTable) SetVerify(MacField string, Fields ...string) *TUniTable {
 
 	this.VerifyOn = true
 	this.VerifyAt = lowerMac
-	this.ListVerify = ListProtected
+	this.ColVerify = ListProtected
 
 	return this
 }
