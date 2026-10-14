@@ -115,25 +115,25 @@ func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 	return Key, nil
 }
 
-// #gcmOpen 以给定密钥做 AES-256-GCM 解密(Data 为 Nonce+密文)
-func gcmOpen(Key, Data []byte) ([]byte, error) {
+// #GCMOpen 以给定密钥做 AES-256-GCM 解密(Data 为 Nonce+密文)
+func GCMOpen(Key, Data []byte) ([]byte, error) {
 
 	Block, eror := aes.NewCipher(Key)
 	if eror != nil {
 		return nil, eror
 	}
 
-	Gcm, eror := cipher.NewGCM(Block)
+	GCM, eror := cipher.NewGCM(Block)
 	if eror != nil {
 		return nil, eror
 	}
 
-	NonceSize := Gcm.NonceSize()
+	NonceSize := GCM.NonceSize()
 	if len(Data) < NonceSize {
 		return nil, errors.New("UniEngine: decrypt fail,cipher Text is too short")
 	}
 
-	PlainText, eror := Gcm.Open(nil, Data[:NonceSize], Data[NonceSize:], nil)
+	PlainText, eror := GCM.Open(nil, Data[:NonceSize], Data[NonceSize:], nil)
 	if eror != nil {
 		return nil, fmt.Errorf("UniEngine: decrypt fail: %w", eror)
 	}
@@ -191,17 +191,17 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 			return "", eror
 		}
 
-		Gcm, eror := cipher.NewGCM(Block)
+		GCM, eror := cipher.NewGCM(Block)
 		if eror != nil {
 			return "", eror
 		}
 
-		Nonce := make([]byte, Gcm.NonceSize())
+		Nonce := make([]byte, GCM.NonceSize())
 		if _, eror = io.ReadFull(rand.Reader, Nonce); eror != nil {
 			return "", eror
 		}
 
-		CipherText := Gcm.Seal(nil, Nonce, []byte(Value), nil)
+		CipherText := GCM.Seal(nil, Nonce, []byte(Value), nil)
 
 		Payload := make([]byte, 0, secretHeadLen+len(CipherText))
 		Payload = append(Payload, Salt...)
@@ -239,7 +239,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 		return "", eror
 	}
 
-	PlainText, eror := gcmOpen(Key, Data[secretSaltLen+4:])
+	PlainText, eror := GCMOpen(Key, Data[secretSaltLen+4:])
 	if eror != nil {
 		return "", eror
 	}
