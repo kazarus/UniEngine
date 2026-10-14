@@ -219,6 +219,11 @@ func (this *TUniEngine) Select(i interface{}, SqlQuery string, Args ...interface
 
 func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
 
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
+	if eror := nilParamOf("Select", i); eror != nil {
+		return eror
+	}
+
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -226,6 +231,11 @@ func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery s
 
 	if t.Kind() != reflect.Struct {
 		return errors.New("UniEngine: method [Select] only returns a struct; may be you should try [SelectL]")
+	}
+
+	//#单 struct 目标需要可寻址(逐列回写),传值会 reflect.Value.Set panic
+	if reflect.ValueOf(i).Kind() != reflect.Ptr {
+		return errors.New("UniEngine: method [Select] needs a pointer param; check your code;")
 	}
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
@@ -263,6 +273,11 @@ func (this *TUniEngine) SelectL(i interface{}, SqlQuery string, Args ...interfac
 
 func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
 
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0);typed nil 切片指针由此拦截
+	if eror := nilParamOf("SelectL", i); eror != nil {
+		return eror
+	}
+
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -289,6 +304,11 @@ func (this *TUniEngine) SelectM(i interface{}, SqlQuery string, Args ...interfac
 }
 
 func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
+
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
+	if eror := nilParamOf("SelectM", i); eror != nil {
+		return eror
+	}
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -321,6 +341,11 @@ func (this *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 }
 
 func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapUnique, SqlQuery string, Args ...interface{}) error {
+
+	//#nil 校验必须先于 reflect.TypeOf/Kind(评审 P0)
+	if eror := nilParamOf("SelectH", i); eror != nil {
+		return eror
+	}
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {

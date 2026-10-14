@@ -18,7 +18,16 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 		this.HashTabl = make(map[string]*TUniTable, 0)
 	}
 
+	//#类型守卫:裸 nil/非结构体(含指针)返回带 LastError 的未注册表(链式约定),不再反射 panic
+	if Class == nil {
+		return &TUniTable{TableName: TableName, LastError: fmt.Errorf("%w: RegisterClass got a nil param; needs a struct value; check your code;", ErrNilParam)}
+	}
+
 	t := reflect.TypeOf(Class)
+	if t.Kind() != reflect.Struct {
+		return &TUniTable{TableName: TableName, LastError: fmt.Errorf("UniEngine: RegisterClass needs a struct value, but got kind [%s]; check your code;", t.Kind())}
+	}
+
 	n := t.NumField()
 
 	var UniTable = &TUniTable{}

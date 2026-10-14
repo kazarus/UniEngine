@@ -267,3 +267,106 @@ func TestChainRegisterKeysSecret(t *testing.T) {
 		t.Fatal("SetSecret on a pkey inside chain should record Err")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 评审 P0:裸 nil/typed nil/非指针/非法类型——全部公共入口必须返回错误而非 panic
+// ---------------------------------------------------------------------------
+
+type p0Row struct {
+	Id   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
+func newP0Engine() *TUniEngine {
+	d := &mockDriver{}
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+	eng.Initialize()
+	return eng
+}
+
+// #全部 13 个公共 CRUD 入口:裸 nil 必须返回 ErrNilParam,绝不允许 panic
+func TestAllEntriesRejectBareNil(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	cases := map[string]func() error{
+		"SaveIt":             func() error { return eng.SaveIt(nil) },
+		"SaveItWhenNotExist": func() error { return eng.SaveItWhenNotExist(nil) },
+		"Update":             func() error { return eng.Update(nil) },
+		"Insert":             func() error { return eng.Insert(nil) },
+		"InsertL":            func() error { return eng.InsertL(nil) },
+		"Delete":             func() error { return eng.Delete(nil) },
+		"CopyInL":            func() error { return eng.CopyInL(nil) },
+		"InsertP":            func() error { return eng.InsertP(nil, 10) },
+		"CopyInP":            func() error { return eng.CopyInP(nil, 10) },
+		"Select":             func() error { return eng.Select(nil, "select * from t_p0") },
+		"SelectL":            func() error { return eng.SelectL(nil, "select * from t_p0") },
+		"SelectM":            func() error { return eng.SelectM(nil, "select * from t_p0") },
+		"SelectH":            func() error { return eng.SelectH(nil, nil, "select * from t_p0") },
+	}
+	for name, call := range cases {
+		//#recover 兜底断言:修复回归时先暴露 panic 而非误报错误文本
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s(nil) PANICKED: %v", name, r)
+				}
+			}()
+			err := call()
+			if !errors.Is(err, ErrNilParam) {
+				t.Errorf("%s(nil) should return ErrNilParam, got: %v", name, err)
+			}
+		}()
+	}
+}
+
+// #typed nil(带类型的空指针)同样统一拦截
+func TestEntriesRejectTypedNil(t *testing.T) {
+	eng := newP0Engine()
+
+	if eror := eng.SaveIt((*p0Row)(nil)); !errors.Is(eror, ErrNilParam) {
+		t.Errorf("SaveIt typed nil: %v", eror)
+	}
+	if eror := eng.SelectL((*[]p0Row)(nil), "select * from t_p0"); !errors.Is(eror, ErrNilParam) {
+		t.Errorf("SelectL typed nil slice: %v", eror)
+	}
+}
+
+// #Select 单 struct 目标必须传指针(否则逐列回写不可寻址)
+func TestSelectRequiresPointer(t *testing.T) {
+	eng := newP0Engine()
+	_ = eng.RegisterClass(p0Row{}, "t_p0")
+
+	if eror := eng.Select(p0Row{}, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "needs a pointer param") {
+		t.Errorf("Select with value should demand pointer, got: %v", eror)
+	}
+}
+
+// #RegisterClass:裸 nil 与非结构体返回带 LastError 的未注册表(链式约定),不 panic
+func TestRegisterClassRejectsNonStruct(t *testing.T) {
+	eng := newP0Engine()
+
+	tblNil := eng.RegisterClass(nil, "t_nil")
+	if tblNil == nil || !errors.Is(tblNil.LastError, ErrNilParam) {
+		t.Errorf("RegisterClass(nil) should carry ErrNilParam in LastError, got: %+v", tblNil)
+	}
+
+	tblMap := eng.RegisterClass(map[string]int{}, "t_map")
+	if tblMap == nil || tblMap.LastError == nil {
+		t.Error("RegisterClass(map) should carry LastError")
+	}
+
+	tblPtr := eng.RegisterClass(&p0Row{}, "t_ptr")
+	if tblPtr == nil || tblPtr.LastError == nil {
+		t.Error("RegisterClass(pointer) should carry LastError")
+	}
+
+	//#非法类型不得进入注册表
+	if tab := eng.GetTable("t_nil"); tab != nil {
+		t.Error("failed registration must not enter registry")
+	}
+	//#合法注册不受影响
+	if tbl := eng.RegisterClass(p0Row{}, "t_p0"); tbl.LastError != nil {
+		t.Errorf("valid registration broken: %v", tbl.LastError)
+	}
+}

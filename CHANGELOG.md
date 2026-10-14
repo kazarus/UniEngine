@@ -198,6 +198,16 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 
 - **单 struct `Select` 改为按列合并**：`queryRowsCtx` 的 sink 增加 `fieldIdx` 参数（列→字段下标预计算结果），非钩子类的单 struct 目标仅用 SELECT 返回列覆盖目标字段，**未出现在结果列里的字段保留调用方原值**——修复"SELECT 少量列灌回业务结构体把其余字段清零"的问题（如 VerifyDX 的 `FROM_WHO_BUILD` 被清零）；钩子类仍整结构体替换（填充范围由类自身 `SetSqlResult` 决定）；零行结果不触发 sink，目标原样保留。`SelectL/M/H` 行为不变（sink 忽略新增参数）。新增 `UniQuery_test.go` 回归测试（3 例：未选列保留/零行保留/全零基线）。
 
+### 健壮性加固（评审 P0：消除全部反射 panic 路径）
+
+外部评估报告（`UniEngine-评估报告.md`）以探针实测确认 17 条可复现 panic 路径（13 个公共 CRUD 入口对裸 `nil`、4 处反射类型 panic），本批全部消除：
+
+- **新增哨兵 `ErrNilParam`** 与统一校验助手 `nilParamOf`：裸 `nil` 与 typed nil 统一判别返回 `ErrNilParam` 包装错误。**判断先于任何 `reflect.TypeOf/Kind`**——裸 `nil` 时 `TypeOf` 返回 nil Type，此前写路径的 typed-nil 守卫排在 `Kind()` 之后永远执行不到（根因即判断顺序）。
+- **覆盖全部 13 个入口**：写路径 7 个（经 `resolveTarget`）+ `Select`/`SelectL`/`SelectM`/`SelectH` + `InsertP`/`CopyInP`。
+- **`Select` 传值（非指针）返回明确错误**（"needs a pointer param"），替代逐列回写时 `reflect.Value.Set` 不可寻址 panic。
+- **`RegisterClass` 类型守卫**：裸 `nil`（`ErrNilParam`）与非结构体（map/指针，明确 kind 报错）返回**带 `LastError` 的未注册表**（沿用链式登记约定，不破坏 `*TUniTable` 签名），非法类型不再进入注册表，`NumField` 反射 panic 消除。
+- **测试扩面**：`TestAllEntriesRejectBareNil`（13 入口逐一断言 `errors.Is(ErrNilParam)` 且 recover 兜底不得 panic）、typed nil、`Select` 传值、`RegisterClass` 三类非法输入。既有 `TestWriteMethodsRejectNilPointer` 保留。
+
 ### 已知限制
 
 - **pgx 驱动下 `CopyIn*` 需接 `CopyInHook`**（`contrib/pgxcopy.Hook`）：pgx stdlib 不模拟 lib/pq 逐行 COPY 约定，不接钩子报 `expected 0 arguments`；lib/pq 兼容驱动不受影响。事务期间 `CopyIn*`（钩子路径）被显式拒绝。
