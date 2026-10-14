@@ -7,13 +7,16 @@ replace github.com/kazarus/UniEngine => ../
 replace github.com/kazarus/UniEngine/contrib/pgxcopy => ../contrib/pgxcopy
 
 require (
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/kazarus/UniEngine v0.0.0-00010101000000-000000000000
 	github.com/kazarus/UniEngine/contrib/pgxcopy v0.0.0-00010101000000-000000000000
 	github.com/microsoft/go-mssqldb v1.11.2
+	github.com/sijms/go-ora/v2 v2.9.0
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

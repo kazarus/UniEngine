@@ -1,8 +1,20 @@
-# CI: build + vet + gofmt + test -race 的 Go 版本矩阵 + PostgreSQL 真库集成测试
+# CI:build + vet + gofmt + test -race 的 Go 版本矩阵 + 真库集成测试
+#
+# 真库集成测试分三档:
+#   integration-pg / integration-mysql —— 轻量容器(启动 ~10–30s),每次 push 都跑
+#   integration-heavy                 —— SQL Server / Oracle 重容器(各需 1–2 GB 内存、30–90s 就绪),
+#                                        走每日定时 + 手动触发:不阻塞 PR,但次日即可暴露腐化。
+#                                        确认 runner 可稳定启动后,可把其 if 放宽到 push 转为常态
+#
 # go.mod 下限 1.24;矩阵覆盖下限与后续各版本,新增 Go 版本时在此追加
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 18 * * *' # 每天 18:00 UTC(次日 02:00 UTC+8)跑一遍重容器集成测试
+  workflow_dispatch: # 供 integration-heavy 手动触发
 
 permissions:
   contents: read
@@ -38,12 +50,26 @@ jobs:
           out=$(gofmt -l .)
           [ -z "$out" ] || { echo "以下文件需要 gofmt:"; echo "$out"; exit 1; }
 
+      # -race 下覆盖率须用 atomic 模式;门槛取"当前水位回撤 5 个点"作下限,防止静默劣化
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic .
+
+      - name: Coverage gate
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "语句覆盖率: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 75) { printf "❌ 覆盖率 %.2f%% 低于门槛 75%%\n", t; exit 1 } printf "✅ 覆盖率 %.2f%% ≥ 75%%\n", t }'
 
       # 基准代码也在 CI 里编译并各执行一次,防止其随重构腐化
       - name: Benchmark smoke
         run: go test -run '^$' -bench . -benchtime=1x .
+
+      # fuzz 目标的 seed 语料已随 Test 跑过;这里做短时随机探索(单目标,故分两步)
+      - name: Fuzz smoke (FuzzValidIdent)
+        run: go test -run '^$' -fuzz FuzzValidIdent -fuzztime 10s .
+
+      - name: Fuzz smoke (FuzzUniFieldInitialize)
+        run: go test -run '^$' -fuzz FuzzUniFieldInitialize -fuzztime 10s .
 
   # PostgreSQL 真实驱动(pgx)集成测试:独立模块 integration/,不污染库本体零依赖
   integration-pg:
@@ -83,6 +109,138 @@ jobs:
         run: go vet ./...
         working-directory: contrib/pgxcopy
 
+      # 其余族(MySQL/SQL Server/Oracle)无 env,自动跳过;REQUIRED=1 保证 PG 不会静默跳过
       - name: Integration tests (CRUD/UPSERT/COPY/加密/元数据/事务)
         run: go test -race -count=1 -v ./...
         working-directory: integration
+
+  # MySQL 真实驱动(go-sql-driver/mysql)集成测试;镜像版本与实测过的 8.4 对齐
+  integration-mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: uni
+          MYSQL_DATABASE: uni
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -puni --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # 整串 DSN 供连接;UNIENGINE_MYSQL_DB 另供 information_schema 探测(Exist*/AutoKeys)使用
+      UNIENGINE_MYSQL_DSN: root:uni@tcp(127.0.0.1:3306)/uni?charset=utf8mb4&timeout=15s
+      UNIENGINE_MYSQL_DB: uni
+      UNIENGINE_MYSQL_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/go.sum
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: integration
+
+      - name: Integration tests (MySQL:占位符/CRUD/元数据/加密)
+        run: go test -race -count=1 -v ./...
+        working-directory: integration
+
+  # SQL Server / Oracle:容器重、启动慢,走每日定时 + 手动触发(不阻塞 PR,次日暴露腐化)
+  # (Actions 页面 → 本 workflow → Run workflow 可立即跑一次)。
+  # 若你的 runner 资源充足且已验证可稳定启动,把下面的 if 放宽到 push 即可转为常态。
+  integration-heavy:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/go.sum
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: integration
+
+      - name: Start SQL Server
+        run: |
+          docker run -d --name mssql \
+            -e ACCEPT_EULA=Y \
+            -e 'MSSQL_SA_PASSWORD=CI_PASSWORD' \
+            -e MSSQL_PID=Developer \
+            -p 1433:1433 \
+            mcr.microsoft.com/mssql/server:2022-latest
+
+      # sqlcmd 路径随镜像版本变化(tools18 / tools),脚本内两种都探测;
+      # 用 docker exec 而非 service health-cmd,以便失败时能直接打印容器日志
+      - name: Wait for SQL Server & create test database
+        run: |
+          cat > /tmp/mssql-ready.sh <<'SH'
+          set -e
+          C=$(command -v /opt/mssql-tools18/bin/sqlcmd || command -v /opt/mssql-tools/bin/sqlcmd)
+          [ -n "$C" ] || { echo "未找到 sqlcmd"; ls /opt; exit 1; }
+          "$C" -S localhost -U sa -P "CI_PASSWORD" -C -Q "SELECT 1" >/dev/null
+          "$C" -S localhost -U sa -P "CI_PASSWORD" -C -Q "IF DB_ID('uni') IS NULL CREATE DATABASE uni"
+          SH
+          docker cp /tmp/mssql-ready.sh mssql:/tmp/mssql-ready.sh
+          ready=0
+          for i in $(seq 1 30); do
+            if docker exec mssql bash /tmp/mssql-ready.sh; then ready=1; break; fi
+            sleep 5
+          done
+          [ "$ready" = 1 ] || { echo "SQL Server 150s 内未就绪"; docker logs --tail 60 mssql; exit 1; }
+
+      - name: Integration tests (SQL Server:MERGE/占位符契约)
+        working-directory: integration
+        env:
+          UNIENGINE_MSSQL_HOST: 127.0.0.1
+          UNIENGINE_MSSQL_PORT: '1433'
+          UNIENGINE_MSSQL_USER: sa
+          UNIENGINE_MSSQL_PASS: CI_PASSWORD
+          UNIENGINE_MSSQL_DB: uni
+          UNIENGINE_MSSQL_REQUIRED: '1'
+        run: go test -race -count=1 -v ./...
+
+      - name: SQL Server logs (on failure)
+        if: failure()
+        run: docker logs --tail 80 mssql || true
+
+      - name: Start Oracle
+        run: |
+          docker run -d --name oracle \
+            -e ORACLE_PASSWORD=uni \
+            -e APP_USER=uni \
+            -e APP_USER_PASSWORD=uni \
+            -p 1521:1521 \
+            gvenzl/oracle-free:23-slim
+
+      - name: Wait for Oracle
+        run: |
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec oracle /opt/oracle/healthcheck.sh >/dev/null 2>&1; then ready=1; break; fi
+            sleep 5
+          done
+          [ "$ready" = 1 ] || { echo "Oracle 300s 内未就绪"; docker logs --tail 60 oracle; exit 1; }
+
+      - name: Integration tests (Oracle:INSERT ALL/MERGE/元数据)
+        working-directory: integration
+        env:
+          UNIENGINE_ORACLE_HOST: 127.0.0.1
+          UNIENGINE_ORACLE_PORT: '1521'
+          UNIENGINE_ORACLE_USER: uni
+          UNIENGINE_ORACLE_PASS: uni
+          UNIENGINE_ORACLE_SERVICE: FREEPDB1 # gvenzl/oracle-free 的默认 PDB
+          UNIENGINE_ORACLE_REQUIRED: '1'
+        run: go test -race -count=1 -v ./...
+
+      - name: Oracle logs (on failure)
+        if: failure()
+        run: docker logs --tail 80 oracle || true
