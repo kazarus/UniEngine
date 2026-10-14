@@ -342,7 +342,7 @@ func TestVerifyDisabledNoImpact(t *testing.T) {
 	//#读侧:垃圾 MAC 值也不校验
 	d2 := &mockDriver{
 		columns:   verifyRowColumns(),
-		queryRows: [][]driver.Value{{int64(1), int64(2), int64(1), "mast", "MAC1:garbage"}},
+		queryRows: [][]driver.Value{{int64(1), int64(2), int64(1), "mast", "MAC:garbage"}},
 	}
 	eng.Db = sql.OpenDB(mockConnector{d: d2})
 	var rows []TVerifyRow
