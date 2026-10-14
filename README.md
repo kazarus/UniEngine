@@ -6,6 +6,7 @@ UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 
 
 > 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
 > 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
+> 另:**引擎不得按值拷贝**——请一律使用 `*TUniEngine`。拷贝会复制 `tx`/`inTx` 等值字段却共享 `mu`,副本 Begin 之后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。该约束已由 `noCopy` + `go vet`(copylocks 分析器)在静态检查阶段强制,CI 有门禁。
 > 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
 
 ##### 0.0.驱动安装
@@ -21,7 +22,37 @@ Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等�
 | Postgre  | DtPOSTGR / DtKINGES(金仓) / DtOPENGS / DtPOLODB | $      | $1     | "name"     |
 | Oracle   | DtORACLE / DtDAMENG(达梦)                                 | :      | :1     | name(裸)   |
 | MySQL    | DtMYSQLN / DtTAURUS(华为)                                 | ?      | ?      | name(裸)   |
-| SQLServer| DtSQLSRV                                                  | $      | $1     | "name"     |
+| SQLServer| DtSQLSRV                                                  | :      | :1     | "name"     |
+
+> **SQLServer 注意**:上表取值以驱动名 **`mssql`** 为前提;驱动名不同,占位符结论完全不同——见 0.2。
+
+##### 0.2.SQL Server 驱动名与占位符
+
+SQL Server 的占位符**不只看 `ColParam`,还取决于 `sql.Open` 用的驱动名**。go-mssqldb 注册了两个名字,预处理行为相反:
+
+| sql.Open 驱动名 | 引擎 ColParam | 实际效果 |
+| --------------- | ------------- | -------- |
+| `mssql`(官方标记 deprecated,但仍注册) | `:` / `$` / `?` | ✅ 三者皆可:驱动内部统一改写为 `@p1` 再发往服务端 |
+| `mssql` | `@p` | ❌ `sql: expected 0 arguments, got N` |
+| `sqlserver`(现代名) | `@p` | ✅ 唯一可用 |
+| `sqlserver` | `:` / `?` | ❌ 服务端报语法错误 |
+| `sqlserver` | `$` | ⚠️ **静默写错数据**,见下 |
+
+```go
+//#驱动名 mssql:内部把 ? / :N / $N 预处理为 @pN
+db, _ := sql.Open("mssql", DbSource)
+UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: ":", Provider: UniEngine.DtSQLSRV}
+
+//#驱动名 sqlserver:不预处理,仅认 @pN
+db, _ := sql.Open("sqlserver", DbSource)
+UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Provider: UniEngine.DtSQLSRV}
+```
+
+> **`sqlserver` + `$` 是本引擎最危险的组合**:`$N` 在 T-SQL 里是合法的 **money 字面量**(`$1` 恒等于 1.0000,与传入实参无关),既不报错也不绑定实参——语句"执行成功"、引擎返回 `nil`,但 INSERT 写入的是占位符序号字面量、UPDATE 改错行、DELETE 删错行。**全程无任何错误提示**,只能靠数据比对发现。若曾使用该组合,建议审计历史数据(可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串)。
+>
+> 两种驱动名下**没有通用取值**:`@p` 在 `mssql` 下报 `expected 0 arguments`,而 `:`/`$`/`?` 在 `sqlserver` 下报语法错误或静默写错——请按驱动名选择 `ColParam`。
+>
+> 现代写法与 `mssql` 同语义(同样只接受 `:`/`$`/`?`):`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`。
 
 #### 1.安装方式
 
@@ -156,7 +187,7 @@ for i := range users {
 - **SaveIt / SaveItWhenNotExist 默认走方言原生 UPSERT**(PG `on conflict`、Oracle/SQLServer `merge`),消除 count 与写入两步之间的并发窗口;实现自定义 SQL 钩子的类与 MySQL(唯一键语义不等价)自动回退旧的 count-then-dispatch;
 - **查询补 `rows.Err()` 检查**:读取中途出错不再被静默吞掉(此前表现为"正常返回但数据截断");
 - **SQL 生成确定性**:CRUD 列序按类声明序(手工注册字段按字段名排序补齐),同一输入不再产生不同 SQL 文本,利于数据库端语句缓存;
-- **表名/字段名白名单校验**:所有拼入 SQL 的表名/字段名仅允许字母/数字/下划线/点,非法字符直接报错(防注入);
+- **表名/字段名白名单校验**:所有**运行时传入**的表名/字段名(`RegisterClass`/`RegisterTable`/`RegisterField`/`RegisterPkeys` 的参数、写方法的 `TableName`、`Exist*`)与 **struct tag 列名**(`db:"..."`,只读标记 `-`/`_` 豁免)仅允许字母/数字/下划线/点,非法字符直接报错(`ErrInvalidTableName`/`ErrInvalidFieldName`,防注入);注册类 API 遇非法名返回**带 `LastError` 的未注册表**(链式短路,签名不变,非法名不进注册表);
 - **ExistViews 修正**:PostgreSQL(补 `relkind='v'`)/ SQLServer(补 `xtype='V'`)/ MySQL(改查 `information_schema.views`)不再把同名普通表误判为视图;
 - **SQLServer 主键探测**改用 `sys.indexes` 目录视图(替代老旧的 syscolumns/sysindexes 联查);
 - **RegisterClass 双 key 注册**:类同时以"小写表名"和"类全名"注册(统一 GetTable 与 SaveIt 路径的可见性)。注意:两个类注册同一表名时,小写表名 key 以后注册者为准;
@@ -176,7 +207,7 @@ go test -bench . -benchmem -run '^$'
 ```
 
 - **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
-- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(稳定态,按 16B/256B/4KB 分档;4KB 档 GCM 吞吐约 0.8-1.2 GB/s)、`BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
+- **加解密**:`BenchmarkSecretEncrypt/Decrypt`(稳定态,按 16B/256B/4KB 分档);**4KB 档实测吞吐:加密约 0.75 GB/s、解密约 1.17 GB/s**(此前文档写作 0.8-1.2 GB/s,加密档偏乐观,已按实测更正);小尺寸以固定开销为主,16B 档约 23 / 39 MB/s。另有 `BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
 - **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。
 
 #### 6.真实数据库集成测试
