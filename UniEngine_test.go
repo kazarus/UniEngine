@@ -598,8 +598,10 @@ func TestSaveItUpsertOracle(t *testing.T) {
 // SQLServer:MERGE + HOLDLOCK。
 func TestSaveItUpsertSQLSRV(t *testing.T) {
 	d := &mockDriver{}
-	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtSQLSRV}
-	eng.Initialize()
+	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtSQLSRV, ProvideName: "mssql"}
+	if eror := eng.Initialize(); eror != nil {
+		t.Fatal(eror)
+	}
 	eng.RegisterClass(TTestUser{}, "test_user").SetKeys("user_name")
 
 	row := TTestUser{UserName: "kazarus", Password: "p"}

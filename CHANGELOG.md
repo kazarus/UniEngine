@@ -8,7 +8,8 @@
 
 ### 质量评审后续修复
 
-- SQL Server 在 `TUniEngine.Initialize()` 使用真实连接进行只读参数回显;占位符未绑定时返回 `ErrInvalidPlaceholderBinding`,且初始化不会登记内置表。调用方必须检查初始化错误。数据库或 `ColParam` 变更后,执行入口会重新验证。`integration/mssql_test.go` 的 16 个真库子例已通过,覆盖绑定矩阵、有效组合读写和错误组合初始化拒绝。
+- **SQL Server 配置校验变更**:开发者须填写 `ProvideName="mssql"` 或 `ProvideName="sqlserver"`,与 `sql.Open` 或连接器的实际驱动模式一致。`ProviderName()` 在 SQL Server 族返回该声明；`Initialize()` 按 `ProvideName × ColParam` 检查配置并在错误时返回 `ErrInvalidPlaceholderBinding`,不登记内置表。执行入口也检查当前配置。旧版的真实连接只读回显已移除,因此声明与实际驱动不一致无法被引擎发现；调用方必须保证配置一致。
+- SQL Server 的 16 个真库子例覆盖原始绑定矩阵、有效组合读写和错误组合初始化拒绝。
 - 同表 `RegisterTable/RegisterField/RegisterPkeys` 改为复制并发布元数据快照,允许与读取并发;已取得的旧指针继续使用旧快照。直接修改返回的 `*TUniTable` 仍须遵守并发契约。
 - 缺省 `VerifyMacVer=0` 改为写 `MAC2:` v2 载荷;显式 `VerifyMacVer=1` 保留旧 v1 写法。读取仍按标签兼容 v1 行,但存量数据需要重签才能全面获得 v2 防歧义保证。
 - `VerifyMode=2` 的结构体读取若缺保护列或 MAC 列,或使用无法由引擎验签的结果钩子,现在返回 `ErrIncompleteVerification`。
@@ -17,7 +18,7 @@
 - **`SetKeys` 拒绝只读标记字段作主键**(评估发现,行为收紧):`db:"-"` / `db:"_"` 的 `FieldName` 就是标记本身、**没有真实列名**,作主键会生成 `-=?` 这类非法 WHERE;而 `pkeyFields` 只过滤 `AttriName` 为空、**不过滤 `ReadOnly`**,故 `Update`/`Delete`/`SaveIt`/`SaveItWhenNotExist` 的 WHERE 会一并语法错误(真机实测 `Error 1064 (42000)`),`PrepareRunSQL(EtDelete)` 同理。现在登记期直接拒绝且不写入主键。**只拦标记字段**:`db:"real_col,readonly"` 有真实列名,作 WHERE 定位键依然合法(回归用例 `TestSetKeysRejectsReadonlyMarker` 含该正向对照)。其余入口本已封住——`RegisterPkeys("-")` 被标识符白名单拒绝,`AutoKeys` 取库内真实列名。
 - **文档:可空列与 NULL 的读路径语义**(评估发现,仅文档):README 新增 `3.可空列与 NULL`,写明真机实测矩阵——不可空字段(`string`/`int64`/`bool`/`time.Time`)遇 NULL 会**报错且 `SelectL` 整批丢弃**(0 行,错误只给列下标与列名、不含行号);`[]byte`、`sql.NullXxx`、指针则正常。同时记明**引擎自身的两种相反策略**:结构体入口报错,而标量入口 `SelectS`/`SelectD`/`SelectF` 内部用 `sql.NullXxx`、NULL 时返回零值不报错。`doc.go` 同步补充。引擎不做静默降级(会把 NULL 变成 `""`/`0` 或让调用方无法区分"没有这行"与"读不动"),需部分成功语义时请在应用层按可空类型读入后判定。
 - **回归测试补全与覆盖率门槛上调**(评估 T1 批次):新增 **14 条**用例——`PrepareRunSQLEtDelete` 四情形(正常/复合主键按登记序/无主键拒绝/未注册表)、分页路径(`InsertP` 页数与参数守恒、`CopyInP` 方言路由、`insertPage` 的 `Supplier=DtPOLODB` 分支、四个废弃别名)、元数据探测(`Exist*` 共用收尾的真/假分支、非法标识符、MySQL 缺 `DataBase`、`IfDropView` 两种情形、`ExecuteMust` 的 0 行/1 行/驱动错误)、以及 `verifyFormat` 的类型全覆盖与不支持 kind 的稳定报错。根模块语句覆盖率 **82.4% → 88.0%**：`UniMeta.go` 41.9%→91.9%、`UniCopyIn.go` 45.6%→97.1%、`insertPage` 0%→100%、`InsertPCtx`/`CopyInPCtx` 8.7%→91.3%、`verifyFormat` 30%→100%。CI 覆盖率门槛由 **75% 上调至 80%**。
-- **清理与口径对齐**(评估 T1 批次):`TUniEngine.Instance`/`.DataUser`/`.ProvideName` 与 `TUniTable.ParentTab` 标注 `Deprecated`(引擎内部零引用,设置无效),`Supplier` 的注释改为其真实用途(`InsertP` 的 PolarDB→COPY 路由,且引擎从不赋值),`SqlSelect~SqlDelete` 注明是 `PrepareRunSQL` 的结果留痕;**`PrepareRunSQL(EtSelect)` 的 WHERE 改为只跳过只读标记字段**(经新增的 `isPkeyUsable`),使 `db:"col,readonly"` 这类**有真实列名的只读列**能作定位键,与 `Delete/Update/SaveIt` 的 `pkeyFields()` 口径一致(此前会被跳过,导致 WHERE 漏掉该主键)。
+- **清理与口径对齐**(评估 T1 批次):`TUniEngine.Instance`/`.DataUser` 与 `TUniTable.ParentTab` 标注 `Deprecated`(引擎内部零引用,设置无效);`ProvideName` 当时也曾标为无效,上方配置变更已重新启用它。`Supplier` 的注释改为其真实用途(`InsertP` 的 PolarDB→COPY 路由,且引擎从不赋值),`SqlSelect~SqlDelete` 注明是 `PrepareRunSQL` 的结果留痕;**`PrepareRunSQL(EtSelect)` 的 WHERE 改为只跳过只读标记字段**(经新增的 `isPkeyUsable`),使 `db:"col,readonly"` 这类**有真实列名的只读列**能作定位键,与 `Delete/Update/SaveIt` 的 `pkeyFields()` 口径一致(此前会被跳过,导致 WHERE 漏掉该主键)。
 
 ### 代码质量评审修复（第一批 + 第二批）
 
@@ -189,7 +190,7 @@
 
 > **注**：本节属早期条目，保留原样以便追溯。带 **【已被后续修复取代】** 标记者**不再代表当前行为**——当前行为以本文档靠前的修复段与代码为准。
 
-- **【已被后续修复取代 · 2026-10-14】SQL Server 占位符与驱动名强耦合，引擎无法自检** —— 本条「引擎无法自检」已不成立：`Initialize()` 现对 SQL Server 使用**真实连接做只读参数回显**（`select @p1 /* ... */` 哨兵值比对），错误组合返回 `ErrInvalidPlaceholderBinding`，且初始化失败时不注册内置表，调用方必须检查初始化错误。详见本段靠前的 `### 质量评审后续修复` 与 `### SQL Server 真驱动集成测试` 两节,以及 `README.md` 0.2 节。**以下为原文留痕：**
+- **【历史条目，当前行为见上文】SQL Server 占位符与驱动名强耦合** —— 中间版本曾在 `Initialize()` 用真实连接做只读参数回显；当前已按开发者指定的 `ProvideName × ColParam` 静态检查,不再连接数据库验证实际绑定。配置不一致返回 `ErrInvalidPlaceholderBinding`,但错误声明的 `ProvideName` 无法自动发现。**以下为原文留痕：**
   > ~~`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，而 `database/sql` 不暴露驱动名，故无法在 `Initialize()` 校验组合一致性。配置不匹配时：`sqlserver` + `$` **静默写错数据**（无任何错误提示），`sqlserver` + `:`/`?` 报语法错误，`mssql` + `@p` 报 `expected 0 arguments`。请按 `README.md` 0.2 节选择 `ColParam`。~~
 - **`sqlserver` + `$` 的历史数据需审计（本条仍然有效）**：该组合下写入的值取自占位符序号（`$1`→1、`$2`→`"2.00"`），INSERT 写错值、UPDATE 改错行、DELETE 删错行，且引擎一律返回 `nil`。可疑值形如 `"1.00"`/`"2.00"` 的数值型字符串。
 

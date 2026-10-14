@@ -244,7 +244,7 @@ if ch == '?' {
 1. **危险组合未被拦截**：驱动名 `sqlserver` + `ColParam` 非 `"@p"` 时，引擎不校验、不报错，`$` 组合会**静默写错数据**（`Update` 改错行、`Delete` 删错行、`MERGE` 匹配错行）。这是真实且严重的数据完整性风险，只是**不是"整个 SQLServer 族"的问题**。
 2. **README 未说明驱动名依赖**：驱动表只给「连接符/占位符」两列，读者无法得知 `$`/`:`/`?` 的正确性还取决于 `sql.Open` 用的是 `mssql` 还是 `sqlserver`。**这正是本次误判的根源，也是读者会踩的同一个坑。**
 3. ~~**引擎无法自检**：`TUniEngine` 只持有 `Db *sql.DB` 与 `ColParam`，不掌握驱动名，因此无法在 `Initialize()` 时校验组合一致性。~~
-   **【已被后续修复取代 · 2026-10-14】** 该结论已不成立：`Initialize()` 现对 SQL Server 用**真实连接做只读参数回显**（`select @p1 /* ... */` 哨兵值比对；命中即缓存，`Db`/`ColParam` 变更后重验），错误组合返回 `ErrInvalidPlaceholderBinding`，失败时不注册内置表。**评估者此前把"`database/sql` 不暴露驱动名"误当成"无法校验"**——实际上用一条哨兵回显即可覆盖，包括 `sqlserver`+`$` 这种返回值与实参不符的静默情形。
+   **【历史修复与当前行为 · 2026-10-14】** 中间版本曾在 `Initialize()` 使用真实连接只读参数回显,以覆盖 `sqlserver` + `$` 等静默错绑。当前按开发者指定的 `ProvideName × ColParam` 静态检查,不再探测实际连接；组合错误仍返回 `ErrInvalidPlaceholderBinding`,但 `ProvideName` 与真实驱动不一致时引擎无法发现。该段原始缺陷复现仅代表当时版本。
 4. **`getSqlQuery` 无 SQLServer 分支**（`UniEngine.go:198-223`）：原始 SQL 里的 `$N` 在 `sqlserver` 驱动名下不会被改写。
 
 > **2026-10-14 说明（业主决定）**：README 驱动表 SQLServer 行已由 `$` / `$1` 改为 **`:` / `:1`**（仅文档，代码未动）。**本次实测确认该改动有效**——生产环境使用驱动名 `mssql`，而 `mssql` 下 `:`、`$`、`?` 三者都正确（实测 6/6），故新值与原值在 `mssql` 下均可用。`README.md:24` 现在与生产配置一致。

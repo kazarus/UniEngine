@@ -21,7 +21,7 @@ var (
 	ErrInvalidConstraintName = errors.New("UniEngine: invalid constraint name")
 	// ErrNilParam 公共入口收到 nil 参数(裸 nil 与 typed nil 统一判别,替代反射 panic)
 	ErrNilParam = errors.New("UniEngine: nil param")
-	// ErrInvalidPlaceholderBinding SQL Server 实际驱动未按 ColParam 绑定参数;业务 SQL 尚未执行
+	// ErrInvalidPlaceholderBinding SQL Server 的 ProvideName/ColParam 配置不匹配;业务 SQL 尚未执行
 	ErrInvalidPlaceholderBinding = errors.New("UniEngine: invalid SQL Server placeholder binding")
 	// ErrIncompleteVerification 严格模式下查询未返回验签所需的全部列
 	ErrIncompleteVerification = errors.New("UniEngine: incomplete verification projection")

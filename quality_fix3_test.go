@@ -12,51 +12,72 @@ import (
 	"testing"
 )
 
-func TestSQLServerInitializeChecksActualBinding(t *testing.T) {
-	d := &mockDriver{probeResult: "1.00"} // 模拟 $1 被服务端当作 money 字面量
-	e := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtSQLSRV}
-	defer e.Db.Close()
-
-	if eror := e.Initialize(); !errors.Is(eror, ErrInvalidPlaceholderBinding) {
-		t.Fatalf("Initialize should reject a non-binding placeholder, got %v", eror)
+func TestSQLServerInitializeChecksDeclaredProviderName(t *testing.T) {
+	cases := []struct {
+		name, colParam string
+		valid          bool
+	}{
+		{"mssql", ":", true}, {"mssql", "$", true}, {"mssql", "?", true},
+		{"sqlserver", "@p", true},
+		{"mssql", "@p", false}, {"sqlserver", ":", false},
+		{"sqlserver", "$", false}, {"sqlserver", "?", false},
+		{"", "@p", false}, {"unknown", "@p", false},
 	}
-	if len(e.HashTabl) != 0 {
-		t.Fatal("failed Initialize must not publish registry entries")
-	}
-	if e.inTx {
-		t.Fatal("failed Initialize must not start a transaction")
-	}
-
-	d.mu.Lock()
-	d.probeResult = ""
-	d.mu.Unlock()
-	if eror := e.Initialize(); eror != nil {
-		t.Fatalf("Initialize should succeed after fixing binding: %v", eror)
-	}
-	if eror := e.Execute("select 1"); eror != nil {
-		t.Fatal(eror)
-	}
-	d.mu.Lock()
-	probes := d.probeCount
-	d.mu.Unlock()
-	if probes != 2 { // 首次失败 + 修正后成功; Execute 复用成功结果
-		t.Fatalf("want two binding probes, got %d", probes)
+	for _, tc := range cases {
+		t.Run(tc.name+"_"+tc.colParam, func(t *testing.T) {
+			d := &mockDriver{}
+			e := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: tc.colParam, Provider: DtSQLSRV, ProvideName: tc.name}
+			defer e.Db.Close()
+			eror := e.Initialize()
+			if tc.valid {
+				if eror != nil {
+					t.Fatalf("valid configuration rejected: %v", eror)
+				}
+				if got := e.ProviderName(); got != tc.name {
+					t.Fatalf("ProviderName=%q, want %q", got, tc.name)
+				}
+			} else {
+				if !errors.Is(eror, ErrInvalidPlaceholderBinding) {
+					t.Fatalf("invalid configuration accepted: %v", eror)
+				}
+				if len(e.HashTabl) != 0 {
+					t.Fatal("failed Initialize must not publish registry entries")
+				}
+			}
+			if len(d.snapshotQueries()) != 0 || d.probeCount != 0 {
+				t.Fatal("Initialize must not query the database")
+			}
+		})
 	}
 }
 
-func TestSQLServerBindingRechecksChangedConfig(t *testing.T) {
+func TestSQLServerConfigCheckedBeforeBusinessSQL(t *testing.T) {
 	d := &mockDriver{}
-	e := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: ":", Provider: DtSQLSRV}
+	e := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: ":", Provider: DtSQLSRV, ProvideName: "mssql"}
 	defer e.Db.Close()
 	if eror := e.Initialize(); eror != nil {
 		t.Fatal(eror)
 	}
-	e.ColParam = "bad"
+	e.ProvideName = "sqlserver"
 	if eror := e.Execute("select 1"); !errors.Is(eror, ErrInvalidPlaceholderBinding) {
-		t.Fatalf("changed invalid ColParam must fail before business SQL: %v", eror)
+		t.Fatalf("changed invalid ProvideName must fail before business SQL: %v", eror)
 	}
 	if got := len(d.snapshotQueries()); got != 0 {
 		t.Fatalf("invalid configuration reached Prepare: %d statements", got)
+	}
+	e.ColParam = "@p"
+	if eror := e.Execute("select 1"); eror != nil {
+		t.Fatalf("corrected configuration should execute: %v", eror)
+	}
+}
+
+func TestSQLServerInitializeRejectsNilDB(t *testing.T) {
+	e := &TUniEngine{ColParam: ":", Provider: DtSQLSRV, ProvideName: "mssql"}
+	if eror := e.Initialize(); !errors.Is(eror, ErrInvalidPlaceholderBinding) {
+		t.Fatalf("nil Db must fail before registration: %v", eror)
+	}
+	if len(e.HashTabl) != 0 {
+		t.Fatal("failed Initialize must not publish registry entries")
 	}
 }
 

@@ -24,7 +24,7 @@
 // #
 // #不可达时默认跳过;设 UNIENGINE_MSSQL_REQUIRED=1 则改为失败(CI 用,与 pg_test.go 同口径)。
 // #
-// #错误组合在 Initialize 时通过只读参数回显被拒绝;集成用例作为常规门禁。
+// #错误组合在 Initialize 时按开发者声明的 ProvideName 被拒绝;集成用例作为常规门禁。
 // #
 // #安全:读写用例生成独立探测表名,并在 t.Cleanup 中删除。
 
@@ -129,9 +129,9 @@ func openMSSQL(t *testing.T, driver string) *sql.DB {
 }
 
 // mssqlEngineOn 在既有连接上建引擎(同一驱动名下可能需要"正确/错误"两个引擎)
-func mssqlEngineOn(t *testing.T, db *sql.DB, colParam string) *UniEngine.TUniEngine {
+func mssqlEngineOn(t *testing.T, db *sql.DB, driver, colParam string) *UniEngine.TUniEngine {
 	t.Helper()
-	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: colParam, Provider: UniEngine.DtSQLSRV}
+	eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: colParam, Provider: UniEngine.DtSQLSRV, ProvideName: driver}
 	if eror := eng.Initialize(); eror != nil {
 		t.Fatalf("Initialize(%q): %v", colParam, eror)
 	}
@@ -266,7 +266,7 @@ func TestMSSQLRoundTripMatrix(t *testing.T) {
 		t.Run(combo.driver+"_ColParam"+combo.colParam, func(t *testing.T) {
 			db := openMSSQL(t, combo.driver)
 
-			eng := mssqlEngineOn(t, db, combo.colParam)
+			eng := mssqlEngineOn(t, db, combo.driver, combo.colParam)
 			tableName := newMSSQLProbeTable(t)
 			setupMSSQLProbeTable(t, eng, tableName)
 
@@ -349,7 +349,7 @@ func TestMSSQLInitializeRejectsMismatchedBinding(t *testing.T) {
 	for _, combo := range combos {
 		t.Run(combo.driver+"_ColParam"+combo.colParam, func(t *testing.T) {
 			db := openMSSQL(t, combo.driver)
-			eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: combo.colParam, Provider: UniEngine.DtSQLSRV}
+			eng := &UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: combo.colParam, Provider: UniEngine.DtSQLSRV, ProvideName: combo.driver}
 			if eror := eng.Initialize(); !errors.Is(eror, UniEngine.ErrInvalidPlaceholderBinding) {
 				t.Fatalf("Initialize should reject mismatched binding, got %v", eror)
 			}
