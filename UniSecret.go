@@ -1,5 +1,6 @@
 // UniSecret
 // #应用加密
+
 package UniEngine
 
 import (
@@ -49,7 +50,6 @@ type secretState struct {
 var muSecretState sync.Mutex
 
 func (this *TUniEngine) secretStateOf() *secretState {
-
 	muSecretState.Lock()
 	defer muSecretState.Unlock()
 
@@ -62,7 +62,6 @@ func (this *TUniEngine) secretStateOf() *secretState {
 
 // #生效的迭代次数(<=0 用缺省)
 func (this *TUniEngine) secretIterOf() int {
-
 	if this.SecretIter <= 0 {
 		return UniSecretIter
 	}
@@ -72,7 +71,6 @@ func (this *TUniEngine) secretIterOf() int {
 
 // #writeSalt 本进程写盐(懒生成;本进程所有新密文共用,读取侧从密文内嵌盐恢复)
 func (this *TUniEngine) writeSalt() ([]byte, error) {
-
 	St := this.secretStateOf()
 
 	St.mu.Lock()
@@ -93,7 +91,6 @@ func (this *TUniEngine) writeSalt() ([]byte, error) {
 // #首个到达的调用持锁派生,并发等待者随后直接命中缓存(避免惊群重复派生);
 // #密钥常驻内存是该形态加密的标准代价,与任何进程内密钥持有等价
 func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
-
 	St := this.secretStateOf()
 
 	CacheKey := string(Salt) + "|" + strconv.Itoa(Iter)
@@ -117,7 +114,6 @@ func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 
 // #GCMOpen 以给定密钥做 AES-256-GCM 解密(Data 为 Nonce+密文)
 func GCMOpen(Key, Data []byte) ([]byte, error) {
-
 	Block, eror := aes.NewCipher(Key)
 	if eror != nil {
 		return nil, eror
@@ -144,7 +140,6 @@ func GCMOpen(Key, Data []byte) ([]byte, error) {
 // #加密入口:SecretOn=0 时直接返回原值(不加密/不解密)
 // #应用钩子 SecretHook 为空时,使用内置实现(PBKDF2 派生密钥 + AES-256-GCM)
 func (this *TUniEngine) Secret(Value string, Encrypt bool) (string, error) {
-
 	if this.SecretOn == 0 {
 		return Value, nil
 	}
@@ -167,13 +162,11 @@ func (this *TUniEngine) IsEncrypted(Value string) bool {
 // #  同一明文两次加密结果不同(随机nonce),离线暴力破解需按盐逐份进行;
 // #无标签的值视为存量明文,直通返回(不尝试解密)
 func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error) {
-
 	if this.SecretBy == "" {
 		return "", errors.New("UniEngine: SecretOn is on, but SecretBy is empty")
 	}
 
 	if Encrypt {
-
 		Salt, eror := this.writeSalt()
 		if eror != nil {
 			return "", eror
@@ -249,13 +242,11 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 
 // #查询结果解密:把标记了 secreton 的字段,从密文还原为明文
 func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable, Column []string) error {
-
 	if this.SecretOn == 0 {
 		return nil
 	}
 
 	for _, ItemPara := range Column {
-
 		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
 		if !Valid || !UniField.SecretOn {
 			continue
@@ -280,13 +271,11 @@ func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable
 // #decryptRow 按预解析的字段下标解密(热路径;DecryptResult 的无查找版本,
 // #EncryIdx 由 selectRowsCtx 在行循环前一次性算好)
 func (this *TUniEngine) decryptRow(Result reflect.Value, EncryIdx []int) error {
-
 	if this.SecretOn == 0 {
 		return nil
 	}
 
 	for _, Idx := range EncryIdx {
-
 		FieldValue := Result.Field(Idx)
 		if FieldValue.Kind() != reflect.String {
 			continue
@@ -306,7 +295,6 @@ func (this *TUniEngine) decryptRow(Result reflect.Value, EncryIdx []int) error {
 // #加密写入值:secreton 仅支持 string 字段,非 string 字段直接报错
 // #(读取侧 DecryptResult 只还原 string 字段;写入侧若放行其它类型,会出现写入密文/读取不解密的不对称,故 fast-fail)
 func (this *TUniEngine) secretEncrypt(FieldValue reflect.Value) (interface{}, error) {
-
 	if !FieldValue.IsValid() || FieldValue.Kind() != reflect.String {
 		return nil, fmt.Errorf("UniEngine: secreton only supports string field, but got [%s]", FieldValue.Kind().String())
 	}

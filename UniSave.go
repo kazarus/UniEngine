@@ -1,5 +1,6 @@
 // UniSave
 // #SaveIt/SaveItWhenNotExist:方言原生 UPSERT 与 count 回退
+
 package UniEngine
 
 import (
@@ -24,15 +25,7 @@ const (
 //
 // 注意:MySQL 不在此列——ON DUPLICATE KEY UPDATE 由任一唯一键触发而非仅主键,
 // 与 SaveIt 的主键语义不等价,故 MySQL 一律回退旧路径。
-
-// upsertStmt 按方言生成原生 UPSERT 语句,消除 SaveIt 两步(count 后写入)之间的并发窗口。
-// 参数只传一遍(列序:Keys 在前,Cols 在后)。返回 Ok=false 表示当前方言不支持,
-// 调用方回退 count-then-dispatch。
-//
-// 注意:MySQL 不在此列——ON DUPLICATE KEY UPDATE 由任一唯一键触发而非仅主键,
-// 与 SaveIt 的主键语义不等价,故 MySQL 一律回退旧路径。
 func (this *TUniEngine) upsertStmt(Mode int, TablName string, Keys, Cols []TUniField) (string, bool) {
-
 	if len(Keys) == 0 {
 		return "", false
 	}
@@ -56,7 +49,6 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, Keys, Cols []TUniF
 	UpdateMode := Mode == upsertModeUpdate && len(Cols) > 0
 
 	switch this.dbFamily() {
-
 	case FmPOSTGR:
 		{
 			//#PG:excluded 伪表复用本次插入值,无需重复传参
@@ -150,11 +142,7 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, Keys, Cols []TUniF
 
 // canNativeSave 判断该类是否可走方言原生 UPSERT:任一自定义 SQL 钩子
 // (GetSqlUpdate/GetSqlInsert/SetSqlValues)存在时,自定义语句无法转为 UPSERT,回退旧路径。
-
-// canNativeSave 判断该类是否可走方言原生 UPSERT:任一自定义 SQL 钩子
-// (GetSqlUpdate/GetSqlInsert/SetSqlValues)存在时,自定义语句无法转为 UPSERT,回退旧路径。
 func canNativeSave(v reflect.Value) bool {
-
 	if _, Ok := v.Interface().(HasGetSqlUpdate); Ok {
 		return false
 	}
@@ -170,11 +158,7 @@ func canNativeSave(v reflect.Value) bool {
 
 // saveUpsert 方言原生 UPSERT 执行(Keys/Cols 按确定序收集,参数只传一遍)。
 // 返回 Done=false 表示方言不支持,调用方回退 count-then-dispatch。
-
-// saveUpsert 方言原生 UPSERT 执行(Keys/Cols 按确定序收集,参数只传一遍)。
-// 返回 Done=false 表示方言不支持,调用方回退 count-then-dispatch。
 func (this *TUniEngine) saveUpsert(Ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string, Mode int) (bool, error) {
-
 	Keys := UniTable.pkeyFields()
 
 	var Cols []TUniField
@@ -232,10 +216,7 @@ func (this *TUniEngine) saveUpsert(Ctx context.Context, UniTable *TUniTable, v r
 }
 
 // countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
-
-// countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
 func (this *TUniEngine) countByPkeys(Ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string) (int64, error) {
-
 	var KeyCols []string
 	SqlValue := make([]interface{}, 0)
 
@@ -256,10 +237,7 @@ func (this *TUniEngine) countByPkeys(Ctx context.Context, UniTable *TUniTable, v
 }
 
 // saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
-
-// saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
 func (this *TUniEngine) saveByCount(Ctx context.Context, i interface{}, UniTable *TUniTable, v reflect.Value, TablName string, TableName []string, updateWhenExist bool) error {
-
 	Count, eror := this.countByPkeys(Ctx, UniTable, v, TablName)
 	if eror != nil {
 		return eror
@@ -288,7 +266,6 @@ func (this *TUniEngine) SaveIt(i interface{}, TableName ...string) error {
 }
 
 func (this *TUniEngine) SaveItCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("SaveIt", i, TableName, reflect.Invalid, true)
 	if eror != nil {
 		return eror
@@ -314,7 +291,6 @@ func (this *TUniEngine) SaveItWhenNotExist(i interface{}, TableName ...string) e
 }
 
 func (this *TUniEngine) SaveItWhenNotExistCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("SaveItWhenNotExist", i, TableName, reflect.Invalid, true)
 	if eror != nil {
 		return eror

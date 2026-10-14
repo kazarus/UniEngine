@@ -23,10 +23,14 @@ import (
 //   - config Fields (ColLabel/ColParam/Provider/SecretOn/SecretBy/...) and
 //     table-structure edits (SetKeys/SetSecret/AutoKeys/PrepareTables/
 //     PrepareRunSQL) should complete before concurrent queries begin.
+//
+// TUniEngine 不得按值拷贝(禁止原因见 noCopy 声明处);请一律使用 *TUniEngine。
 type TUniEngine struct {
+	noCopy noCopy //#禁止按值拷贝(go vet copylocks);请一律使用 *TUniEngine
+
 	Db *sql.DB
 
-	mu       *sync.RWMutex //#保护 HashTabl 与事务状态（指针：按值传递引擎时共享同一把锁）
+	mu       *sync.RWMutex //#保护 HashTabl 与事务状态（指针:与 secret 同为共享态;按值拷贝已由 noCopy 拦截）
 	ColLabel string        //#字段字号
 	ColParam string        //#参数符号
 	HashTabl map[string]*TUniTable
@@ -56,16 +60,30 @@ type TUniEngine struct {
 	secret *secretState //#派生密钥缓存与本进程写盐(懒初始化,详见UniSecret.go)
 }
 
-// muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）
+// noCopy 本身不实现任何同步语义,唯一用途是让 go vet 的 copylocks 分析器
+// 在静态检查阶段拦下 TUniEngine 的按值拷贝。
+//
+// 为什么必须禁止按值拷贝:拷贝会复制 Db/ColLabel/ColParam/Provider/tx/inTx 等值字段,
+// 而 mu/secret 是指针字段(拷贝时共享),于是副本与原件出现"锁共享、事务状态不共享"的
+// 错配——副本 Begin 后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。
+//
+// 作为具名字段(非匿名嵌入)使用,故不会把 Lock/Unlock 提升到 TUniEngine 上;
+// 按值拷贝会被报告为:
+//
+//	passes lock by value: UniEngine.TUniEngine contains UniEngine.noCopy
+//
+// 注意:这是 vet 期检查而非编译错误;`go vet ./...` 已纳入本仓库 CI 门禁。
+// 分析按包进行,故 import 本包的外部调用方在各自 `go vet` 时同样会被提示。
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
 
 // muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）
 var muLazy sync.Mutex
 
 // initLock 保证 this.mu 已创建（并发安全；供 Initialize 与 lockTables 调用）
-
-// initLock 保证 this.mu 已创建（并发安全；供 Initialize 与 lockTables 调用）
 func (this *TUniEngine) initLock() {
-
 	muLazy.Lock()
 	defer muLazy.Unlock()
 
@@ -75,24 +93,16 @@ func (this *TUniEngine) initLock() {
 }
 
 // lockTables 保证锁可用并加写锁（注册/表结构变更/事务状态变更）
-
-// lockTables 保证锁可用并加写锁（注册/表结构变更/事务状态变更）
 func (this *TUniEngine) lockTables() {
-
 	this.initLock()
 	this.mu.Lock()
 }
 
 // rlockTables 保证锁可用并加读锁（注册表/事务状态查询）
-
-// rlockTables 保证锁可用并加读锁（注册表/事务状态查询）
 func (this *TUniEngine) rlockTables() {
-
 	this.initLock()
 	this.mu.RLock()
 }
-
-// debugging 返回调试输出开关状态（原子读，可运行中切换）
 
 // debugging 返回调试输出开关状态（原子读，可运行中切换）
 func (this *TUniEngine) debugging() bool {
@@ -100,10 +110,7 @@ func (this *TUniEngine) debugging() bool {
 }
 
 // tableByType 按类全名取注册表条目（读锁；未注册返回 nil）
-
-// tableByType 按类全名取注册表条目（读锁；未注册返回 nil）
 func (this *TUniEngine) tableByType(TypeName string) *TUniTable {
-
 	this.rlockTables()
 	defer this.mu.RUnlock()
 
@@ -111,10 +118,7 @@ func (this *TUniEngine) tableByType(TypeName string) *TUniTable {
 }
 
 // tableByName 按表名取注册表条目（读锁；未注册返回 nil）
-
-// tableByName 按表名取注册表条目（读锁；未注册返回 nil）
 func (this *TUniEngine) tableByName(TableName string) *TUniTable {
-
 	this.rlockTables()
 	defer this.mu.RUnlock()
 
@@ -122,10 +126,7 @@ func (this *TUniEngine) tableByName(TableName string) *TUniTable {
 }
 
 // currentTx 返回当前事务（无事务时 nil）；读锁保护，与 Begin/Commit/Cancel 互斥
-
-// currentTx 返回当前事务（无事务时 nil）；读锁保护，与 Begin/Commit/Cancel 互斥
 func (this *TUniEngine) currentTx() *sql.Tx {
-
 	this.rlockTables()
 	defer this.mu.RUnlock()
 
@@ -138,7 +139,6 @@ func (this *TUniEngine) currentTx() *sql.Tx {
 
 // validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
 func validIdent(name string) bool {
-
 	if name == "" {
 		return false
 	}
@@ -156,7 +156,6 @@ func validIdent(name string) bool {
 // 判断只依赖 reflect.ValueOf(对裸 nil 安全),调用方必须在本函数之后才允许 reflect.TypeOf/Kind
 // ——裸 nil 时 TypeOf 返回 nil Type,直接取 Kind 会空指针解引用(评审 P0 缺陷根源)。
 func nilParamOf(Method string, i interface{}) error {
-
 	if i == nil {
 		return fmt.Errorf("%w: method [%s] got a nil param; check your code;", ErrNilParam, Method)
 	}
@@ -169,7 +168,6 @@ func nilParamOf(Method string, i interface{}) error {
 }
 
 func (this *TUniEngine) getValParam(aIndex int) string {
-
 	if this.dbFamily() == FmMYSQLN {
 		return fmt.Sprintf("%s", this.ColParam)
 	}
@@ -178,7 +176,6 @@ func (this *TUniEngine) getValParam(aIndex int) string {
 }
 
 func (this *TUniEngine) getColParam(FieldName string) string {
-
 	if this.dbFamily() == FmMYSQLN {
 		return fmt.Sprintf("%s", FieldName)
 	}
@@ -191,14 +188,10 @@ func (this *TUniEngine) getColParam(FieldName string) string {
 }
 
 // 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
-
-// 参数占位符模式：$1 / $2 ...（Oracle 转 :1，MySQL 转 ?）
 var reParamPlaceholder = regexp.MustCompile(`\$\d+`)
 
 func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) string {
-
 	if this.dbFamily() == FmORACLE && len(Args) > 0 {
-
 		if this.debugging() {
 			fmt.Println(`UniEngine: Oracle驱动时,替换"$"到":"`)
 		}
@@ -210,7 +203,6 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) string
 	}
 
 	if this.dbFamily() == FmMYSQLN && len(Args) > 0 {
-
 		if this.debugging() {
 			fmt.Println(`UniEngine: MySQL驱动时,替换"$"到"?"`)
 		}
@@ -223,10 +215,7 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) string
 }
 
 // sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
-
-// sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
 func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, Args interface{}) {
-
 	if !this.debugging() {
 		return
 	}
@@ -236,7 +225,6 @@ func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, Args interfa
 }
 
 func (this *TUniEngine) ProviderName() string {
-
 	var Result string
 
 	switch this.Provider {
@@ -282,10 +270,7 @@ func (this *TUniEngine) ProviderName() string {
 }
 
 // SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
-
-// SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
 func (this *TUniEngine) SpecialPageSize(PageSize int64) int64 {
-
 	if PageSize <= 0 {
 		return this.DefaultPageSize()
 	}
@@ -294,7 +279,6 @@ func (this *TUniEngine) SpecialPageSize(PageSize int64) int64 {
 }
 
 func (this *TUniEngine) DefaultPageSize() int64 {
-
 	switch this.dbFamily() {
 	case FmORACLE, FmPOSTGR:
 		{
@@ -317,7 +301,6 @@ func (this *TUniEngine) DefaultPageSize() int64 {
 // 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
 // 返回的语句由调用方负责 Close。
 func (this *TUniEngine) prepareCtx(Ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
-
 	if tx := this.currentTx(); tx != nil {
 		return tx.PrepareContext(Ctx, SqlQuery)
 	}
@@ -330,7 +313,6 @@ func (this *TUniEngine) Begin() error {
 }
 
 func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -351,7 +333,6 @@ func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
 }
 
 func (this *TUniEngine) Cancel() error {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -370,7 +351,6 @@ func (this *TUniEngine) Cancel() error {
 }
 
 func (this *TUniEngine) Commit() error {
-
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -389,7 +369,6 @@ func (this *TUniEngine) Commit() error {
 }
 
 func (this *TUniEngine) RunDebug(Value bool) error {
-
 	if Value {
 		atomic.StoreInt32(&this.runDebug, 1)
 	} else {
@@ -400,14 +379,16 @@ func (this *TUniEngine) RunDebug(Value bool) error {
 }
 
 func (this *TUniEngine) Initialize() error {
-
 	//#并发契约:表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)
 	//#与配置字段(ColLabel/ColParam/Provider/SecretOn 等)须在并发查询开始前完成;
 	//#注册(RegisterClass/RegisterTable/...)与查询可并发
 	this.initLock()
 
-	this.RegisterClass(TUniTable{}, "github.com/kazarus/uniengine/unitable")
-	this.RegisterClass(TUniField{}, "github.com/kazarus/uniengine/unifield")
+	//#内置元数据类的登记名必须是合法标识符:注册 API 现对表名做白名单校验,
+	//#旧值 "github.com/kazarus/uniengine/unitable" 含 '/' 会被拒。
+	//#该键仅作小写别名(另以类全名 t.String() 注册),改成短名不影响任何查找路径。
+	this.RegisterClass(TUniTable{}, "unitable")
+	this.RegisterClass(TUniField{}, "unifield")
 
 	this.inTx = false
 

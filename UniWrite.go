@@ -1,5 +1,6 @@
 // UniWrite
 // #写入:Update/Insert/InsertL/Delete
+
 package UniEngine
 
 import (
@@ -18,7 +19,6 @@ import (
 // WantKind 指定期望的容器种类(Insert 传 Struct,InsertL/CopyInL 传 Slice,
 // 无需检查传 reflect.Invalid);NeedPkeys 要求类已注册主键。
 func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []string, WantKind reflect.Kind, NeedPkeys bool) (*TUniTable, reflect.Value, string, error) {
-
 	var TablName string
 	if len(TableName) > 0 {
 		TablName = TableName[0]
@@ -65,8 +65,6 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 // ---------------------------------------------------------------------------
 // SaveIt / SaveItWhenNotExist:方言原生 UPSERT + count-then-dispatch 回退
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Update / Insert / InsertL / CopyInL / Delete
 // ---------------------------------------------------------------------------
 
@@ -75,7 +73,6 @@ func (this *TUniEngine) Update(i interface{}, TableName ...string) error {
 }
 
 func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("Update", i, TableName, reflect.Invalid, true)
 	if eror != nil {
 		return eror
@@ -97,7 +94,6 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
-
 		var SetCols []string
 		var KeyCols []string
 		xValue := make([]interface{}, 0)
@@ -105,7 +101,6 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 
 		ColIndex := 1
 		for _, ItemPara := range UniTable.writableFields() {
-
 			if _, Valid := UniTable.HashPkeys[strings.ToLower(ItemPara.FieldName)]; Valid {
 				continue
 			}
@@ -161,7 +156,6 @@ func (this *TUniEngine) Insert(i interface{}, TableName ...string) error {
 }
 
 func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("Insert", i, TableName, reflect.Struct, false)
 	if eror != nil {
 		return eror
@@ -183,7 +177,6 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
-
 		Fields := UniTable.writableFields()
 		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
@@ -193,7 +186,6 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 		var ValList []string
 		ColIndex := 1
 		for _, ItemPara := range Fields {
-
 			ColList = append(ColList, this.getColParam(ItemPara.FieldName))
 			ValList = append(ValList, this.getValParam(ColIndex))
 			ColIndex = ColIndex + 1
@@ -232,7 +224,6 @@ func (this *TUniEngine) InsertL(i interface{}, TableName ...string) error {
 }
 
 func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("InsertL", i, TableName, reflect.Slice, false)
 	if eror != nil {
 		return eror
@@ -268,7 +259,6 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
-
 		Fields := UniTable.writableFields()
 		if len(Fields) == 0 {
 			return fmt.Errorf("UniEngine: no insertable column in class registered: %s", UniTable.TableName)
@@ -282,12 +272,10 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 		var RowList []string
 		ColIndex := 1
 		for m := 0; m < v.Len(); m++ {
-
 			f := v.Index(m)
 
 			var ValList []string
 			for _, ItemPara := range Fields {
-
 				ValList = append(ValList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
@@ -337,7 +325,6 @@ func (this *TUniEngine) Delete(i interface{}, TableName ...string) error {
 }
 
 func (this *TUniEngine) DeleteCtx(Ctx context.Context, i interface{}, TableName ...string) error {
-
 	UniTable, v, TablName, eror := this.resolveTarget("Delete", i, TableName, reflect.Invalid, true)
 	if eror != nil {
 		return eror

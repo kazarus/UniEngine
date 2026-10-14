@@ -10,6 +10,7 @@
 // #  UniEngineEx.CopyInHook = pgxcopy.Hook
 // #
 // #本包为独立模块(自带 go.mod),不引入则库本体保持零第三方依赖。
+
 package pgxcopy
 
 import (
@@ -49,7 +50,6 @@ func (s *rowSource) Err() error {
 // CopyIn 以 pgx 原生 CopyFrom 执行批量写入,返回写入行数。
 // Rows 为最终写入行(调用方已完成应用加密);TableName 支持 schema.table 限定名。
 func CopyIn(ctx context.Context, db *sql.DB, TableName string, Columns []string, Rows [][]interface{}) (int64, error) {
-
 	if len(Columns) == 0 || len(Rows) == 0 {
 		return 0, nil
 	}
@@ -63,7 +63,6 @@ func CopyIn(ctx context.Context, db *sql.DB, TableName string, Columns []string,
 	var affected int64
 
 	eror = conn.Raw(func(driverConn any) error {
-
 		pc, ok := driverConn.(*stdlib.Conn)
 		if !ok {
 			return fmt.Errorf("%w, got %T", ErrNotPgx, driverConn)
@@ -84,7 +83,6 @@ func CopyIn(ctx context.Context, db *sql.DB, TableName string, Columns []string,
 // Hook 可直接赋值给 TUniEngine.CopyInHook(函数签名与 TCopyInHook 一致)。
 // 非 pgx 驱动返回 (false,nil) 回退引擎内置协议;pgx 下的执行错误原样上抛。
 func Hook(ctx context.Context, db *sql.DB, TableName string, Columns []string, Rows [][]interface{}) (bool, error) {
-
 	_, eror := CopyIn(ctx, db, TableName, Columns, Rows)
 	if eror != nil {
 		if errors.Is(eror, ErrNotPgx) {

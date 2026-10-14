@@ -1,6 +1,7 @@
 // benchmark_test
 // #基准测试:行扫描热路径与内置加解密
 // #运行:go test -bench . -benchmem -run '^$'
+
 package UniEngine
 
 import (
@@ -47,7 +48,6 @@ type benchSecretRow struct {
 
 // #newBenchEngine 构造带预置查询结果的引擎(secret=true 时末列预置密文)
 func newBenchEngine(b *testing.B, secret bool) *TUniEngine {
-
 	b.Helper()
 
 	columns := make([]string, benchColumns)
@@ -94,7 +94,6 @@ func newBenchEngine(b *testing.B, secret bool) *TUniEngine {
 
 // #现行路径:列→字段下标查询前一次预解析,行循环内 Field(idx) 直取
 func BenchmarkSelectLScan(b *testing.B) {
-
 	eng := newBenchEngine(b, false)
 
 	b.ReportAllocs()
@@ -115,7 +114,6 @@ func BenchmarkSelectLScan(b *testing.B) {
 // #与上一基准走同一 mock 传输(database/sql 语句/行机制完全相同),
 // #两者的差值即列下标预解析这一优化的净收益
 func BenchmarkSelectLScanLegacy(b *testing.B) {
-
 	eng := newBenchEngine(b, false)
 	db := eng.Db
 	typ := reflect.TypeOf(benchWideRow{})
@@ -125,7 +123,6 @@ func BenchmarkSelectLScanLegacy(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-
 		st, eror := db.Prepare("select * from bench_wide")
 		if eror != nil {
 			b.Fatal(eror)
@@ -142,7 +139,6 @@ func BenchmarkSelectLScanLegacy(b *testing.B) {
 		result := reflect.MakeSlice(reflect.SliceOf(typ), 0, 0)
 
 		for rows.Next() {
-
 			u := reflect.New(typ)
 			elem := u.Elem()
 
@@ -175,7 +171,6 @@ func BenchmarkSelectLScanLegacy(b *testing.B) {
 
 // #联合路径:1000行×10列扫描,每行解密1个加密列(密钥派生已缓存)
 func BenchmarkSelectLScanDecrypt(b *testing.B) {
-
 	eng := newBenchEngine(b, true)
 
 	b.ReportAllocs()
@@ -197,7 +192,6 @@ func BenchmarkSelectLScanDecrypt(b *testing.B) {
 // ---------------------------------------------------------------------------
 
 func benchmarkSecretEncrypt(b *testing.B, value string) {
-
 	eng := &TUniEngine{SecretOn: 1, SecretBy: "bench-secret-key"}
 
 	//#预热:生成写盐并把派生密钥写入缓存,度量的是稳定态(AES-GCM+base64)开销
@@ -217,7 +211,6 @@ func benchmarkSecretEncrypt(b *testing.B, value string) {
 }
 
 func benchmarkSecretDecrypt(b *testing.B, value string) {
-
 	eng := &TUniEngine{SecretOn: 1, SecretBy: "bench-secret-key"}
 
 	cipherText, eror := eng.Secret(value, true)
@@ -265,7 +258,6 @@ func BenchmarkSecretDecrypt(b *testing.B) {
 
 // #存量明文直通(仅前缀鉴别,不解密)
 func BenchmarkSecretDecryptPlaintext(b *testing.B) {
-
 	eng := &TUniEngine{SecretOn: 1, SecretBy: "bench-secret-key"}
 	value := strings.Repeat("v", 16)
 
@@ -283,7 +275,6 @@ func BenchmarkSecretDecryptPlaintext(b *testing.B) {
 // #冷派生:每次迭代换新盐绕开缓存,度量一次性 PBKDF2(缺省600000次)的真实开销;
 // #生产中每进程每份盐只付一次
 func BenchmarkSecretPBKDF2DeriveCold(b *testing.B) {
-
 	eng := &TUniEngine{SecretOn: 1, SecretBy: "bench-secret-key"}
 
 	b.ReportAllocs()
