@@ -242,21 +242,21 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 	case EtInsert:
 		{
 			var colList []string
-			var paramList []string
+			var valList []string
 			ColIndex := 1
 			for _, ItemPara := range UniTable.orderedField() {
 				if ItemPara.ReadOnly {
 					continue
 				}
 				colList = append(colList, this.getColParam(ItemPara.FieldName))
-				paramList = append(paramList, this.getValParam(ColIndex))
+				valList = append(valList, this.getValParam(ColIndex))
 				ColIndex = ColIndex + 1
 
 				ListField = append(ListField, ItemPara)
 			}
 
 			if len(colList) > 0 {
-				SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, strings.Join(colList, ","), strings.Join(paramList, ","))
+				SqlResult = fmt.Sprintf("insert into %s ( %s ) values ( %s ) ", UniTable.TableName, strings.Join(colList, ","), strings.Join(valList, ","))
 				UniTable.SqlInsert = SqlResult
 			}
 		}

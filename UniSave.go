@@ -38,12 +38,12 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 	}
 
 	var colList []string
-	var paramList []string
+	var valList []string
 	ColIndex := 1
 	for _, list := range [][]TUniField{keys, cols} {
 		for _, ItemPara := range list {
 			colList = append(colList, this.getColParam(ItemPara.FieldName))
-			paramList = append(paramList, this.getValParam(ColIndex))
+			valList = append(valList, this.getValParam(ColIndex))
 			ColIndex++
 		}
 	}
@@ -62,7 +62,7 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 			//#PG:excluded 伪表复用本次插入值,无需重复传参
 			if !updateMode {
 				return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do nothing",
-					TablName, strings.Join(colList, ","), strings.Join(paramList, ","), strings.Join(keyList, ",")), true
+					TablName, strings.Join(colList, ","), strings.Join(valList, ","), strings.Join(keyList, ",")), true
 			}
 
 			var setList []string
@@ -72,7 +72,7 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 			}
 
 			return fmt.Sprintf("insert into %s ( %s ) values ( %s ) on conflict ( %s ) do update set %s",
-				TablName, strings.Join(colList, ","), strings.Join(paramList, ","), strings.Join(keyList, ","), strings.Join(setList, ",")), true
+				TablName, strings.Join(colList, ","), strings.Join(valList, ","), strings.Join(keyList, ","), strings.Join(setList, ",")), true
 		}
 
 	case FmORACLE:
@@ -130,7 +130,7 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, keys, cols []TUniF
 			}
 
 			cSQL := fmt.Sprintf("merge into %s with (holdlock) as t using (values ( %s )) as src ( %s ) on (%s)",
-				TablName, strings.Join(paramList, ","), strings.Join(colList, ","), strings.Join(onList, " and "))
+				TablName, strings.Join(valList, ","), strings.Join(colList, ","), strings.Join(onList, " and "))
 
 			if updateMode {
 				var setList []string
