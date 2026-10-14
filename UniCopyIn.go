@@ -23,11 +23,11 @@ func (this *TUniEngine) SpecialInsertL(i interface{}, TableName ...string) error
 // #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
 
 // #已废弃:旧版命名,新代码请用 CopyInLCtx;仅为源码兼容保留
-func (this *TUniEngine) SpecialInsertLCtx(ctx context.Context, i interface{}, TableName ...string) error {
-	return this.CopyInLCtx(ctx, i, TableName...)
+func (this *TUniEngine) SpecialInsertLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
+	return this.CopyInLCtx(Ctx, i, TableName...)
 }
 
-func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("CopyInL", i, TableName, reflect.Slice, false)
 	if eror != nil {
@@ -122,7 +122,7 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 			return errors.New("UniEngine: CopyInHook can not run inside a transaction (pool connection, not tx-routed); commit or cancel first")
 		}
 
-		handled, eror := this.CopyInHook(ctx, this.Db, TablName, SqlQuery, SqlValue)
+		handled, eror := this.CopyInHook(Ctx, this.Db, TablName, SqlQuery, SqlValue)
 		if eror != nil {
 			return fmt.Errorf("UniEngine: copyin fail: %w", eror)
 		}
@@ -133,7 +133,7 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 	Sql4Text := copyInStmt(TablName, SqlQuery)
 
-	St, eror := this.prepareCtx(ctx, Sql4Text)
+	St, eror := this.prepareCtx(Ctx, Sql4Text)
 	if eror != nil {
 		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
@@ -141,14 +141,14 @@ func (this *TUniEngine) CopyInLCtx(ctx context.Context, i interface{}, TableName
 
 	// 执行所有行
 	for _, Row := range SqlValue {
-		_, eror = St.ExecContext(ctx, Row...)
+		_, eror = St.ExecContext(Ctx, Row...)
 		if eror != nil {
 			return eror
 		}
 	}
 
 	// 完成 COPY 的收尾调用(空参数)
-	_, eror = St.ExecContext(ctx)
+	_, eror = St.ExecContext(Ctx)
 	if eror != nil {
 		return fmt.Errorf("UniEngine: copyin fail: %w (hint: too many parameters? try [CopyInP])", eror)
 	}
@@ -160,7 +160,7 @@ func (this *TUniEngine) InsertP(i interface{}, PageSize int64, TableName ...stri
 	return this.InsertPCtx(context.Background(), i, PageSize, TableName...)
 }
 
-func (this *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
+func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -182,26 +182,26 @@ func (this *TUniEngine) InsertPCtx(ctx context.Context, i interface{}, PageSize 
 		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {
-			if eror := this.insertPage(ctx, ListData, TableName...); eror != nil {
+			if eror := this.insertPage(Ctx, ListData, TableName...); eror != nil {
 				return eror
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
 	}
 
-	return this.insertPage(ctx, ListData, TableName...)
+	return this.insertPage(Ctx, ListData, TableName...)
 }
 
 // insertPage 按方言路由单页批量写入(PolarDB 走 COPY 协议,其余走 INSERT)。
 
 // insertPage 按方言路由单页批量写入(PolarDB 走 COPY 协议,其余走 INSERT)。
-func (this *TUniEngine) insertPage(ctx context.Context, ListData reflect.Value, TableName ...string) error {
+func (this *TUniEngine) insertPage(Ctx context.Context, ListData reflect.Value, TableName ...string) error {
 
 	if this.Supplier == DtPOLODB {
-		return this.CopyInLCtx(ctx, ListData.Interface(), TableName...)
+		return this.CopyInLCtx(Ctx, ListData.Interface(), TableName...)
 	}
 
-	return this.InsertLCtx(ctx, ListData.Interface(), TableName...)
+	return this.InsertLCtx(Ctx, ListData.Interface(), TableName...)
 }
 
 func (this *TUniEngine) CopyInP(i interface{}, PageSize int64, TableName ...string) error {
@@ -218,11 +218,11 @@ func (this *TUniEngine) SpecialInsertP(i interface{}, PageSize int64, TableName 
 // #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
 
 // #已废弃:旧版命名,新代码请用 CopyInPCtx;仅为源码兼容保留
-func (this *TUniEngine) SpecialInsertPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
-	return this.CopyInPCtx(ctx, i, PageSize, TableName...)
+func (this *TUniEngine) SpecialInsertPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
+	return this.CopyInPCtx(Ctx, i, PageSize, TableName...)
 }
 
-func (this *TUniEngine) CopyInPCtx(ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
+func (this *TUniEngine) CopyInPCtx(Ctx context.Context, i interface{}, PageSize int64, TableName ...string) error {
 
 	if PageSize == 0 || PageSize == -1 {
 		PageSize = 999
@@ -244,12 +244,12 @@ func (this *TUniEngine) CopyInPCtx(ctx context.Context, i interface{}, PageSize 
 		ListData = reflect.Append(ListData, All4Data.Index(I))
 
 		if ListData.Len() == int(PageSize) {
-			if eror := this.CopyInLCtx(ctx, ListData.Interface(), TableName...); eror != nil {
+			if eror := this.CopyInLCtx(Ctx, ListData.Interface(), TableName...); eror != nil {
 				return eror
 			}
 			ListData = reflect.MakeSlice(t, 0, 0)
 		}
 	}
 
-	return this.CopyInLCtx(ctx, ListData.Interface(), TableName...)
+	return this.CopyInLCtx(Ctx, ListData.Interface(), TableName...)
 }

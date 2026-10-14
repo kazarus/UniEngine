@@ -16,19 +16,19 @@ func (this *TUniEngine) Execute(SqlQuery string, Args ...interface{}) error {
 	return this.ExecuteCtx(context.Background(), SqlQuery, Args...)
 }
 
-func (this *TUniEngine) ExecuteCtx(ctx context.Context, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) ExecuteCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("execute", SqlQuery, Args)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	if _, eror := St.ExecContext(ctx, Args...); eror != nil {
+	if _, eror := St.ExecContext(Ctx, Args...); eror != nil {
 		return fmt.Errorf("UniEngine: execute fail: %w", eror)
 	}
 
@@ -39,19 +39,19 @@ func (this *TUniEngine) ExecuteMust(SqlQuery string, Args ...interface{}) error 
 	return this.ExecuteMustCtx(context.Background(), SqlQuery, Args...)
 }
 
-func (this *TUniEngine) ExecuteMustCtx(ctx context.Context, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) ExecuteMustCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("execute", SqlQuery, Args)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	Result, eror := St.ExecContext(ctx, Args...)
+	Result, eror := St.ExecContext(Ctx, Args...)
 	if eror != nil {
 		return fmt.Errorf("UniEngine: execute fail: %w", eror)
 	}
@@ -72,20 +72,20 @@ func (this *TUniEngine) IfDropView(TableName string) (bool, error) {
 	return this.IfDropViewCtx(context.Background(), TableName)
 }
 
-func (this *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bool, error) {
+func (this *TUniEngine) IfDropViewCtx(Ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 
-	mrok, eror := this.ExistViewsCtx(ctx, TableName)
+	mrok, eror := this.ExistViewsCtx(Ctx, TableName)
 	if eror != nil {
 		return false, eror
 	}
 
 	if mrok {
 		SQL := fmt.Sprintf("DROP VIEW %s", TableName)
-		if eror = this.ExecuteCtx(ctx, SQL); eror != nil {
+		if eror = this.ExecuteCtx(Ctx, SQL); eror != nil {
 			return false, eror
 		}
 	}
@@ -96,7 +96,7 @@ func (this *TUniEngine) IfDropViewCtx(ctx context.Context, TableName string) (bo
 // existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
 
 // existCount 四个 Exist* 探测的公共收尾:执行计数 SQL 并转换为布尔结果。
-func (this *TUniEngine) existCount(ctx context.Context, Kind string, SQL string) (bool, error) {
+func (this *TUniEngine) existCount(Ctx context.Context, Kind string, SQL string) (bool, error) {
 
 	this.sqlDebug(Kind, SQL, nil)
 
@@ -104,7 +104,7 @@ func (this *TUniEngine) existCount(ctx context.Context, Kind string, SQL string)
 		return false, fmt.Errorf("UniEngine: no sql for %s", Kind)
 	}
 
-	Size, eror := this.SelectDCtx(ctx, SQL)
+	Size, eror := this.SelectDCtx(Ctx, SQL)
 	if eror != nil {
 		return false, eror
 	}
@@ -116,7 +116,7 @@ func (this *TUniEngine) ExistTable(TableName string) (bool, error) {
 	return this.ExistTableCtx(context.Background(), TableName)
 }
 
-func (this *TUniEngine) ExistTableCtx(ctx context.Context, TableName string) (bool, error) {
+func (this *TUniEngine) ExistTableCtx(Ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
@@ -138,14 +138,14 @@ func (this *TUniEngine) ExistTableCtx(ctx context.Context, TableName string) (bo
 		SQL = TExistTable4MYSQLN{}.GetSqlExistTable(this, TableName, this.DataBase)
 	}
 
-	return this.existCount(ctx, "existtable", SQL)
+	return this.existCount(Ctx, "existtable", SQL)
 }
 
 func (this *TUniEngine) ExistViews(TableName string) (bool, error) {
 	return this.ExistViewsCtx(context.Background(), TableName)
 }
 
-func (this *TUniEngine) ExistViewsCtx(ctx context.Context, TableName string) (bool, error) {
+func (this *TUniEngine) ExistViewsCtx(Ctx context.Context, TableName string) (bool, error) {
 
 	if !validIdent(TableName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
@@ -167,14 +167,14 @@ func (this *TUniEngine) ExistViewsCtx(ctx context.Context, TableName string) (bo
 		SQL = TExistTable4MYSQLN{}.GetSqlExistViews(this, TableName, this.DataBase)
 	}
 
-	return this.existCount(ctx, "existviews", SQL)
+	return this.existCount(Ctx, "existviews", SQL)
 }
 
 func (this *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 	return this.ExistFieldCtx(context.Background(), TableName, FieldName)
 }
 
-func (this *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName string) (bool, error) {
+func (this *TUniEngine) ExistFieldCtx(Ctx context.Context, TableName, FieldName string) (bool, error) {
 
 	if !validIdent(TableName) || !validIdent(FieldName) {
 		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
@@ -196,7 +196,7 @@ func (this *TUniEngine) ExistFieldCtx(ctx context.Context, TableName, FieldName 
 		SQL = TExistField4MYSQLN{}.GetSqlExistField(this, TableName, FieldName, this.DataBase)
 	}
 
-	return this.existCount(ctx, "existfield", SQL)
+	return this.existCount(Ctx, "existfield", SQL)
 }
 
 // #ExistConst 判断指定类型的约束是否存在(按约束名/列名匹配)
@@ -206,7 +206,7 @@ func (this *TUniEngine) ExistConst(ConstType TConstType, ConstName string) (bool
 	return this.ExistConstCtx(context.Background(), ConstType, ConstName)
 }
 
-func (this *TUniEngine) ExistConstCtx(ctx context.Context, ConstType TConstType, ConstName string) (bool, error) {
+func (this *TUniEngine) ExistConstCtx(Ctx context.Context, ConstType TConstType, ConstName string) (bool, error) {
 
 	if !validIdent(ConstName) {
 		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, ConstName)
@@ -228,7 +228,7 @@ func (this *TUniEngine) ExistConstCtx(ctx context.Context, ConstType TConstType,
 		SQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, ConstType, ConstName, this.DataBase)
 	}
 
-	return this.existCount(ctx, "existconst", SQL)
+	return this.existCount(Ctx, "existconst", SQL)
 }
 
 // ---------------------------------------------------------------------------

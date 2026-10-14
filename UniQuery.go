@@ -16,26 +16,26 @@ import (
 // ---------------------------------------------------------------------------
 
 // selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
-func (this *TUniEngine) selectColsCtx(ctx context.Context, SqlQuery string, dst sql.Scanner, Args []interface{}) error {
+func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst sql.Scanner, Args []interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
 	this.sqlDebug("select", SqlQuery, Args)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	Rows, eror := St.QueryContext(ctx, Args...)
+	Rows, eror := St.QueryContext(Ctx, Args...)
 	if eror != nil {
 		return eror
 	}
 	defer Rows.Close()
 
 	for Rows.Next() {
-		if eror = Rows.Scan(dst); eror != nil {
+		if eror = Rows.Scan(Dst); eror != nil {
 			return eror
 		}
 	}
@@ -49,7 +49,7 @@ func (this *TUniEngine) selectColsCtx(ctx context.Context, SqlQuery string, dst 
 // 调用方传入,保持各方法原有的钩子识别语义。
 // sink 第二参数为列→字段下标(热路径预计算结果,钩子路径传原始空切片)——
 // 单 struct 目标用它做按列合并,其余容器目标忽略即可。
-func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type, HasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
+func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type, HasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
 
 	SqlQuery = this.getSqlQuery(SqlQuery, Args...)
 
@@ -61,13 +61,13 @@ func (this *TUniEngine) selectRowsCtx(ctx context.Context, elemType reflect.Type
 
 	this.sqlDebug("select", SqlQuery, Args)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	Rows, eror := St.QueryContext(ctx, Args...)
+	Rows, eror := St.QueryContext(Ctx, Args...)
 	if eror != nil {
 		return eror
 	}
@@ -164,10 +164,10 @@ func (this *TUniEngine) SelectD(SqlQuery string, Args ...interface{}) (int64, er
 	return this.SelectDCtx(context.Background(), SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectDCtx(ctx context.Context, SqlQuery string, Args ...interface{}) (int64, error) {
+func (this *TUniEngine) SelectDCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (int64, error) {
 
 	var Size sql.NullInt64
-	if eror := this.selectColsCtx(ctx, SqlQuery, &Size, Args); eror != nil {
+	if eror := this.selectColsCtx(Ctx, SqlQuery, &Size, Args); eror != nil {
 		return 0, eror
 	}
 
@@ -181,10 +181,10 @@ func (this *TUniEngine) SelectF(SqlQuery string, Args ...interface{}) (float64, 
 	return this.SelectFCtx(context.Background(), SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectFCtx(ctx context.Context, SqlQuery string, Args ...interface{}) (float64, error) {
+func (this *TUniEngine) SelectFCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (float64, error) {
 
 	var Size sql.NullFloat64
-	if eror := this.selectColsCtx(ctx, SqlQuery, &Size, Args); eror != nil {
+	if eror := this.selectColsCtx(Ctx, SqlQuery, &Size, Args); eror != nil {
 		return 0, eror
 	}
 
@@ -198,10 +198,10 @@ func (this *TUniEngine) SelectS(SqlQuery string, Args ...interface{}) (string, e
 	return this.SelectSCtx(context.Background(), SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectSCtx(ctx context.Context, SqlQuery string, Args ...interface{}) (string, error) {
+func (this *TUniEngine) SelectSCtx(Ctx context.Context, SqlQuery string, Args ...interface{}) (string, error) {
 
 	var Text sql.NullString
-	if eror := this.selectColsCtx(ctx, SqlQuery, &Text, Args); eror != nil {
+	if eror := this.selectColsCtx(Ctx, SqlQuery, &Text, Args); eror != nil {
 		return "", eror
 	}
 
@@ -217,7 +217,7 @@ func (this *TUniEngine) Select(i interface{}, SqlQuery string, Args ...interface
 	return this.SelectCtx(context.Background(), i, SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectCtx(ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -238,7 +238,7 @@ func (this *TUniEngine) SelectCtx(ctx context.Context, i interface{}, SqlQuery s
 	//#VerifyDX 的 FROM_WHO_BUILD);钩子类仍整结构体替换,填充范围由类自身
 	//#SetSqlResult 决定;零行结果不触发 sink,目标原样保留
 	RowCount := 0
-	return this.selectRowsCtx(ctx, t, HasHook, SqlQuery, func(Row reflect.Value, FieldIdx []int) error {
+	return this.selectRowsCtx(Ctx, t, HasHook, SqlQuery, func(Row reflect.Value, FieldIdx []int) error {
 		RowCount++
 		if RowCount > 1 {
 			return errors.New("UniEngine: method [Select] expects a single row, but the query returned more; use [SelectL]")
@@ -261,7 +261,7 @@ func (this *TUniEngine) SelectL(i interface{}, SqlQuery string, Args ...interfac
 	return this.SelectLCtx(context.Background(), i, SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectLCtx(ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -275,7 +275,7 @@ func (this *TUniEngine) SelectLCtx(ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
 		Result.Set(reflect.Append(Result, Row))
 		return nil
 	}, Args...)
@@ -288,7 +288,7 @@ func (this *TUniEngine) SelectM(i interface{}, SqlQuery string, Args ...interfac
 	return this.SelectMCtx(context.Background(), i, SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectMCtx(ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery string, Args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -306,7 +306,7 @@ func (this *TUniEngine) SelectMCtx(ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
 		MapUnique := Row.Interface().(HasGetMapUnique).GetMapUnique()
 		Result.SetMapIndex(reflect.ValueOf(MapUnique), Row)
 		return nil
@@ -320,7 +320,7 @@ func (this *TUniEngine) SelectH(i interface{}, f GetMapUnique, SqlQuery string, 
 	return this.SelectHCtx(context.Background(), i, f, SqlQuery, Args...)
 }
 
-func (this *TUniEngine) SelectHCtx(ctx context.Context, i interface{}, f GetMapUnique, SqlQuery string, Args ...interface{}) error {
+func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapUnique, SqlQuery string, Args ...interface{}) error {
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -334,7 +334,7 @@ func (this *TUniEngine) SelectHCtx(ctx context.Context, i interface{}, f GetMapU
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
 		var MapUnique string
 		if f != nil {
 			MapUnique = f(Row.Interface())

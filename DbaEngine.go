@@ -180,7 +180,7 @@ type HasSetSqlResult interface {
 // #需以本钩子接管(官方实现见 contrib/pgxcopy,经 conn.Raw 走原生 CopyFrom)。
 // #Rows 为最终写入行(已完成应用加密);返回 handled=false 回退内置协议。
 // #注意:钩子经由 *sql.DB 连接池取连接,无法路由到当前事务——事务期间引擎显式拒绝。
-type TCopyInHook func(ctx context.Context, db *sql.DB, TableName string, Columns []string, Rows [][]interface{}) (bool, error)
+type TCopyInHook func(Ctx context.Context, db *sql.DB, TableName string, Columns []string, Rows [][]interface{}) (bool, error)
 
 // ---------------------------------------------------------------------------
 // COPY 协议语句(自实现,替代 github.com/lib/pq 的 pq.CopyIn,消除第三方依赖)
