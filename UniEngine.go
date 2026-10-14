@@ -301,20 +301,20 @@ func (this *TUniEngine) DefaultPageSize() int64 {
 // prepareCtx 在当前事务(若有)或连接池上预备语句。
 // 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
 // 返回的语句由调用方负责 Close。
-func (this *TUniEngine) prepareCtx(ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
+func (this *TUniEngine) prepareCtx(Ctx context.Context, SqlQuery string) (*sql.Stmt, error) {
 
 	if tx := this.currentTx(); tx != nil {
-		return tx.PrepareContext(ctx, SqlQuery)
+		return tx.PrepareContext(Ctx, SqlQuery)
 	}
 
-	return this.Db.PrepareContext(ctx, SqlQuery)
+	return this.Db.PrepareContext(Ctx, SqlQuery)
 }
 
 func (this *TUniEngine) Begin() error {
 	return this.BeginCtx(context.Background())
 }
 
-func (this *TUniEngine) BeginCtx(ctx context.Context) error {
+func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
 
 	this.lockTables()
 	defer this.mu.Unlock()
@@ -324,7 +324,7 @@ func (this *TUniEngine) BeginCtx(ctx context.Context) error {
 		return ErrAlreadyInTransaction
 	}
 
-	tx, eror := this.Db.BeginTx(ctx, nil)
+	tx, eror := this.Db.BeginTx(Ctx, nil)
 	if eror != nil {
 		return eror
 	}

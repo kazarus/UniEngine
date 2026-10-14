@@ -173,7 +173,7 @@ func canNativeSave(v reflect.Value) bool {
 
 // saveUpsert 方言原生 UPSERT 执行(Keys/Cols 按确定序收集,参数只传一遍)。
 // 返回 Done=false 表示方言不支持,调用方回退 count-then-dispatch。
-func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string, Mode int) (bool, error) {
+func (this *TUniEngine) saveUpsert(Ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string, Mode int) (bool, error) {
 
 	Keys := UniTable.pkeyFields()
 
@@ -218,13 +218,13 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 
 	this.sqlDebug("upsert", SQL, Values)
 
-	St, eror := this.prepareCtx(ctx, SQL)
+	St, eror := this.prepareCtx(Ctx, SQL)
 	if eror != nil {
 		return false, eror
 	}
 	defer St.Close()
 
-	if _, eror := St.ExecContext(ctx, Values...); eror != nil {
+	if _, eror := St.ExecContext(Ctx, Values...); eror != nil {
 		return false, fmt.Errorf("UniEngine: upsert fail: %w", eror)
 	}
 
@@ -234,7 +234,7 @@ func (this *TUniEngine) saveUpsert(ctx context.Context, UniTable *TUniTable, v r
 // countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
 
 // countByPkeys 按主键统计存在行数(count-then-dispatch 回退路径的探测语句)。
-func (this *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string) (int64, error) {
+func (this *TUniEngine) countByPkeys(Ctx context.Context, UniTable *TUniTable, v reflect.Value, TablName string) (int64, error) {
 
 	var KeyCols []string
 	SqlValue := make([]interface{}, 0)
@@ -252,15 +252,15 @@ func (this *TUniEngine) countByPkeys(ctx context.Context, UniTable *TUniTable, v
 
 	SqlQuery := fmt.Sprintf("select count(1) from %s where %s", TablName, strings.Join(KeyCols, " and "))
 
-	return this.SelectDCtx(ctx, SqlQuery, SqlValue...)
+	return this.SelectDCtx(Ctx, SqlQuery, SqlValue...)
 }
 
 // saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
 
 // saveByCount 旧的 count-then-dispatch 路径:钩子类与不支持原生 UPSERT 的方言(MySQL)回退使用。
-func (this *TUniEngine) saveByCount(ctx context.Context, i interface{}, UniTable *TUniTable, v reflect.Value, TablName string, TableName []string, updateWhenExist bool) error {
+func (this *TUniEngine) saveByCount(Ctx context.Context, i interface{}, UniTable *TUniTable, v reflect.Value, TablName string, TableName []string, updateWhenExist bool) error {
 
-	Count, eror := this.countByPkeys(ctx, UniTable, v, TablName)
+	Count, eror := this.countByPkeys(Ctx, UniTable, v, TablName)
 	if eror != nil {
 		return eror
 	}
@@ -271,13 +271,13 @@ func (this *TUniEngine) saveByCount(ctx context.Context, i interface{}, UniTable
 
 	if updateWhenExist {
 		if Count == 1 {
-			return this.UpdateCtx(ctx, i, TableName...)
+			return this.UpdateCtx(Ctx, i, TableName...)
 		}
-		return this.InsertCtx(ctx, i, TableName...)
+		return this.InsertCtx(Ctx, i, TableName...)
 	}
 
 	if Count == 0 {
-		return this.InsertCtx(ctx, i, TableName...)
+		return this.InsertCtx(Ctx, i, TableName...)
 	}
 
 	return nil
@@ -287,7 +287,7 @@ func (this *TUniEngine) SaveIt(i interface{}, TableName ...string) error {
 	return this.SaveItCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) SaveItCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("SaveIt", i, TableName, reflect.Invalid, true)
 	if eror != nil {
@@ -297,7 +297,7 @@ func (this *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, TableName 
 	//#默认路径走方言原生 UPSERT,消除 count 与写入之间的并发窗口;
 	//#钩子类/不支持的方言回退旧的 count-then-dispatch
 	if canNativeSave(v) {
-		Done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeUpdate)
+		Done, eror := this.saveUpsert(Ctx, UniTable, v, TablName, upsertModeUpdate)
 		if eror != nil {
 			return eror
 		}
@@ -306,14 +306,14 @@ func (this *TUniEngine) SaveItCtx(ctx context.Context, i interface{}, TableName 
 		}
 	}
 
-	return this.saveByCount(ctx, i, UniTable, v, TablName, TableName, true)
+	return this.saveByCount(Ctx, i, UniTable, v, TablName, TableName, true)
 }
 
 func (this *TUniEngine) SaveItWhenNotExist(i interface{}, TableName ...string) error {
 	return this.SaveItWhenNotExistCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) SaveItWhenNotExistCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("SaveItWhenNotExist", i, TableName, reflect.Invalid, true)
 	if eror != nil {
@@ -321,7 +321,7 @@ func (this *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}
 	}
 
 	if canNativeSave(v) {
-		Done, eror := this.saveUpsert(ctx, UniTable, v, TablName, upsertModeSkip)
+		Done, eror := this.saveUpsert(Ctx, UniTable, v, TablName, upsertModeSkip)
 		if eror != nil {
 			return eror
 		}
@@ -330,7 +330,7 @@ func (this *TUniEngine) SaveItWhenNotExistCtx(ctx context.Context, i interface{}
 		}
 	}
 
-	return this.saveByCount(ctx, i, UniTable, v, TablName, TableName, false)
+	return this.saveByCount(Ctx, i, UniTable, v, TablName, TableName, false)
 }
 
 // ---------------------------------------------------------------------------

@@ -74,7 +74,7 @@ func (this *TUniEngine) Update(i interface{}, TableName ...string) error {
 	return this.UpdateCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("Update", i, TableName, reflect.Invalid, true)
 	if eror != nil {
@@ -143,13 +143,13 @@ func (this *TUniEngine) UpdateCtx(ctx context.Context, i interface{}, TableName 
 
 	this.sqlDebug("update", SqlQuery, SqlValue)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(Ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: update fail: %w", eror)
 	}
 
@@ -160,7 +160,7 @@ func (this *TUniEngine) Insert(i interface{}, TableName ...string) error {
 	return this.InsertCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("Insert", i, TableName, reflect.Struct, false)
 	if eror != nil {
@@ -214,13 +214,13 @@ func (this *TUniEngine) InsertCtx(ctx context.Context, i interface{}, TableName 
 
 	this.sqlDebug("insert", SqlQuery, SqlValue)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(Ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: insert fail: %w", eror)
 	}
 
@@ -231,7 +231,7 @@ func (this *TUniEngine) InsertL(i interface{}, TableName ...string) error {
 	return this.InsertLCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("InsertL", i, TableName, reflect.Slice, false)
 	if eror != nil {
@@ -319,13 +319,13 @@ func (this *TUniEngine) InsertLCtx(ctx context.Context, i interface{}, TableName
 
 	this.sqlDebug("insert", SqlQuery, SqlValue)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(Ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: insert fail: %w (hint: too many parameters? try [InsertP])", eror)
 	}
 
@@ -336,7 +336,7 @@ func (this *TUniEngine) Delete(i interface{}, TableName ...string) error {
 	return this.DeleteCtx(context.Background(), i, TableName...)
 }
 
-func (this *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName ...string) error {
+func (this *TUniEngine) DeleteCtx(Ctx context.Context, i interface{}, TableName ...string) error {
 
 	UniTable, v, TablName, eror := this.resolveTarget("Delete", i, TableName, reflect.Invalid, true)
 	if eror != nil {
@@ -361,13 +361,13 @@ func (this *TUniEngine) DeleteCtx(ctx context.Context, i interface{}, TableName 
 
 	this.sqlDebug("delete", SqlQuery, SqlValue)
 
-	St, eror := this.prepareCtx(ctx, SqlQuery)
+	St, eror := this.prepareCtx(Ctx, SqlQuery)
 	if eror != nil {
 		return eror
 	}
 	defer St.Close()
 
-	if _, eror = St.ExecContext(ctx, SqlValue...); eror != nil {
+	if _, eror = St.ExecContext(Ctx, SqlValue...); eror != nil {
 		return fmt.Errorf("UniEngine: delete fail: %w", eror)
 	}
 
