@@ -2,6 +2,14 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
+## master-20261014(质量评审后续修复)
+
+- SQL Server 在 `TUniEngine.Initialize()` 使用真实连接进行只读参数回显;占位符未绑定时返回 `ErrInvalidPlaceholderBinding`,且初始化不会登记内置表。调用方必须检查初始化错误。数据库或 `ColParam` 变更后,执行入口会重新验证。`integration/mssql_test.go` 的 16 个真库子例已通过,覆盖绑定矩阵、有效组合读写和错误组合初始化拒绝。
+- 同表 `RegisterTable/RegisterField/RegisterPkeys` 改为复制并发布元数据快照,允许与读取并发;已取得的旧指针继续使用旧快照。直接修改返回的 `*TUniTable` 仍须遵守并发契约。
+- 缺省 `VerifyMacVer=0` 改为写 `MAC2:` v2 载荷;显式 `VerifyMacVer=1` 保留旧 v1 写法。读取仍按标签兼容 v1 行,但存量数据需要重签才能全面获得 v2 防歧义保证。
+- `VerifyMode=2` 的结构体读取若缺保护列或 MAC 列,或使用无法由引擎验签的结果钩子,现在返回 `ErrIncompleteVerification`。
+- 内置派生密钥缓存最多 128 项;冷解密仅在 GCM 认证通过后缓存派生结果。
+
 ## master-20261014(代码质量评审修复:第一批 + 第二批)
 
 依据 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68/100)分两批修复 6 项 P1;修复设计见 `FIX_DESIGN_BATCH2_2026-10-14.md`。
@@ -9,7 +17,7 @@
 ### 第二批(行为变更,升级须读)
 
 - **`SetVerify` 强制覆盖全部已登记主键**(评审 Q2,破坏性收紧):此前复合主键只需保护其中一列即可登记,未保护的主键列被改写仍能通过严格验签。现在缺任何主键列都报 `LastError` 并列出缺失列;主键须先于验签登记(先 `SetKeys`/`AutoKeys` 再 `SetVerify`,顺序颠倒显式报错)。逃生门 `VerifyUnkeyed=true` 语义不变。
-- **MAC 载荷 v2(评审 Q1,新增配置,缺省不变)**:v1 载荷以 `0x1f` 拼接,值含 `0x1f` 时不同数据产出相同签名载荷(编码歧义)。新引擎配置 `VerifyMacVer=2` 启用无歧义载荷(逐列"列名+值长度+值字节"),标签自识别(`MAC:`/`MAC2:`),存量 v1 行升级后仍可验。迁移步骤见 README「MAC 载荷版本与防碰撞迁移」。
+- **MAC 载荷 v2(评审 Q1,当时的第二批行为)**:该批引入 `VerifyMacVer=2` 以启用无歧义载荷;上方后续修复已将缺省写入改为 v2。读取仍按标签兼容旧 v1 行。迁移步骤见 README「MAC 载荷版本与防碰撞迁移」。
 - **占位符转换改为 SQL 词法扫描**(评审 Q5,含破坏性报错):`$N` 转换只作用于代码区,字符串常量与注释里的 `$N` 不再被误改;MySQL 分支按占位符出现序**重排/复制实参**(乱序 `$2/$1`、重复 `$1` 均正确绑定),`$0`/编号超实参数/实参多余从"静默错绑"变为**显式报错**。内部方法 `getSqlQuery` 签名变更(非导出,不影响公开 API)。已知边界:不处理反斜杠转义(`'don\'t'`),请用 `''` 或原生占位符。
 
 ### 第一批(可靠性,commit 4014962)
@@ -55,7 +63,7 @@
 
 - `TestMSSQLPlaceholderContract`：8 个子用例固化「驱动名 × 占位符风格」绑定矩阵（如 `$1` 在 `sqlserver` 下解析为 money 字面量 `"1.0000"`、`@p1` 在 `mssql` 下报 `expected 0 arguments`）。
 - `TestMSSQLRoundTripMatrix`：4 个可用组合各跑六步 CRUD（Insert / Update / SaveIt 插入 / SaveIt 更新 / InsertL / Delete）+ 绕过引擎的原生读回校验。
-- `TestMSSQLDefectSqlserverNoAt`：复现 `sqlserver` + 非 `@p` 的失效，不变式为「引擎返回 `nil` ⇒ 目标行必须按意图写入」。默认跳过，`UNIENGINE_MSSQL_DEFECT=1` 开启；缺陷修复后应翻转为常开。
+- 当时的 `TestMSSQLDefectSqlserverNoAt` 用于复现 `sqlserver` + 非 `@p` 的失效；后续修复已用常规用例 `TestMSSQLInitializeRejectsMismatchedBinding` 取代,断言初始化阶段拒绝错误组合。
 - **环境口径**与 `pg_test.go` 一致：`UNIENGINE_MSSQL_DSN`，或分量 `UNIENGINE_MSSQL_HOST/PORT/USER/PASS/DB`（口令含 `@`/`#`/`$`/`%` 时自动 URL 转义）；不可达默认跳过，`UNIENGINE_MSSQL_REQUIRED=1` 则失败。
 - `integration/go.mod` 新增 `github.com/microsoft/go-mssqldb v1.11.2`（连带 `golang.org/x/sync`、`golang.org/x/text` 上移）。
 - **测试连接生命周期统一为 `t.Cleanup`**（在 `newEngine` / `openMSSQL` 内登记）：关闭登记在最早位置，按 LIFO 必定晚于建表后的 `DROP` 执行；此前用 `defer db.Close()` 会让 `DROP` 落在已关闭的连接上而静默失败（表泄漏）。
@@ -183,7 +191,7 @@
 
 - **登记**：`RegisterClass(T, "tbl").SetKeys(...).SetVerify("mac_text", "col1", "col2", ...)`。`mac_text` 为 MAC 伴随列（string 字段，建议 `varchar(64) NOT NULL DEFAULT ''`），保护列按登记顺序参与载荷；载荷以注册表名做域分隔（跨表同值 MAC 互异），格式 `MAC:` + base64。
 - **写路径**：`Insert`/`Update`/`InsertL`/`CopyInL`/`SaveIt`（含 `SaveItWhenNotExist`；`CopyInP`/`SpecialInsertL*`/PolarDB `InsertP` 分页均汇入 `CopyInLCtx`/`InsertLCtx`）组装 SQL/COPY 数据前按结构体当前值重算 MAC 回填伴随字段；幂等，`SaveIt` 回退链重复调用无副作用。注意 `Update` 是整行语义，更新前须先读后改（与本引擎既有契约一致）。
-- **读路径**：`Select`/`SelectL`/`SelectM`/`SelectH` 在解密后逐行验签（secreton 列参与载荷的是明文）；SELECT 未覆盖全部保护列+MAC 列时该行跳过验签；比对用 `crypto/hmac.Equal` 常量时间比较，失败即报错（文案不含载荷与行值）。
+- **读路径**：`Select`/`SelectL`/`SelectM`/`SelectH` 在解密后逐行验签（secreton 列参与载荷的是明文）；SELECT 未覆盖全部保护列+MAC 列时,宽容模式沿用跳过验签,严格模式返回 `ErrIncompleteVerification`；比对用 `crypto/hmac.Equal` 常量时间比较，失败即报错（文案不含载荷与行值）。
 - **算法**：内置 HMAC-SHA256（密钥 `VerifyBy`）；赋值 `VerifyHook` 可接管为 HMAC-SM3/密码机等应用实现。
 - **模式**：`VerifyOn` 引擎级总开关（0=关）；`VerifyMode` 1=宽容（无标签存量行直通，回填期用）→ 2=严格（无标签行报错，回填完成后切换）；非空但无标签的值一律报错。
 - **范围外**（与 secreton 同口径）：自定义 SQL 钩子类（`HasGetSqlUpdate`/`HasGetSqlInsert`/`HasSetSqlValues[L]`/`HasSetSqlResult`）与裸 `Execute` 语句不经签名/验签。
