@@ -252,6 +252,31 @@ func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) erro
 	return this.verifySignCols(v, UniTable, Cols)
 }
 
+// VerifySignRow 应用侧存量回填入口:对已注册结构体按当前字段值重算 MAC 并回填伴随字段,
+// 不组装 SQL、不产生任何写库动作。与写路径(Insert/Update/InsertL)签名同一实现,
+// 载荷版本(v1/v2)与钩子(VerifyHook)口径天然一致;典型用法=读侧解密后的行先本方法
+// 签名,再由应用自行批量落库 MAC 列。行须传指针:值传入时 MAC 无法回填,返回普通错误
+func (this *TUniEngine) VerifySignRow(i interface{}) error {
+	if eror := nilParamOf("VerifySignRow", i); eror != nil {
+		return eror
+	}
+
+	t := reflect.TypeOf(i)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return fmt.Errorf("UniEngine: method [VerifySignRow] only takes a struct; got [%s]", t.Kind().String())
+	}
+
+	UniTable := this.tableByType(t.String())
+	if UniTable == nil {
+		return fmt.Errorf("%w: %s", ErrUnregisteredClass, t.String())
+	}
+
+	return this.verifySignRow(reflect.Indirect(reflect.ValueOf(i)), UniTable)
+}
+
 // #verifyCtxOf 读路径预解析:宽容模式下部分列查询保留旧行为;严格模式拒绝
 // 缺少保护列或 MAC 列的结果,避免悄悄绕过验签。
 func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldIdx []int) (*verifyRowCtx, error) {

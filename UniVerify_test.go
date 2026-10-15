@@ -614,3 +614,57 @@ func TestVerifyFormatKinds(t *testing.T) {
 		}
 	}
 }
+
+// #测试19:VerifySignRow 应用侧存量回填入口——内存签名不写库,与写路径同值;
+// #值传入/未登记类/非结构体的错误路径,以及未启用验签时的直通行为
+func TestVerifySignRowExported(t *testing.T) {
+	row := TVerifyRow{WhoBuild: 3, UserIndx: 9, DataStat: 1, MastName: "存量行"}
+
+	//#指针传入:MAC 回填进结构体,与写路径产出的伴随值一致(verifyExpect 同算法)
+	eng := newVerifyTestEngine(&mockDriver{})
+	if eror := eng.VerifySignRow(&row); eror != nil {
+		t.Fatal(eror)
+	}
+	if row.MacText != verifyExpect(t, eng, TVerifyRow{WhoBuild: 3, UserIndx: 9, DataStat: 1, MastName: "存量行"}) {
+		t.Fatalf("VerifySignRow 产出与写路径不一致: %q", row.MacText)
+	}
+
+	//#幂等:重复签名同值
+	if eror := eng.VerifySignRow(&row); eror != nil {
+		t.Fatal(eror)
+	}
+	if row.MacText != verifyExpect(t, eng, TVerifyRow{WhoBuild: 3, UserIndx: 9, DataStat: 1, MastName: "存量行"}) {
+		t.Fatal("重复签名应幂等同值")
+	}
+
+	//#值传入:MAC 无法回填,须报错而非 panic
+	if eror := eng.VerifySignRow(row); eror == nil {
+		t.Fatal("值传入应报不可寻址错误")
+	}
+
+	//#未登记类
+	if eror := eng.VerifySignRow(&struct{ X int }{1}); eror == nil {
+		t.Fatal("未登记类应报 ErrUnregisteredClass")
+	}
+
+	//#非结构体
+	if eror := eng.VerifySignRow("not-a-struct"); eror == nil {
+		t.Fatal("非结构体应报错")
+	}
+
+	//#nil
+	if eror := eng.VerifySignRow(nil); eror == nil {
+		t.Fatal("nil 应报错")
+	}
+
+	//#引擎未启用验签:直通返回 nil,MAC 字段不动(与写路径口径一致)
+	engOff := newVerifyTestEngine(&mockDriver{})
+	engOff.VerifyOn = 0
+	rowOff := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "x"}
+	if eror := engOff.VerifySignRow(&rowOff); eror != nil {
+		t.Fatal(eror)
+	}
+	if rowOff.MacText != "" {
+		t.Fatalf("VerifyOn=0 时不应回填 MAC: %q", rowOff.MacText)
+	}
+}
