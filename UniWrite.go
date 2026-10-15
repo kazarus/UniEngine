@@ -62,6 +62,34 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 	return UniTable, reflect.Indirect(reflect.ValueOf(i)), TablName, nil
 }
 
+// hookIntegrityGuard 写钩子与加密/验签共存的守卫:自定义 SQL 钩子的语句与实参均由
+// 钩子方生成,引擎无法定位其中哪些实参对应 secreton 列、语句是否携带 MAC 伴随列
+// ——默认构建路径上的 secretEncrypt/verifySignRow 变换对钩子路径不生效,激活态下
+// 放行等于静默写明文/丢签名,故 fail-fast。SecretOn=0 且验签未激活时,钩子路径与
+// 默认路径同样写明文,行为一致,不拦截。
+// 注:守卫触发前 verifySignRow 已先行回填 MAC 伴随字段到入参结构体(不落库),无副作用。
+func (this *TUniEngine) hookIntegrityGuard(Method string, UniTable *TUniTable) error {
+	var Reason string
+	if this.SecretOn == 1 {
+		for _, ItemPara := range UniTable.writableFields() {
+			if UniTable.secretColumn(ItemPara) {
+				Reason = "secreton column [" + ItemPara.FieldName + "] encryption"
+				break
+			}
+		}
+	}
+	if this.verifyActive(UniTable) {
+		if Reason != "" {
+			Reason += " and "
+		}
+		Reason += "verify (MAC companion column [" + UniTable.VerifyAt + "])"
+	}
+	if Reason == "" {
+		return nil
+	}
+	return fmt.Errorf("UniEngine: method [%s] on table [%s] takes the custom SQL write hook path, which bypasses engine-side %s; drop the write hook or disable the feature for this table", Method, UniTable.TableName, Reason)
+}
+
 // ---------------------------------------------------------------------------
 // SaveIt / SaveItWhenNotExist:方言原生 UPSERT + count-then-dispatch 回退
 // ---------------------------------------------------------------------------
@@ -91,6 +119,13 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 	}
 	if x, Ok := v.Interface().(HasSetSqlValues); Ok {
 		x.SetSqlValues(this, EtUpdate, &SqlValue)
+	}
+
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	if SqlQuery != "" || len(SqlValue) > 0 {
+		if eror := this.hookIntegrityGuard("Update", UniTable); eror != nil {
+			return eror
+		}
 	}
 
 	if SqlQuery == "" && len(SqlValue) == 0 {
@@ -176,6 +211,13 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 		x.SetSqlValues(this, EtInsert, &SqlValue)
 	}
 
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	if SqlQuery != "" || len(SqlValue) > 0 {
+		if eror := this.hookIntegrityGuard("Insert", UniTable); eror != nil {
+			return eror
+		}
+	}
+
 	if SqlQuery == "" && len(SqlValue) == 0 {
 		Fields := UniTable.writableFields()
 		if len(Fields) == 0 {
@@ -255,6 +297,13 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
 			x.SetSqlValuesL(this, EtInsert, f, &SqlValue)
+		}
+	}
+
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	if SqlQuery != "" || len(SqlValue) > 0 {
+		if eror := this.hookIntegrityGuard("InsertL", UniTable); eror != nil {
+			return eror
 		}
 	}
 
