@@ -35,12 +35,12 @@ type TUniEngine struct {
 	HashTabl map[string]*TUniTable
 
 	SecretOn   int64       //#开启敏感信息加密
-	SecretBy   string      //#敏感信息加密密钥
+	SecretBy   string      //#敏感信息加密密钥,推荐BASE64
 	SecretIter int         //#PBKDF2迭代次数#0用缺省(UniSecretIter);仅影响新写入,读取以密文内嵌值为准
 	SecretHook TSecretHook //#应用加密钩子#为空时使用内置AES-256-GCM
 
 	VerifyOn     int64       //#开启存储完整性校验#写路径回填MAC伴随列,读路径逐行验签(与TUniTable.VerifyOn同时开启才生效)
-	VerifyBy     string      //#内置HMAC-SHA256密钥#VerifyHook非空时不使用
+	VerifyBy     string      //#内置HMAC-SHA256密钥,推荐BASE64#VerifyHook非空时不使用
 	VerifyMode   int64       //#验签模式#1=宽容(无MAC标签的存量行跳过验签,回填期用);2=严格(无标签行报错,回填完成后切换);0及其它按1处理
 	VerifyMacVer int64       //#MAC载荷格式版本#0/2=v2无歧义载荷(缺省);1=显式写旧v1#存量v1行仍按v1算法验签,完整防碰撞须全表重签,迁移步骤见README
 	VerifyHook   TVerifyHook //#应用完整性钩子#为空时使用内置HMAC-SHA256#应用可实现国密HMAC-SM3等
