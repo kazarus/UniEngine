@@ -1,8 +1,9 @@
 package UniEngine
 
 // 写钩子守卫回归:自定义 SQL 写钩子(GetSqlUpdate/GetSqlInsert/GetSqlInsertL/
-// SetSqlValues*)的语句与实参由钩子方生成,激活的 secreton 加密与验签对钩子路径
-// 不生效——必须 fail-fast 报错,不得静默写明文/丢签名(绕过缺陷的封堵)。
+// SetSqlValues*)——验签激活时 fail-fast(钩子语句无法附带 MAC 伴随列);加密激活时
+// 引擎解析钩子 SQL 的列→实参映射并就地加密 secreton 列实参(与读钩子交接前解密
+// 对称),形态不可信解析(字面量/表达式/实参数不匹配)维持 fail-fast。
 
 import (
 	"database/sql/driver"
@@ -11,7 +12,8 @@ import (
 	"testing"
 )
 
-// hookGuardUser 同时实现单笔更新/插入钩子
+// hookGuardUser 实现单笔更新/插入钩子;SetSqlValues 按查询类型切换实参序,
+// 与各自 SQL 的列序一致(投产钩子的实际形态,见 load/tabl/gzzd 的 helpr_*.db.go)
 type hookGuardUser struct {
 	UserName string `db:"user_name"`
 	Password string `db:"password"`
@@ -22,12 +24,16 @@ func (u hookGuardUser) GetSqlUpdate(e *TUniEngine, TableName string) string {
 	return "update hook_guard_user set password=? where user_name=?"
 }
 
-func (u hookGuardUser) SetSqlValues(e *TUniEngine, qt TQueryType, Out *[]interface{}) {
-	*Out = append(*Out, u.Password, u.UserName)
-}
-
 func (u hookGuardUser) GetSqlInsert(e *TUniEngine, TableName string) string {
 	return "insert into hook_guard_user (user_name,password) values (?,?)"
+}
+
+func (u hookGuardUser) SetSqlValues(e *TUniEngine, qt TQueryType, Out *[]interface{}) {
+	if qt == EtUpdate {
+		*Out = append(*Out, u.Password, u.UserName) //#set password=?, where user_name=?
+		return
+	}
+	*Out = append(*Out, u.UserName, u.Password) //#(user_name,password)
 }
 
 // hookGuardBatch 实现批量插入钩子
@@ -37,34 +43,67 @@ type hookGuardBatch struct {
 }
 
 func (b hookGuardBatch) GetSqlInsertL(e *TUniEngine, TableName string, Batch int64) string {
-	return "insert into hook_guard_batch (name,code) values (?,?)"
+	//#真实批量钩子按 Batch 生成对应组数的 VALUES(引擎以实参总数校验防错位)
+	var Rows []string
+	for i := int64(0); i < Batch; i++ {
+		Rows = append(Rows, "(?,?)")
+	}
+	return "insert into hook_guard_batch (name,code) values " + strings.Join(Rows, ",")
 }
 
 func (b hookGuardBatch) SetSqlValuesL(e *TUniEngine, qt TQueryType, Row reflect.Value, Out *[]interface{}) {
 	*Out = append(*Out, Row.FieldByName("Name").Interface(), Row.FieldByName("Code").Interface())
 }
 
-// #Update 走钩子且表有激活的加密列:必须报错且不执行任何 SQL
-func TestUpdateHookRejectedWhenSecretActive(t *testing.T) {
+// hookNumberedUser 编号式占位符钩子(投产 load.TDATA 的 $N 形态)
+type hookNumberedUser struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+func (u hookNumberedUser) GetSqlInsert(e *TUniEngine, TableName string) string {
+	return "insert into hook_num_user (user_name,password) values ($1,$2)"
+}
+
+func (u hookNumberedUser) SetSqlValues(e *TUniEngine, qt TQueryType, Out *[]interface{}) {
+	*Out = append(*Out, u.UserName, u.Password)
+}
+
+// hookLiteralUser 更新语句为纯字面量,secreton 列值在 SQL 文本内,无法加密
+type hookLiteralUser struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+func (u hookLiteralUser) GetSqlUpdate(e *TUniEngine, TableName string) string {
+	return "update hook_literal_user set password='x' where user_name='kazarus'"
+}
+
+// #Update 钩子 + 激活加密列:secreton 列实参被自动加密,WHERE 主键实参保持明文
+func TestUpdateHookEncryptsSecretArg(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
 	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
 	eng.RegisterClass(hookGuardUser{}, "hook_guard_user").SetKeys("user_name").SetSecret("password")
 
 	row := hookGuardUser{UserName: "u", Password: "p"}
-	eror := eng.Update(&row)
-	if eror == nil {
-		t.Fatal("钩子路径 + 激活加密列应报错")
+	if eror := eng.Update(&row); eror != nil {
+		t.Fatalf("可解析形态的钩子路径应自动加密后放行: %v", eror)
 	}
-	if !strings.Contains(eror.Error(), "write hook") || !strings.Contains(eror.Error(), "secreton") {
-		t.Fatalf("错误应指明钩子绕过 secreton 加密: %v", eror)
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 2 {
+		t.Fatalf("应有 1 次执行 2 个实参: %v", d.insertValues)
 	}
-	if len(d.queries) != 0 {
-		t.Fatalf("被拒后不应有任何 SQL 落库: %v", d.queries)
+	Cipher, _ := d.insertValues[0][0].(string)
+	if !strings.HasPrefix(Cipher, "ENC:") || Cipher == "p" {
+		t.Fatalf("SET 段 secreton 实参应已加密: %v", d.insertValues[0][0])
+	}
+	if d.insertValues[0][1] != "u" {
+		t.Fatalf("WHERE 主键实参应保持明文: %v", d.insertValues[0][1])
 	}
 }
 
-// #Insert 走钩子且表启用验签:必须报错且不执行任何 SQL
+// #Insert 钩子 + 验签激活:维持 fail-fast(与加密侧不同,签名无法附带进钩子语句)
 func TestInsertHookRejectedWhenVerifyActive(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
@@ -87,50 +126,129 @@ func TestInsertHookRejectedWhenVerifyActive(t *testing.T) {
 	}
 }
 
-// #InsertL 走批量钩子且表有激活的加密列:必须报错
-func TestInsertLHookRejectedWhenSecretActive(t *testing.T) {
+// #InsertL 批量钩子 + 激活加密列:逐行实参中 secreton 列位置被加密
+func TestInsertLHookEncryptsSecretArgs(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
 	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
 	eng.RegisterClass(hookGuardBatch{}, "hook_guard_batch").SetSecret("code")
 
-	rows := []hookGuardBatch{{Name: "a", Code: "c"}}
-	eror := eng.InsertL(&rows)
-	if eror == nil {
-		t.Fatal("批量钩子路径 + 激活加密列应报错")
+	rows := []hookGuardBatch{{Name: "a", Code: "c1"}, {Name: "b", Code: "c2"}}
+	if eror := eng.InsertL(&rows); eror != nil {
+		t.Fatalf("批量钩子路径应自动加密后放行: %v", eror)
 	}
-	if !strings.Contains(eror.Error(), "InsertL") || !strings.Contains(eror.Error(), "secreton") {
-		t.Fatalf("错误应指明方法与绕过对象: %v", eror)
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 4 {
+		t.Fatalf("应有 1 次执行 4 个实参: %v", d.insertValues)
 	}
-	if len(d.queries) != 0 {
-		t.Fatalf("被拒后不应有任何 SQL 落库: %v", d.queries)
+	//#列序 (name,code):每行 arg1 为 code
+	for _, row := range []int{0, 1} {
+		Got, _ := d.insertValues[0][row*2+1].(string)
+		if !strings.HasPrefix(Got, "ENC:") {
+			t.Fatalf("第 %d 行 code 实参应已加密: %v", row, d.insertValues[0][row*2+1])
+		}
+		if d.insertValues[0][row*2] != []string{"a", "b"}[row] {
+			t.Fatalf("第 %d 行 name 实参应保持明文: %v", row, d.insertValues[0][row*2])
+		}
 	}
 }
 
-// #SaveIt 钩子类回退 count-then-dispatch,最终经 Update/Insert 同样被守卫拦截
-func TestSaveItHookRejectedWhenSecretActive(t *testing.T) {
+// #SaveIt 钩子类回退 count-then-dispatch,Insert 钩子实参同样被自动加密
+func TestSaveItHookEncryptsSecretArg(t *testing.T) {
 	d := &mockDriver{
 		columns:   []string{"value"},
 		queryRows: [][]driver.Value{{int64(0)}},
 	}
 	eng := newMockEngine(d)
 	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
 	eng.RegisterClass(hookGuardUser{}, "hook_guard_user").SetKeys("user_name").SetSecret("password")
 
 	row := hookGuardUser{UserName: "u", Password: "p"}
-	eror := eng.SaveIt(&row)
-	if eror == nil || !strings.Contains(eror.Error(), "write hook") {
-		t.Fatalf("SaveIt 钩子类 + 激活加密列应报错: %v", eror)
+	if eror := eng.SaveIt(&row); eror != nil {
+		t.Fatalf("SaveIt 钩子类应自动加密后放行: %v", eror)
 	}
-	//#只允许 count 探测语句,写入语句不得执行
-	for _, q := range d.queries {
-		if !strings.Contains(q, "select count(1)") {
-			t.Fatalf("写入语句不应执行: %v", d.queries)
-		}
+	//#count + insert 两次语句;insert 的 (user_name,password) 列序下 password=arg1
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 2 {
+		t.Fatalf("应有 1 次插入执行 2 个实参: %v", d.insertValues)
+	}
+	Got, _ := d.insertValues[0][1].(string)
+	if !strings.HasPrefix(Got, "ENC:") {
+		t.Fatalf("password 实参应已加密: %v", d.insertValues[0][1])
 	}
 }
 
-// #负例1:SecretOn=0(功能未激活)时钩子路径放行,与默认路径行为一致
+// #编号式占位符($N,投产 load.TDATA 形态):按编号映射实参并加密
+func TestInsertHookEncryptsNumberedPlaceholders(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
+	eng.RegisterClass(hookNumberedUser{}, "hook_num_user").SetSecret("password")
+
+	row := hookNumberedUser{UserName: "u", Password: "p"}
+	if eror := eng.Insert(&row); eror != nil {
+		t.Fatalf("编号式占位符钩子应自动加密后放行: %v", eror)
+	}
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 2 {
+		t.Fatalf("应有 1 次执行 2 个实参: %v", d.insertValues)
+	}
+	Got, _ := d.insertValues[0][1].(string)
+	if !strings.HasPrefix(Got, "ENC:") || d.insertValues[0][0] != "u" {
+		t.Fatalf("$2(password)应加密、$1(user_name)应明文: %v", d.insertValues[0])
+	}
+}
+
+// #不可信形态:secreton 列值是 SQL 字面量(无法加密)→ 维持 fail-fast
+func TestHookSecretLiteralFailsFast(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
+	eng.RegisterClass(hookLiteralUser{}, "hook_literal_user").SetKeys("user_name").SetSecret("password")
+
+	row := hookLiteralUser{UserName: "u", Password: "p"}
+	eror := eng.Update(&row)
+	if eror == nil || !strings.Contains(eror.Error(), "cannot map") {
+		t.Fatalf("字面量 secreton 值应维持 fail-fast: %v", eror)
+	}
+	if len(d.queries) != 0 {
+		t.Fatalf("被拒后不应有任何 SQL 落库: %v", d.queries)
+	}
+}
+
+// #实参数与 SQL 声明不匹配 → 维持 fail-fast(防"一组 VALUES 配多行实参"错位):
+// #错误钩子不按 Batch 扩展 VALUES 组,实参数(2行×2列)与 SQL 占位符数(2)不一致
+type hookMismatchBatch struct {
+	Name string `db:"name"`
+	Code string `db:"code"`
+}
+
+func (b hookMismatchBatch) GetSqlInsertL(e *TUniEngine, TableName string, Batch int64) string {
+	return "insert into hook_mismatch_batch (name,code) values (?,?)"
+}
+
+func (b hookMismatchBatch) SetSqlValuesL(e *TUniEngine, qt TQueryType, Row reflect.Value, Out *[]interface{}) {
+	*Out = append(*Out, Row.FieldByName("Name").Interface(), Row.FieldByName("Code").Interface())
+}
+
+func TestHookSecretArgCountMismatchFailsFast(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
+	eng.RegisterClass(hookMismatchBatch{}, "hook_mismatch_batch").SetSecret("code")
+
+	rows := []hookMismatchBatch{{Name: "a", Code: "c1"}, {Name: "b", Code: "c2"}}
+	if eror := eng.InsertL(&rows); eror == nil || !strings.Contains(eror.Error(), "cannot map secreton columns safely") {
+		t.Fatalf("实参数不匹配应维持 fail-fast: %v", eror)
+	}
+	if len(d.queries) != 0 {
+		t.Fatalf("被拒后不应有任何 SQL 落库: %v", d.queries)
+	}
+}
+
+// #负例1:SecretOn=0(功能未激活)时钩子路径放行且不加密
 func TestHookPathAllowedWhenSecretOff(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
@@ -140,8 +258,8 @@ func TestHookPathAllowedWhenSecretOff(t *testing.T) {
 	if eror := eng.Update(&row); eror != nil {
 		t.Fatalf("SecretOn=0 时钩子路径应放行: %v", eror)
 	}
-	if len(d.queries) != 1 || !strings.Contains(d.queries[0], "update hook_guard_user") {
-		t.Fatalf("钩子 SQL 应原样执行: %v", d.queries)
+	if len(d.insertValues) != 1 || d.insertValues[0][0] != "p" {
+		t.Fatalf("未激活时实参应原样: %v", d.insertValues)
 	}
 }
 
@@ -156,7 +274,7 @@ func TestHookPathAllowedWhenNoSecretCols(t *testing.T) {
 	if eror := eng.Update(&row); eror != nil {
 		t.Fatalf("无加密列时钩子路径应放行: %v", eror)
 	}
-	if len(d.queries) != 1 || !strings.Contains(d.queries[0], "update hook_guard_user") {
-		t.Fatalf("钩子 SQL 应原样执行: %v", d.queries)
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 2 {
+		t.Fatalf("钩子 SQL 应原样执行: %v", d.insertValues)
 	}
 }

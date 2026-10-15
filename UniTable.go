@@ -174,6 +174,17 @@ func (this *TUniTable) secretColumn(ItemPara TUniField) bool {
 	return !IsPkey
 }
 
+// hasSecretDataCols 表内是否存在激活可加密的数据列(secreton 且非主键);
+// 写钩子守卫据此判断加密侧是否需要处理。
+func (this *TUniTable) hasSecretDataCols() bool {
+	for _, ItemPara := range this.writableFields() {
+		if this.secretColumn(ItemPara) {
+			return true
+		}
+	}
+	return false
+}
+
 // #SetKeys 登记主键并返回本表,支持链式:
 // #  UniEngineEx.RegisterClass(core.TSYSPATH{}, "sys_path").SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").SetSecret("MAST_NAME")
 // #链中首个错误记入 LastError 并短路后续登记,链尾以 if tbl.LastError != nil 检查
