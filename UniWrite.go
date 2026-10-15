@@ -65,7 +65,7 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 // hookWriteGuard 写钩子统一守卫:
 //
 //	验签激活 → fail-fast(钩子语句无法附带 MAC 伴随列,读侧钩子行本就无法验签);
-//	加密激活 → 解析钩子 SQL 的"列→实参"映射(unihooksql.go),就地加密 secreton
+//	加密激活 → 解析钩子 SQL 的"列→实参"映射(UniHookSql.go),就地加密 secreton
 //	列实参——与读钩子"交接前解密"对称,钩子方按列序给实参即拿到与默认路径同口径
 //	的加密语义;形态不可信解析(字面量赋值/表达式/未知结构/实参数不匹配)→ 维持
 //	fail-fast,不静默写明文。

@@ -1,4 +1,4 @@
-// unihooksql
+// UniHookSql
 // #写钩子自产 SQL 的"列→实参"映射解析(读钩子"交接前解密"的写侧对称物):
 // #钩子语句与实参均由钩子方生成,引擎通过解析常规 INSERT/UPDATE 形态定位 secreton
 // #列对应的实参下标并就地加密;形态不可信解析时返回 !Ok,由调用方维持 fail-fast。
@@ -41,6 +41,7 @@ func resolveHookSecretArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan
 		if !Ok {
 			return hookSecretPlan{}, false
 		}
+		Plan.Idx = dedupeInts(Plan.Idx)
 		Plan.ArgCount = placeholderArgCount(Plcs)
 		return Plan, true
 	}
@@ -49,22 +50,49 @@ func resolveHookSecretArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan
 		if !Ok {
 			return hookSecretPlan{}, false
 		}
+		Plan.Idx = dedupeInts(Plan.Idx)
 		Plan.ArgCount = placeholderArgCount(Plcs)
 		return Plan, true
 	}
 	return hookSecretPlan{}, false
 }
 
-// placeholderArgCount SQL 声明的实参布局:位置式=占位符总数,编号式=最大编号;
-// 两者取大以覆盖混合写法。
+// dedupeInts 保序去重:编号式占位符可被多个 secreton 列位复用($1,$1 / 多行 $1,$2,$1,$2),
+// 同一实参只加密一次——重复加密会产出双层密文,读取侧解一次得到密文文本(静默错值)。
+func dedupeInts(List []int) []int {
+	if len(List) < 2 {
+		return List
+	}
+	Seen := make(map[int]bool, len(List))
+	Out := List[:0]
+	for _, Item := range List {
+		if Seen[Item] {
+			continue
+		}
+		Seen[Item] = true
+		Out = append(Out, Item)
+	}
+	return Out
+}
+
+// placeholderArgCount SQL 声明的实参布局:编号式($N/:N)以最大编号为准
+// (同编号复用不增加实参,如 values ($1,$1) 只需 1 个实参);纯位置式=占位符总数。
 func placeholderArgCount(Plcs []sqlPlace) int {
-	Count := len(Plcs)
+	MaxArg := -1
+	Positional := 0
 	for _, Pl := range Plcs {
-		if Pl.Arg+1 > Count {
-			Count = Pl.Arg + 1
+		if Pl.Num {
+			if Pl.Arg+1 > MaxArg {
+				MaxArg = Pl.Arg + 1
+			}
+		} else {
+			Positional++
 		}
 	}
-	return Count
+	if MaxArg >= 0 {
+		return MaxArg
+	}
+	return Positional
 }
 
 // resolveInsertSecretArgs INSERT 形态:values 前最后一个括号组为列清单,其后为
@@ -212,7 +240,13 @@ func maskSQLLiterals(SqlQuery string) string {
 		switch Char := SqlQuery[Index]; Char {
 		case '\'', '"', '`':
 			Next := scanQuoted(SqlQuery, Index, Char)
-			for i := Index + 1; i < Next-1 && i < Size; i++ {
+			//#闭合:内容止于闭定界符之前;未闭合(scanQuoted 到串尾未遇定界符):
+			//#开口之后全部为内容,多掩一位——否则末字符残留会被误认占位符/括号
+			End := Next - 1
+			if Next >= Size && (Next-1 <= Index || SqlQuery[Next-1] != Char) {
+				End = Next
+			}
+			for i := Index + 1; i < End && i < Size; i++ {
 				Buf[i] = ' '
 			}
 			Index = Next
@@ -319,10 +353,12 @@ func splitTopLevel(Segment string) [][2]int {
 	return append(Out, [2]int{Start, len(Segment)})
 }
 
-// sqlPlace 一个占位符:Arg 为对应实参下标($N/:N → N-1,? → 出现序),Pos 为掩码副本位置。
+// sqlPlace 一个占位符:Arg 为对应实参下标($N/:N → N-1,? → 出现序),Pos 为掩码副本
+// 位置,Num 标记编号式(实参布局以最大编号计,复用同编号不增加实参)。
 type sqlPlace struct {
 	Arg int
 	Pos int
+	Num bool
 }
 
 // scanPlaceholders 收集掩码副本代码区全部占位符(? 按出现序,$N/:N 按编号-1)。
@@ -346,7 +382,7 @@ func scanPlaceholders(Masked string) []sqlPlace {
 			if eror != nil {
 				continue
 			}
-			List = append(List, sqlPlace{Arg: Number - 1, Pos: i})
+			List = append(List, sqlPlace{Arg: Number - 1, Pos: i, Num: true})
 			i = End - 1
 		}
 	}
@@ -375,10 +411,11 @@ func placeAt(Plcs []sqlPlace, Pos int) (sqlPlace, bool) {
 	return sqlPlace{}, false
 }
 
-// hookColKey 列段原文归一化为注册表键:去引号包裹,校验纯标识符字符,转小写;
-// 含其它字符(点/括号/运算符等)返回空串。
+// hookColKey 列段原文归一化为注册表键:去注释(引号感知的块/行注释剥离),去引号
+// 包裹,校验纯标识符字符,转小写;含其它字符(点/括号/运算符等)返回空串。
+// 注:纯注释段(剥离后为空)仍返回空串,由调用方按不可信形态拒绝。
 func hookColKey(Raw string) string {
-	Text := strings.TrimSpace(Raw)
+	Text := strings.TrimSpace(stripSQLComments(Raw))
 	if Text == "" {
 		return ""
 	}
@@ -392,6 +429,40 @@ func hookColKey(Raw string) string {
 		}
 	}
 	return strings.ToLower(Text)
+}
+
+// stripSQLComments 去除片段中的块注释(/*..*/,不嵌套)与行注释(--..行尾),
+// 引号串/标识符内部原样保留(复用 unilex 的 scanQuoted 语义)。
+func stripSQLComments(Raw string) string {
+	var Buf strings.Builder
+	Size := len(Raw)
+	for i := 0; i < Size; {
+		Char := Raw[i]
+		switch {
+		case Char == '\'' || Char == '"' || Char == '`':
+			Next := scanQuoted(Raw, i, Char)
+			Buf.WriteString(Raw[i:Next])
+			i = Next
+		case Char == '/' && i+1 < Size && Raw[i+1] == '*':
+			End := strings.Index(Raw[i+2:], "*/")
+			if End < 0 {
+				i = Size //#未闭合块注释:剩余全部为注释
+			} else {
+				i = i + End + 4
+			}
+		case Char == '-' && i+1 < Size && Raw[i+1] == '-':
+			End := strings.IndexByte(Raw[i:], '\n')
+			if End < 0 {
+				i = Size
+			} else {
+				i += End //#换行符保留,行注释止于行尾
+			}
+		default:
+			Buf.WriteByte(Char)
+			i++
+		}
+	}
+	return Buf.String()
 }
 
 // indexAssign 赋值段中独立 '=' 的下标(前后邻接 ><!= 的比较运算符不算)。

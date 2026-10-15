@@ -208,8 +208,8 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,且**必须覆盖全部已登记主键**(复合主键缺任何一列都会在登记期报 `LastError`;主键须先于验签登记——先 `SetKeys`/`AutoKeys` 再 `SetVerify`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。**`SetVerify` 成功即冻结主键**:此后 `SetKeys`/`AutoKeys`/`RegisterPkeys` 一律被拒并返回 `ErrPkeysFrozenAfterVerify`(**不写入任何主键**,`AutoKeys` 连元数据查询都不发起),需变更主键请重新 `RegisterClass` 后按 `[SetKeys/AutoKeys → SetVerify]` 顺序登记。保护列覆盖全部主键时,把 A 行的数据连同 MAC 一起搬到 B 行、或改写任一主键列,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
 - **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。缺省 `VerifyMacVer=0` 现在写 v2 无歧义载荷(`MAC2:`);`VerifyMacVer=2` 同样写 v2,只有显式设置 `VerifyMacVer=1` 才写旧 v1(`MAC:`)。读取按标签识别版本,存量 v1 行仍可验签。升级后新写入和更新的行自动写 v2;存量行需分批读出并更新重签,全表转为 v2 后才获得完整防歧义保证。
 - **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
-- **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)或验签激活时 fail-fast 报错且不执行 SQL——验签侧签名无法附带进钩子语句。功能未激活时钩子路径行为不变。
-- **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。
+- **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)或验签激活时 fail-fast 报错且不执行 SQL——验签侧签名无法附带进钩子语句。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**
+- **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。 **完整契约见 §4.2**
 
 ##### 4.1.存量数据鉴别与迁移
 
@@ -238,6 +238,47 @@ for i := range users {
 **立即生效**(不会静默沿用旧派生密钥)。但密文格式只内嵌「盐 + 迭代数」、**不含密钥标识**,
 因此轮换后**旧密钥写出的存量密文将无法再解密**——轮换必须配套迁移(用旧密钥读出、
 用新密钥重写),或自行以 `SecretHook` 接管以实现多密钥共存。
+
+##### 4.2.钩子 SQL 形态契约(加密/验签激活时)
+
+自定义 SQL 钩子会绕过引擎默认的列组装,因此**加密侧的"哪些实参要加密"、验签侧的"签名放哪"都必须由引擎解析钩子语句得出**。下表是引擎的实际判定(实测覆盖,见 `UniHookSql_test.go` 与 `write_hook_guard_test.go`)。
+
+| 场景 | 行为 |
+| --- | --- |
+| **验签激活**(`SetVerify` 且引擎 `VerifyOn` 开) | **一律报错且不执行 SQL** —— 钩子语句无法附带 MAC 伴随列,读侧那行本就无法验签 |
+| 加密未激活,或该表无加密列 | **不干预**,与默认路径完全一致(升级不影响既有钩子) |
+| 加密激活且表含加密列 | 解析钩子 SQL 的"列→实参"映射 → **就地加密**加密列实参 → 执行 |
+
+**可解析形态**(会执行,且自动加密):
+
+```sql
+INSERT INTO t (c1, c2, ...) VALUES (?, ?), (?, ?)   -- 单行或多行;占位符 ? / $N / :N 均可
+UPDATE t SET c1 = ?, c2 = ? WHERE k = ?             -- 每个赋值段右值须为单个占位符
+```
+
+- 列名可加双引号/反引号,大小写不敏感;`/* */` 与 `--` 注释在列清单内外均无影响(取列名前按引号感知语义剥离)
+- **编号式同编号复用**(`values ($1,$1)`、多行 `$1,$2,$1,$2`)→ 该实参只加密一次;实参布局按去重编号计(与 lib/pq·pgx·godror 的 NumInput 同口径)
+- **非加密列**可赋字面量或表达式(`SET remark='x'`),引擎不处理
+- **`WHERE` 段不参与映射**:主键实参保持明文(否则密文无法与库中存量匹配)
+
+**不可解析形态 → 报错且不执行 SQL**(fail-fast,**不会静默写明文**):
+
+| 形态 | 例子 |
+| --- | --- |
+| 加密列赋字面量或表达式 | `SET password='x'`、`SET password=upper(?)` |
+| VALUES 组内含非占位符 | `VALUES (?, now())`、`VALUES ('u', ?)` |
+| 组内占位符数与列清单长度不符 | `INSERT INTO t (a,b) VALUES (?,?,?)` |
+| 无列清单 | `INSERT INTO t VALUES (?,?)` |
+| 实参数与 SQL 声明不符 | SQL 声明 4 个实参、只给 3 个 |
+| **尾部子句** | `... ON DUPLICATE KEY UPDATE password=?`、`... RETURNING id`、`ON CONFLICT` |
+| 其它语句形态 | `MERGE`、`INSERT ... SELECT`、无顶层 `values`/`set` 的语句 |
+| 加密列实参非 string/[]byte | 例如传 `time.Time` |
+
+> 注意上表"尾部子句"一行:MySQL 的 `ON DUPLICATE KEY UPDATE`、PG 的 `RETURNING`/`ON CONFLICT` 都是常见写法,**含加密列时须改写为可解析形态**(或对该表关闭加密)。这比旧版"静默写明文"安全,但属于**升级时需要检查的兼容点**。
+
+**读钩子(`SetSqlResult`)**:激活验签的表返回 `ErrIncompleteVerification`(宽容/严格模式一并,且不执行 SQL);激活加密列的表,加密列结果在交接钩子前已由引擎解密,钩子拿到明文。
+
+> 早期版本的两处已知边界(列清单内注释被保守拒绝、未闭合字面量末字符未掩码)已修复:注释在取列名前剥离,未闭合区间整体掩码(见 `UniHookSql_test.go` 测试8/测试10 与 `write_hook_guard_test.go`)。
 
 ##### 5.从旧版本迁移(SpecialInsert → CopyIn)
 
