@@ -11,7 +11,7 @@
 ### 行为修复
 
 - **写钩子与加密/验签共存时 fail-fast**(行为收紧，曾为静默绕过):`Update`/`Insert`/`InsertL` 走自定义 SQL 写钩子(`HasGetSqlUpdate`/`HasGetSqlInsert`/`HasGetSqlInsertL`/`HasSetSqlValues*`)时，钩子自产的语句与实参不受引擎控制——secreton 列会以**明文**写库、MAC 伴随列是否落库全凭钩子实现，等于绕过 `secretEncrypt`/`verifySignRow`。现当表存在激活的加密列(`SecretOn=1` 且有 secreton 列)或验签(`VerifyOn` + 表 `VerifyOn` 生效)时，这些方法直接返回错误并**不执行任何 SQL**;`SaveIt`/`SaveItWhenNotExist` 的钩子类经 count-then-dispatch 回退同样被拦。功能未激活时(`SecretOn=0` 且未验签)钩子路径放行不变。修复方式:去掉写钩子改走默认构建，或对该表关闭相应功能;不存在引擎侧自动改写钩子实参的可靠手段(列与实参的对应关系只有钩子作者知道)。
-- **读钩子与加密/验签共存时 fail-fast**(行为收紧，与写钩子同批同哲学):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时引擎整行放行——验签侧此前仅严格模式(`VerifyMode=2`)拒绝，**宽容模式(缺省)下激活验签的表经钩子读取的行一律静默免验签**(连 MAC 列齐全的有效行也不验);加密侧钩子拿到的是**原始密文**，引擎侧解密不生效。现激活验签时(无论宽容/严格)返回 `ErrIncompleteVerification`，激活加密列时报错指明被绕过的 secreton 列，两者均**不执行 SQL**;功能未激活时钩子路径放行不变(既有 `TestSelectLHookSetSqlResult` 场景不受影响)。
+- **读钩子与加密/验签**(行为收紧，与写钩子同批):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——**验签侧**:激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(此前仅严格模式拒绝，宽容模式下钩子行一律静默免验签，连 MAC 列齐全的有效行也不验)；**加密侧**:secreton 结果列在交接钩子前由引擎解密(曾静默交原始密文)，钩子与默认解码路径拿同一口径的明文数据，解密失败报错中断整次查询，`SecretOn=0` 时与默认路径同口径不解密。
 
 ## master-20261014
 
