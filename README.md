@@ -208,6 +208,8 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - **防密文搬移请配合 `SetVerify`**(设计边界):GCM 只保证「单个密文未被篡改」,不绑定「密文属于哪一行哪一列」——库内把 A 行的密文贴到 B 行,纯加密路径读取时不会发现。行级绑定防护由存储完整性校验承担:`SetVerify` 的 HMAC 载荷域分隔含表名、覆盖**登记顺序的保护列**,且**必须覆盖全部已登记主键**(复合主键缺任何一列都会在登记期报 `LastError`;主键须先于验签登记——先 `SetKeys`/`AutoKeys` 再 `SetVerify`;确有理由不绑定行标识时可先置 `TUniTable.VerifyUnkeyed=true` 自行承担风险)。**`SetVerify` 成功即冻结主键**:此后 `SetKeys`/`AutoKeys`/`RegisterPkeys` 一律被拒并返回 `ErrPkeysFrozenAfterVerify`(**不写入任何主键**,`AutoKeys` 连元数据查询都不发起),需变更主键请重新 `RegisterClass` 后按 `[SetKeys/AutoKeys → SetVerify]` 顺序登记。保护列覆盖全部主键时,把 A 行的数据连同 MAC 一起搬到 B 行、或改写任一主键列,读取时验签必失败。加密 + SetVerify 同时启用即闭合该攻击面;纯加密场景请知晓此边界
 - **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。缺省 `VerifyMacVer=0` 现在写 v2 无歧义载荷(`MAC2:`);`VerifyMacVer=2` 同样写 v2,只有显式设置 `VerifyMacVer=1` 才写旧 v1(`MAC:`)。读取按标签识别版本,存量 v1 行仍可验签。升级后新写入和更新的行自动写 v2;存量行需分批读出并更新重签,全表转为 v2 后才获得完整防歧义保证。
 - **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
+- **写钩子与加密/验签互斥**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,secreton 加密与 MAC 签名无法作用于钩子自产的语句与实参;表存在激活的加密列(`SecretOn=1` 且有 secreton 列)或验签时这些方法直接报错且不执行 SQL,需去掉写钩子或对该表关闭相应功能。功能未激活时钩子路径行为不变。
+- **读钩子与加密/验签互斥**(与写钩子同规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时引擎整行放行——激活验签的表(无论宽容/严格模式)返回 `ErrIncompleteVerification`,激活加密列的表报错指明被绕过的 secreton 列(钩子拿到的是原始密文,引擎侧解密不生效);两者均不执行 SQL。功能未激活时钩子路径行为不变。
 
 ##### 4.1.存量数据鉴别与迁移
 

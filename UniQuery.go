@@ -63,8 +63,19 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	if UniTable == nil {
 		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
-	if HasHook && this.verifyActive(UniTable) && this.verifyStrict() {
-		return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
+	//#读钩子守卫(与写钩子同哲学,UniWrite.hookIntegrityGuard):结果钩子接管整行
+	//#填充,引擎侧验签与解密对钩子路径均不生效,激活态下放行等于静默免验签/
+	//#静默交密文,故 fail-fast。
+	if HasHook {
+		//#验签:严格/宽容模式一并拒绝——宽容跳过验签是给"无标签存量行"的回填期
+		//#语义,不是给接管整行的结果钩子的(投影哪些列都不经引擎,无从判断可验性)
+		if this.verifyActive(UniTable) {
+			return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
+		}
+		//#加密:钩子拿到的是原始密文,引擎侧解密不生效
+		if this.SecretOn == 1 && len(UniTable.ColSecret) > 0 {
+			return fmt.Errorf("UniEngine: table [%s] takes the custom result hook path, which bypasses engine-side secreton column [%s] decryption; drop the result hook or disable the feature for this table", UniTable.TableName, UniTable.ColSecret[0].FieldName)
+		}
 	}
 
 	this.sqlDebug("select", SqlQuery, Args)
