@@ -63,19 +63,12 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	if UniTable == nil {
 		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
-	//#读钩子守卫(与写钩子同哲学,UniWrite.hookIntegrityGuard):结果钩子接管整行
-	//#填充,引擎侧验签与解密对钩子路径均不生效,激活态下放行等于静默免验签/
-	//#静默交密文,故 fail-fast。
-	if HasHook {
-		//#验签:严格/宽容模式一并拒绝——宽容跳过验签是给"无标签存量行"的回填期
-		//#语义,不是给接管整行的结果钩子的(投影哪些列都不经引擎,无从判断可验性)
-		if this.verifyActive(UniTable) {
-			return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
-		}
-		//#加密:钩子拿到的是原始密文,引擎侧解密不生效
-		if this.SecretOn == 1 && len(UniTable.ColSecret) > 0 {
-			return fmt.Errorf("UniEngine: table [%s] takes the custom result hook path, which bypasses engine-side secreton column [%s] decryption; drop the result hook or disable the feature for this table", UniTable.TableName, UniTable.ColSecret[0].FieldName)
-		}
+	//#读钩子验签守卫:结果钩子接管整行填充,引擎侧验签对钩子路径不生效,激活态下
+	//#放行等于静默免验签,故 fail-fast。严格/宽容模式一并拒绝——宽容跳过验签是给
+	//#"无标签存量行"的回填期语义,不是给接管整行的结果钩子的(投影哪些列都不经
+	//#引擎,无从判断可验性)。加密侧不走拒绝:secreton 结果列在交接钩子前解密(见下)
+	if HasHook && this.verifyActive(UniTable) {
+		return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
 	}
 
 	this.sqlDebug("select", SqlQuery, Args)
@@ -135,6 +128,17 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 		}
 	}
 
+	//#结果钩子路径的解密列预解析:secreton 结果列在交接钩子前还原明文,
+	//#钩子与默认解码路径(EncryIdx→decryptRow)拿同一口径的数据
+	HookDecryIdx := make([]int, 0, 2)
+	if HasHook && this.SecretOn == 1 {
+		for ColIndex, ItemPara := range Column {
+			if UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]; Valid && UniField.SecretOn {
+				HookDecryIdx = append(HookDecryIdx, ColIndex)
+			}
+		}
+	}
+
 	for Rows.Next() {
 		u := reflect.New(elemType)
 
@@ -145,6 +149,25 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 
 			if eror = Rows.Scan(Values...); eror != nil {
 				return eror
+			}
+
+			//#SelectL 时对数据解密:secreton 结果列在交接钩子前还原明文,失败报错
+			//#中断整次查询;无标签存量明文经 Secret 直通,与默认路径同口径
+			for _, Idx := range HookDecryIdx {
+				Raw, ok := Fields[Idx].(string)
+				if !ok {
+					if RawBytes, IsBytes := Fields[Idx].([]byte); IsBytes {
+						Raw, ok = string(RawBytes), true
+					}
+				}
+				if !ok {
+					continue
+				}
+				PlainText, eror := this.Secret(Raw, false)
+				if eror != nil {
+					return eror
+				}
+				Fields[Idx] = PlainText
 			}
 
 			x := u.Interface().(HasSetSqlResult)

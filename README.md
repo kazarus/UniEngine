@@ -209,7 +209,7 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - **MAC 载荷版本与防碰撞迁移**(评审 Q1):v1 载荷以 `0x1f` 直接拼接保护列值,字符串值本身含 `0x1f` 时不同数据可产出相同载荷(编码歧义,非 HMAC 碰撞)。缺省 `VerifyMacVer=0` 现在写 v2 无歧义载荷(`MAC2:`);`VerifyMacVer=2` 同样写 v2,只有显式设置 `VerifyMacVer=1` 才写旧 v1(`MAC:`)。读取按标签识别版本,存量 v1 行仍可验签。升级后新写入和更新的行自动写 v2;存量行需分批读出并更新重签,全表转为 v2 后才获得完整防歧义保证。
 - **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
 - **写钩子与加密/验签互斥**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,secreton 加密与 MAC 签名无法作用于钩子自产的语句与实参;表存在激活的加密列(`SecretOn=1` 且有 secreton 列)或验签时这些方法直接报错且不执行 SQL,需去掉写钩子或对该表关闭相应功能。功能未激活时钩子路径行为不变。
-- **读钩子与加密/验签互斥**(与写钩子同规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时引擎整行放行——激活验签的表(无论宽容/严格模式)返回 `ErrIncompleteVerification`,激活加密列的表报错指明被绕过的 secreton 列(钩子拿到的是原始密文,引擎侧解密不生效);两者均不执行 SQL。功能未激活时钩子路径行为不变。
+- **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。
 
 ##### 4.1.存量数据鉴别与迁移
 
