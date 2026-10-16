@@ -396,3 +396,85 @@ func TestHookWriteGuardArgTypes(t *testing.T) {
 		t.Fatalf("被拒时不得执行 SQL: %v", d2.insertValues)
 	}
 }
+
+// #测试13:stripSQLComments——引号感知的注释剥离(列名归一化的前置步骤)
+// 契约:注释整段删除(不占位),引号段原样保留,换行保留。
+func TestStripSQLComments(t *testing.T) {
+	Cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"无注释原样", "password", "password"},
+		{"列尾块注释", "password /*c*/", "password "},
+		{"列尾紧贴块注释", "password/*c*/", "password"},
+		{"列前块注释", "/*c*/password", "password"},
+		{"列中场块注释", "a /*c*/ b", "a  b"},
+		{"纯注释段", "/*c*/", ""},
+		{"行注释到行尾(换行保留)", "password -- x\nnext", "password \nnext"},
+		{"行注释到输入尾", "password -- x", "password "},
+		{"未闭合块注释:剩余全为注释", "password /*c", "password "},
+		{"嵌套起始取首个结束符", "/* /* */", ""},
+		{"引号内的注释标记不是注释", "'a/*b*/c'", "'a/*b*/c'"},
+		{"双引号内的减号不是注释", `"a--b"`, `"a--b"`},
+		{"反引号内原样", "`a--b`", "`a--b`"},
+		{"空字面量", "''", "''"},
+		{"未闭合引号按整段引号处理", "'", "'"},
+		{"MySQL 语义:--后无空白不算注释", "password --x", "password --x"},
+		{"MySQL 语义:--后无空白(整串)", "--x", "--x"},
+		{"MySQL 语义:--到行尾算注释", "-- x", ""},
+	}
+
+	for _, C := range Cases {
+		if Got := stripSQLComments(C.in); Got != C.want {
+			t.Fatalf("%s: stripSQLComments(%q)=%q, want %q", C.name, C.in, Got, C.want)
+		}
+	}
+}
+
+// #测试14:两遍扫描的 `--` 口径必须一致(isLineComment 单一判定)
+// 掩码副本与列名剥离若对同一输入给出不同解释,"边界来自掩码、内容来自原文"的取数会错位。
+func TestLineCommentSemanticsUnified(t *testing.T) {
+	Cases := []struct {
+		in        string
+		pos       int
+		isComment bool
+	}{
+		{"a--b", 1, false},  //#MySQL 里是 a - (-b) 算术表达式
+		{"a-- b", 1, true},  //#-- 后有空白 ⇒ 注释
+		{"a--", 1, true},    //#-- 到行尾 ⇒ 注释
+		{"a--\nb", 1, true}, //#-- 后是行尾 ⇒ 注释
+		{"a-b", 1, false},   //#单减号
+		{"--x", 0, false},   //#-- 后无空白
+		{"-- x", 0, true},   //#-- 后有空白
+		{"a -- x", 2, true}, //#常规写法
+	}
+
+	for _, C := range Cases {
+		if Got := isLineComment(C.in, C.pos); Got != C.isComment {
+			t.Fatalf("isLineComment(%q,%d)=%v, want %v", C.in, C.pos, Got, C.isComment)
+		}
+
+		//#掩码:是注释则被掩掉(该位置起出现空格),否则原样
+		Masked := maskSQLLiterals(C.in)
+		if len(Masked) != len(C.in) {
+			t.Fatalf("%q 掩码长度不守恒", C.in)
+		}
+		MaskedAt := strings.TrimRight(Masked[C.pos:], " ") != strings.TrimRight(C.in[C.pos:], " ")
+		if !C.isComment && Masked != C.in {
+			t.Fatalf("%q 非注释却被掩码: %q", C.in, Masked)
+		}
+		if C.isComment && !MaskedAt && Masked == C.in {
+			t.Fatalf("%q 是注释却未被掩码: %q", C.in, Masked)
+		}
+
+		//#剥离:是注释则被移除(结果变短),否则原样
+		Stripped := stripSQLComments(C.in)
+		if C.isComment && Stripped == C.in {
+			t.Fatalf("%q 是注释却未被剥离: %q", C.in, Stripped)
+		}
+		if !C.isComment && Stripped != C.in {
+			t.Fatalf("%q 非注释却被剥离: %q → %q", C.in, C.in, Stripped)
+		}
+	}
+}
