@@ -278,3 +278,89 @@ func TestHookPathAllowedWhenNoSecretCols(t *testing.T) {
 		t.Fatalf("钩子 SQL 应原样执行: %v", d.insertValues)
 	}
 }
+
+// #①编号式占位符被多个 secreton 列位复用($1,$1 / 多行 $1,$2,$1,$2):
+// #同一实参只加密一次——重复加密会产出双层密文,读取侧解一次得到密文文本
+type hookDupSecret struct {
+	Code  string `db:"code"`
+	Code2 string `db:"code2"`
+}
+
+func TestHookDuplicateNumberedArgEncryptedOnce(t *testing.T) {
+	eng := newMockEngine(&mockDriver{})
+	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
+	eng.RegisterClass(hookDupSecret{}, "hook_dup_t").SetSecret("code", "code2")
+
+	//#单行复用:insert into t (code,code2) values ($1,$1),钩子只给 1 个实参
+	SQL1 := "insert into hook_dup_t (code,code2) values ($1,$1)"
+	Plan, Ok := resolveHookSecretArgs(eng.tableByType("UniEngine.hookDupSecret"), SQL1)
+	if !Ok || len(Plan.Idx) != 1 || Plan.Idx[0] != 0 || Plan.ArgCount != 1 {
+		t.Fatalf("复用编号应去重且实参布局=1: ok=%v plan=%+v", Ok, Plan)
+	}
+
+	//#多行复用:values ($1,$2),($1,$2),code 列的 arg1 只加密一次
+	SQL2 := "insert into hook_dup_t (code,code2) values ($1,$2),($1,$2)"
+	Plan2, Ok2 := resolveHookSecretArgs(eng.tableByType("UniEngine.hookDupSecret"), SQL2)
+	if !Ok2 || len(Plan2.Idx) != 2 || Plan2.Idx[0] != 0 || Plan2.Idx[1] != 1 || Plan2.ArgCount != 2 {
+		t.Fatalf("多行复用应去重: ok=%v plan=%+v", Ok2, Plan2)
+	}
+
+	//#端到端:单层加解密往返应还原(双层加密会解出 ENC: 文本而非明文)
+	eng3 := newMockEngine(&mockDriver{})
+	eng3.SecretOn = 1
+	eng3.SecretBy = "hook-encrypt-test-key"
+	Value, eror := eng3.Secret("p", true)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	Value2, eror := eng3.Secret(Value, false)
+	if eror != nil || Value2 != "p" {
+		t.Fatalf("单层加解密往返应还原: %v", eror)
+	}
+}
+
+// #②列清单/SET 段内的注释不应导致整个写入被拒
+type hookCmtUser struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+func TestHookColumnListCommentAccepted(t *testing.T) {
+	eng := newMockEngine(&mockDriver{})
+	eng.SecretOn = 1
+	eng.SecretBy = "hook-encrypt-test-key"
+	eng.RegisterClass(hookCmtUser{}, "hook_cmt_t").SetKeys("user_name").SetSecret("password")
+
+	//#INSERT 列清单内注释
+	SQL1 := "insert into hook_cmt_t (user_name, /* secret col */ password) values (?,?)"
+	Plan, Ok := resolveHookSecretArgs(eng.tableByType("UniEngine.hookCmtUser"), SQL1)
+	if !Ok || len(Plan.Idx) != 1 || Plan.Idx[0] != 1 {
+		t.Fatalf("列清单含注释应可解析且定位 password: ok=%v plan=%+v", Ok, Plan)
+	}
+
+	//#UPDATE SET 段内注释
+	SQL2 := "update hook_cmt_t set /* audit */ password=? where user_name=?"
+	Plan2, Ok2 := resolveHookSecretArgs(eng.tableByType("UniEngine.hookCmtUser"), SQL2)
+	if !Ok2 || len(Plan2.Idx) != 1 || Plan2.Idx[0] != 0 {
+		t.Fatalf("SET 段含注释应可解析: ok=%v plan=%+v", Ok2, Plan2)
+	}
+}
+
+// #③未闭合字面量的掩码不得残留末字符(否则末尾 ? 被误检为占位符)
+func TestMaskUnclosedLiteralNoPhantomPlaceholder(t *testing.T) {
+	sql := "insert into t (code) values ('unclosed?"
+	Masked := maskSQLLiterals(sql)
+	if last := Masked[len(Masked)-1]; last != ' ' {
+		t.Fatalf("未闭合字面量末字符应被掩码: tail=%q", Masked[len(Masked)-3:])
+	}
+	if Plcs := scanPlaceholders(Masked); len(Plcs) != 0 {
+		t.Fatalf("字面量内 ? 不应被误检为占位符: %+v", Plcs)
+	}
+
+	//#闭合字面量行为不变:闭定界符保留,内部掩码
+	closed := maskSQLLiterals("values ('a?b','x')")
+	if strings.Count(closed, "?") != 0 {
+		t.Fatalf("闭合字面量内部不应残留: %q", closed)
+	}
+}

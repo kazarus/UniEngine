@@ -15,9 +15,12 @@ import (
 	"strings"
 )
 
-// hookSecretPlan 解析产物:Idx 为待加密实参下标(多行 VALUES 逐行展开);
-// ArgCount 为 SQL 声明的实参布局(位置式=占位符总数,编号式=最大编号),调用方
-// 以其与 len(args) 比对,防止"一组 VALUES 配多行实参"之类的错位。
+// hookSecretPlan 解析产物:Idx 为待加密实参下标,已**保序去重**。
+// 展开顺序为**列优先**(外层遍历列清单、内层遍历 VALUES 组):同一编号占位符服务多个
+// 列位时只出现一次。顺序不影响结果——调用方按集合就地加密每个下标。
+// ArgCount 为 SQL 声明的实参布局:位置式=占位符总数,编号式=最大编号(与 lib/pq·pgx
+// 的 NumInput 同口径,同编号复用不增加实参);调用方以其与 len(args) 比对,
+// 防止"一组 VALUES 配多行实参"之类的错位。
 type hookSecretPlan struct {
 	Idx      []int
 	ArgCount int
@@ -174,7 +177,8 @@ func resolveInsertSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, ValuesPos
 		return hookSecretPlan{}, false
 	}
 
-	Plan := hookSecretPlan{ArgCount: len(Plcs)}
+	//#ArgCount 由调用方按 placeholderArgCount 统一赋值(本函数只产出 Idx)
+	Plan := hookSecretPlan{}
 	for j, ColKey := range Cols {
 		if !secretOf(ColKey) {
 			continue
@@ -251,7 +255,7 @@ func maskSQLLiterals(SqlQuery string) string {
 			}
 			Index = Next
 		case '-':
-			if Index+1 < Size && SqlQuery[Index+1] == '-' && (Index+2 >= Size || isBlank(SqlQuery[Index+2])) {
+			if isLineComment(SqlQuery, Index) {
 				Next := Index
 				for Next < Size && SqlQuery[Next] != '\n' {
 					Next++
@@ -286,6 +290,21 @@ func maskSQLLiterals(SqlQuery string) string {
 		}
 	}
 	return string(Buf)
+}
+
+// isLineComment 判断 Pos 处是否开启行注释。**两遍扫描共用本判定**——掩码副本
+// (`maskSQLLiterals`)与列名剥离(`stripSQLComments`)必须对同一输入给出同一解释,
+// 否则"掩码认为不是注释、剥离认为是注释"会造成边界与内容不一致。
+//
+// 口径取 MySQL 语义:`--` 之后须为空白或行尾才算注释(ANSI/PG 无此要求)。
+// 取该方向是为了**保守**:`a--b` 在 MySQL 里是算术表达式,若当注释掩掉,
+// 其后可能是活代码(含占位符)会被一并掩掉 ⇒ 可能漏加密或漏映射;
+// 反之把真注释当代码,只会让形态判定更严并 fail-fast(不静默)。
+func isLineComment(Text string, Pos int) bool {
+	if Pos+1 >= len(Text) || Text[Pos] != '-' || Text[Pos+1] != '-' {
+		return false
+	}
+	return Pos+2 >= len(Text) || isBlank(Text[Pos+2])
 }
 
 // isIdentChar SQL 标识符字符(字母/数字/下划线)。
@@ -450,7 +469,7 @@ func stripSQLComments(Raw string) string {
 			} else {
 				i = i + End + 4
 			}
-		case Char == '-' && i+1 < Size && Raw[i+1] == '-':
+		case isLineComment(Raw, i): //#与掩码同口径:-- 后须空白或行尾
 			End := strings.IndexByte(Raw[i:], '\n')
 			if End < 0 {
 				i = Size
