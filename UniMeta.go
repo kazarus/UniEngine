@@ -113,6 +113,19 @@ func (this *TUniEngine) existCount(Ctx context.Context, Kind string, SQL string)
 	return Size > 0, nil
 }
 
+// mysqlDataBase 校验并返回 MySQL 元数据探测所需的库名。
+// 库名会进入 information_schema 查询的单引号字面量,必须与表名/字段名同口径白名单校验。
+func (this *TUniEngine) mysqlDataBase() (string, error) {
+	if this.DataBase == "" {
+		return "", errors.New("UniEngine: database is not specified")
+	}
+	if !validIdent(this.DataBase) {
+		return "", fmt.Errorf("%w: %s", ErrInvalidDataBase, this.DataBase)
+	}
+
+	return this.DataBase, nil
+}
+
 func (this *TUniEngine) ExistTable(TableName string) (bool, error) {
 	return this.ExistTableCtx(context.Background(), TableName)
 }
@@ -132,10 +145,11 @@ func (this *TUniEngine) ExistTableCtx(Ctx context.Context, TableName string) (bo
 	case FmORACLE:
 		SQL = TExistTable4ORACLE{}.GetSqlExistTable(this, TableName)
 	case FmMYSQLN:
-		if this.DataBase == "" {
-			return false, errors.New("UniEngine: database is not specified")
+		DataBase, eror := this.mysqlDataBase()
+		if eror != nil {
+			return false, eror
 		}
-		SQL = TExistTable4MYSQLN{}.GetSqlExistTable(this, TableName, this.DataBase)
+		SQL = TExistTable4MYSQLN{}.GetSqlExistTable(this, TableName, DataBase)
 	}
 
 	return this.existCount(Ctx, "existtable", SQL)
@@ -160,10 +174,11 @@ func (this *TUniEngine) ExistViewsCtx(Ctx context.Context, TableName string) (bo
 	case FmORACLE:
 		SQL = TExistTable4ORACLE{}.GetSqlExistViews(this, TableName)
 	case FmMYSQLN:
-		if this.DataBase == "" {
-			return false, errors.New("UniEngine: database is not specified")
+		DataBase, eror := this.mysqlDataBase()
+		if eror != nil {
+			return false, eror
 		}
-		SQL = TExistTable4MYSQLN{}.GetSqlExistViews(this, TableName, this.DataBase)
+		SQL = TExistTable4MYSQLN{}.GetSqlExistViews(this, TableName, DataBase)
 	}
 
 	return this.existCount(Ctx, "existviews", SQL)
@@ -174,8 +189,11 @@ func (this *TUniEngine) ExistField(TableName, FieldName string) (bool, error) {
 }
 
 func (this *TUniEngine) ExistFieldCtx(Ctx context.Context, TableName, FieldName string) (bool, error) {
-	if !validIdent(TableName) || !validIdent(FieldName) {
-		return false, errors.New("UniEngine: invalid table/field name: " + TableName + "." + FieldName)
+	if !validIdent(TableName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
+	}
+	if !validColumnName(FieldName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidFieldName, FieldName)
 	}
 
 	var SQL string
@@ -188,10 +206,11 @@ func (this *TUniEngine) ExistFieldCtx(Ctx context.Context, TableName, FieldName 
 	case FmORACLE:
 		SQL = TExistField4ORACLE{}.GetSqlExistField(this, TableName, FieldName)
 	case FmMYSQLN:
-		if this.DataBase == "" {
-			return false, errors.New("UniEngine: database is not specified")
+		DataBase, eror := this.mysqlDataBase()
+		if eror != nil {
+			return false, eror
 		}
-		SQL = TExistField4MYSQLN{}.GetSqlExistField(this, TableName, FieldName, this.DataBase)
+		SQL = TExistField4MYSQLN{}.GetSqlExistField(this, TableName, FieldName, DataBase)
 	}
 
 	return this.existCount(Ctx, "existfield", SQL)
@@ -217,19 +236,12 @@ func (this *TUniEngine) ExistConstCtx(Ctx context.Context, ConstType TConstType,
 	case FmORACLE:
 		SQL = TExistConst4ORACLE{}.GetSqlExistConst(this, ConstType, ConstName)
 	case FmMYSQLN:
-		if this.DataBase == "" {
-			return false, errors.New("UniEngine: database is not specified")
+		DataBase, eror := this.mysqlDataBase()
+		if eror != nil {
+			return false, eror
 		}
-		SQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, ConstType, ConstName, this.DataBase)
+		SQL = TExistConst4MYSQLN{}.GetSqlExistConst(this, ConstType, ConstName, DataBase)
 	}
 
 	return this.existCount(Ctx, "existconst", SQL)
 }
-
-// ---------------------------------------------------------------------------
-// 语句/事务管理
-// ---------------------------------------------------------------------------
-
-// prepareCtx 在当前事务(若有)或连接池上预备语句。
-// 语句是局部变量,不再保存到引擎——这是并发安全的关键:查询路径不共享可变状态。
-// 返回的语句由调用方负责 Close。

@@ -28,4 +28,10 @@ var (
 	// ErrPkeysFrozenAfterVerify SetVerify 成功后主键集合即冻结(主键须全部纳入保护列,
 	// 事后追加会绕过该保证);需变更主键请重新 RegisterClass 后再按序登记
 	ErrPkeysFrozenAfterVerify = errors.New("UniEngine: pkeys are frozen after SetVerify")
+	// ErrNoDatabase 引擎未装配 *sql.DB;查询/写入/事务入口在执行前返回本错误而非 panic
+	ErrNoDatabase = errors.New("UniEngine: Db is nil")
+	// ErrInvalidDataBase MySQL 元数据探测使用的库名不合法(防注入白名单)
+	ErrInvalidDataBase = errors.New("UniEngine: invalid database name")
+	// ErrMultipleRows 标量查询(SelectD/SelectF/SelectS)返回多行;此类入口只接受单行结果
+	ErrMultipleRows = errors.New("UniEngine: scalar query returned more than one row")
 )

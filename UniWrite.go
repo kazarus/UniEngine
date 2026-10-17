@@ -133,10 +133,10 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, Ok := v.Interface().(HasGetSqlUpdate); Ok {
+	if x, Ok := hookOf[HasGetSqlUpdate](v); Ok {
 		SqlQuery = x.GetSqlUpdate(this, TablName)
 	}
-	if x, Ok := v.Interface().(HasSetSqlValues); Ok {
+	if x, Ok := hookOf[HasSetSqlValues](v); Ok {
 		x.SetSqlValues(this, EtUpdate, &SqlValue)
 	}
 
@@ -223,10 +223,10 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, Ok := v.Interface().(HasGetSqlInsert); Ok {
+	if x, Ok := hookOf[HasGetSqlInsert](v); Ok {
 		SqlQuery = x.GetSqlInsert(this, TablName)
 	}
-	if x, Ok := v.Interface().(HasSetSqlValues); Ok {
+	if x, Ok := hookOf[HasSetSqlValues](v); Ok {
 		x.SetSqlValues(this, EtInsert, &SqlValue)
 	}
 
@@ -308,11 +308,13 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
-	if x, Ok := v.Index(0).Interface().(HasGetSqlInsertL); Ok {
+	//#钩子按首行探测;slice 元素可寻址,指针接收者实现同样可被识别
+	First := v.Index(0)
+	if x, Ok := hookOf[HasGetSqlInsertL](First); Ok {
 		SqlQuery = x.GetSqlInsertL(this, TablName, int64(v.Len()))
 	}
 
-	if x, Ok := v.Index(0).Interface().(HasSetSqlValuesL); Ok {
+	if x, Ok := hookOf[HasSetSqlValuesL](First); Ok {
 		for m := 0; m < v.Len(); m++ {
 			f := v.Index(m)
 			x.SetSqlValuesL(this, EtInsert, f, &SqlValue)

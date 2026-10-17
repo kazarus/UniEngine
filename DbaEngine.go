@@ -265,6 +265,9 @@ func (this TExistTable4ORACLE) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 type TExistTable4MYSQLN struct{}
 
 func (this TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
+	if !validIdent(TableName) || !validIdent(DataBase) {
+		return ""
+	}
 	Result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
@@ -272,6 +275,9 @@ func (this TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableNa
 }
 
 func (this TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string, DataBase string) string {
+	if !validIdent(TableName) || !validIdent(DataBase) {
+		return ""
+	}
 	Result := "select count(*) from information_schema.views t where lower(table_name)='%s' and table_schema='%s'"
 
 	//#全部换成小写
@@ -311,6 +317,9 @@ func (this TExistField4ORACLE) GetSqlExistField(UniEngineEx *TUniEngine, TableNa
 type TExistField4MYSQLN struct{}
 
 func (this TExistField4MYSQLN) GetSqlExistField(UniEngineEx *TUniEngine, TableName string, FieldName string, DataBase string) string {
+	if !validIdent(TableName) || !validColumnName(FieldName) || !validIdent(DataBase) {
+		return ""
+	}
 	Result := "select count(*) as value from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_name='%s'"
 
 	return fmt.Sprintf(Result, DataBase, TableName, FieldName)
@@ -379,6 +388,9 @@ type TExistConst4MYSQLN struct{}
 
 // #MySQL:命名约束在 information_schema.table_constraints;默认值在 information_schema.columns,按列名查
 func (this TExistConst4MYSQLN) GetSqlExistConst(UniEngineEx *TUniEngine, ConstType TConstType, ConstName string, DataBase string) string {
+	if !validIdent(ConstName) || !validIdent(DataBase) {
+		return ""
+	}
 	switch ConstType {
 	case CtPK:
 		return fmt.Sprintf("select count(*) from information_schema.table_constraints where constraint_name='%s' and constraint_type='PRIMARY KEY' and table_schema='%s'", ConstName, DataBase)
@@ -437,6 +449,12 @@ type TAutoKeys4MYSQLN struct {
 func (this TAutoKeys4MYSQLN) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
 	if this.DataBase == "" {
 		return "", fmt.Errorf("UniEngine: you should specify attribute [database] when using mysql.")
+	}
+	if !validIdent(this.DataBase) {
+		return "", fmt.Errorf("%w: %s", ErrInvalidDataBase, this.DataBase)
+	}
+	if !validIdent(TableName) {
+		return "", fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
 	}
 	Result := "select column_name as field_name from information_schema.columns where 1=1 and table_schema='%s' and table_name='%s' and column_key='PRI'"
 

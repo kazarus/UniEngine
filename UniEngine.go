@@ -29,9 +29,10 @@ type TUniEngine struct {
 
 	Db *sql.DB
 
-	mu       *sync.RWMutex //#保护 HashTabl 与事务状态（指针:与 secret 同为共享态;按值拷贝已由 noCopy 拦截）
-	ColLabel string        //#字段字号
-	ColParam string        //#参数符号
+	mu       sync.RWMutex //#保护 HashTabl 与事务状态(值类型:零值即可用,不再需要包级懒初始化锁)
+	txGate   sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询)
+	ColLabel string       //#字段字号
+	ColParam string       //#参数符号
 	HashTabl map[string]*TUniTable
 
 	SecretOn   int64       //#开启敏感信息加密
@@ -86,8 +87,8 @@ type TUniEngine struct {
 // 在静态检查阶段拦下 TUniEngine 的按值拷贝。
 //
 // 为什么必须禁止按值拷贝:拷贝会复制 Db/ColLabel/ColParam/Provider/tx/inTx 等值字段,
-// 而 mu/secret 是指针字段(拷贝时共享),于是副本与原件出现"锁共享、事务状态不共享"的
-// 错配——副本 Begin 后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。
+// 以及内嵌的 mu/txGate,于是副本与原件出现"锁各自一份、事务状态各自一份"的错配——
+// 副本 Begin 后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。
 //
 // 作为具名字段(非匿名嵌入)使用,故不会把 Lock/Unlock 提升到 TUniEngine 上;
 // 按值拷贝会被报告为:
@@ -101,28 +102,13 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
-// muLazy 保护各引擎 mu 的懒初始化（仅覆盖建锁窗口，不护业务临界区）
-var muLazy sync.Mutex
-
-// initLock 保证 this.mu 已创建（并发安全；供 Initialize 与 lockTables 调用）
-func (this *TUniEngine) initLock() {
-	muLazy.Lock()
-	defer muLazy.Unlock()
-
-	if this.mu == nil {
-		this.mu = &sync.RWMutex{}
-	}
-}
-
-// lockTables 保证锁可用并加写锁（注册/表结构变更/事务状态变更）
+// lockTables 加写锁（注册/表结构变更/事务状态变更）
 func (this *TUniEngine) lockTables() {
-	this.initLock()
 	this.mu.Lock()
 }
 
-// rlockTables 保证锁可用并加读锁（注册表/事务状态查询）
+// rlockTables 加读锁（注册表/事务状态查询）
 func (this *TUniEngine) rlockTables() {
-	this.initLock()
 	this.mu.RLock()
 }
 
@@ -147,7 +133,7 @@ func (this *TUniEngine) tableByName(TableName string) *TUniTable {
 	return this.HashTabl[strings.ToLower(TableName)]
 }
 
-// currentTx 返回当前事务（无事务时 nil）；读锁保护，与 Begin/Commit/Cancel 互斥
+// currentTx 返回当前事务（无事务时 nil）；读锁只护状态读取,生命周期操作由 txGate 串行
 func (this *TUniEngine) currentTx() *sql.Tx {
 	this.rlockTables()
 	defer this.mu.RUnlock()
@@ -159,7 +145,8 @@ func (this *TUniEngine) currentTx() *sql.Tx {
 	return nil
 }
 
-// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/字段名拼接前防注入
+// validIdent 校验数据库标识符仅含安全字符（字母/数字/下划线/点），用于表名/约束名拼接前防注入。
+// 点号只对表名有语义(schema.table);列名请使用 validColumnName,否则 "a.b" 会被引成 schema 限定引用。
 func validIdent(name string) bool {
 	if name == "" {
 		return false
@@ -172,6 +159,22 @@ func validIdent(name string) bool {
 	}
 
 	return true
+}
+
+// validColumnName 校验列名:比 validIdent 更严格,不允许点号。
+// 列名不是 SQL 标识符路径,"a.b" 若放行会被 quoteIdent 拆成 "a"."b",
+// 在 PG/Oracle 下静默指向另一个 schema 的列。
+func validColumnName(name string) bool {
+	return validIdent(name) && !strings.Contains(name, ".")
+}
+
+// ensureDb 执行入口的统一装配校验:未设置 Db 时返回 ErrNoDatabase,而非在 database/sql 内空指针 panic。
+func (this *TUniEngine) ensureDb() error {
+	if this.Db == nil {
+		return ErrNoDatabase
+	}
+
+	return nil
 }
 
 // nilParamOf 公共入口的 nil 参数统一校验:裸 nil 与 typed nil 均返回 ErrNilParam 包装错误。
@@ -299,14 +302,30 @@ func (this *TUniEngine) getSqlQuery(SqlQuery string, Args ...interface{}) (strin
 	return SqlQuery, Args, nil
 }
 
-// sqlDebug 统一的 SQL 调试输出（runDebug 开启时）
+// sqlDebug 统一的 SQL 调试输出（runDebug 开启时）。
+// 只打印语句与实参个数,不打印实参值:加密前的明文密码/证件号等会随实参进入日志,
+// 而调试开关常在生产排障时临时打开。需要看具体值请在应用侧脱敏后自行记录。
 func (this *TUniEngine) sqlDebug(Kind string, SqlQuery interface{}, Args interface{}) {
 	if !this.debugging() {
 		return
 	}
 
 	fmt.Printf("UniEngine: %s.sql: %v\n", Kind, SqlQuery)
-	fmt.Printf("UniEngine: %s.val: %v\n", Kind, Args)
+	fmt.Printf("UniEngine: %s.args: %d (values redacted)\n", Kind, argCountOf(Args))
+}
+
+// argCountOf 返回一次调用的实参个数(兼容单行 []interface{} 与 COPY 的 [][]interface{})
+func argCountOf(Args interface{}) int {
+	switch Value := Args.(type) {
+	case nil:
+		return 0
+	case []interface{}:
+		return len(Value)
+	case [][]interface{}:
+		return len(Value)
+	}
+
+	return 0
 }
 
 // ProviderName 返回驱动名称。SQL Server 在配置 ProvideName 后返回该声明;
@@ -394,6 +413,9 @@ func (this *TUniEngine) prepareCtx(Ctx context.Context, SqlQuery string) (*sql.S
 	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
 		return nil, eror
 	}
+	if eror := this.ensureDb(); eror != nil {
+		return nil, eror
+	}
 	if tx := this.currentTx(); tx != nil {
 		return tx.PrepareContext(Ctx, SqlQuery)
 	}
@@ -409,60 +431,86 @@ func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
 	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
 		return eror
 	}
-	this.lockTables()
-	defer this.mu.Unlock()
 
-	// 重复 Begin 会让上一个事务失去引用(悬挂/泄漏),此处显式拒绝
+	//#txGate 串行化事务生命周期操作;驱动调用的网络等待不持有 mu,
+	//#查询路径只会在 mu 的短临界区内取事务指针,不会排在 BeginTx 后面。
+	this.txGate.Lock()
+	defer this.txGate.Unlock()
+
+	this.lockTables()
+
+	// 重复 Begin 会让上一个事务失去引用(悬挂/泄漏),此处显式拒绝。
+	// 先于 Db 装配检查:重复 Begin 的语义错误不应被"Db 未设置"掩盖。
 	if this.inTx || this.tx != nil {
+		this.mu.Unlock()
 		return ErrAlreadyInTransaction
 	}
+
+	if eror := this.ensureDb(); eror != nil {
+		this.mu.Unlock()
+		return eror
+	}
+
+	this.mu.Unlock()
 
 	tx, eror := this.Db.BeginTx(Ctx, nil)
 	if eror != nil {
 		return eror
 	}
 
+	this.lockTables()
 	this.tx = tx
 	this.inTx = true
+	this.mu.Unlock()
 
 	return nil
 }
 
 func (this *TUniEngine) Cancel() error {
+	this.txGate.Lock()
+	defer this.txGate.Unlock()
+
 	this.lockTables()
-	defer this.mu.Unlock()
 
 	if !this.inTx || this.tx == nil {
+		this.mu.Unlock()
 		return ErrNoTransaction
 	}
 
+	//#先回收状态再发起网络回滚:Rollback 可能等待驱动/网络,
+	//#不能让整个注册表读写(所有查询)陪着持锁等待。
 	//#sql.Tx 一旦调用 Commit/Rollback 即进入终态:即使驱动返回错误,该事务上的
 	//#后续操作也只会得到 ErrTxDone。引擎引用必须无条件回收,而非仅在成功分支——
 	//#否则 BeginCtx 的 context 取消触发 database/sql 自动回滚后,Cancel 返回
 	//#ErrTxDone 而引擎仍滞留"事务中",实例永久不可用(评审 Q3)。
 	//#底层错误原样返回,由调用方 errors.Is 判别
-	eror := this.tx.Rollback()
+	tx := this.tx
 	this.tx = nil
 	this.inTx = false
+	this.mu.Unlock()
 
-	return eror
+	return tx.Rollback()
 }
 
 func (this *TUniEngine) Commit() error {
+	this.txGate.Lock()
+	defer this.txGate.Unlock()
+
 	this.lockTables()
-	defer this.mu.Unlock()
 
 	if !this.inTx || this.tx == nil {
+		this.mu.Unlock()
 		return ErrNoTransaction
 	}
 
 	//#同 Cancel:提交失败(驱动错误/已被超时回滚)后事务同样进入终态,
 	//#引擎引用无条件回收,实例可继续执行并重新 Begin(评审 Q3)
-	eror := this.tx.Commit()
+	tx := this.tx
 	this.tx = nil
 	this.inTx = false
+	this.mu.Unlock()
 
-	return eror
+	return tx.Commit()
 }
 
 func (this *TUniEngine) RunDebug(Value bool) error {
@@ -484,16 +532,14 @@ func (this *TUniEngine) Initialize() error {
 
 	//#并发契约:表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)
 	//#与配置字段(ColLabel/ColParam/Provider/SecretOn 等)须在并发查询开始前完成;
-	//#注册(RegisterClass/RegisterTable/...)与查询可并发
-	this.initLock()
-
+	//#注册(RegisterClass/RegisterTable/...)与查询可并发。
+	//#Initialize 不触碰事务状态:进行中的事务由调用方 Commit/Cancel 终结,
+	//#否则会出现 inTx=false 而 tx!=nil 的悬挂状态(Begin 被拒、Commit 报无事务)。
 	//#内置元数据类的登记名必须是合法标识符:注册 API 现对表名做白名单校验,
 	//#旧值 "github.com/kazarus/uniengine/unitable" 含 '/' 会被拒。
 	//#该键仅作小写别名(另以类全名 t.String() 注册),改成短名不影响任何查找路径。
 	this.RegisterClass(TUniTable{}, "unitable")
 	this.RegisterClass(TUniField{}, "unifield")
-
-	this.inTx = false
 
 	return nil
 }

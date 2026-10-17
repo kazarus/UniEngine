@@ -2,6 +2,31 @@
 
 本文档记录相对旧版（master 基线）的**破坏性变更**与主要新增，供升级参考。
 
+## master-20261017
+
+### 行为修复
+
+- **COPY 自定义列/值不再绕过加密与验签**(安全收紧,曾静默写明文):`CopyInL` 走 `HasGetSqlCopyInL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)时,钩子行曾完全跳过默认分支的 `secretEncrypt`;现按列名映射注册表,**就地加密** secreton 实参,列名不可映射、行长度不符、实参类型非 string/[]byte、返回值却无列清单时 fail-fast 不执行 COPY;验签激活时一律拒绝(钩子列清单无法保证包含 MAC 伴随列,读侧验签会静默失效)。`SecretOn=0` 且未验签时行为不变。
+- **钩子接收者统一**:`SetSqlResult`/`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`/`GetMapUnique`/COPY 钩子此前仅在部分入口识别指针接收者,同一类在 `Select` 能走钩子、`SelectL`/`Insert`/`SaveIt` 却静默生成默认 SQL。现在值接收者与 `func (u *TUser) ...` 指针接收者全入口一致。
+- **`SelectL` 整批语义落地**:查询中途失败(扫描错误/`rows.Err`)时回滚本次已追加的行,与 README/doc.go 的"整批丢弃"契约一致;调用方预置的元素保留。此前错误路径会把已扫过的行留在切片里。
+- **标量查询多行显式报错**:`SelectS`/`SelectD`/`SelectF` 曾逐行覆写目标、静默返回最后一行;现在返回 `ErrMultipleRows`,与 `Select` 的单行契约对齐。
+- **`SelectH` 拒绝 nil 键函数**:旧版把所有行折叠到键 `""`,map 静默只剩一条;现在在 map/键类型校验之后返回明确错误。
+- **`Db` 未装配不再 panic**:`prepareCtx`/`BeginCtx`/`CopyInHook` 统一返回 `ErrNoDatabase`;`Initialize()` 仍允许只做注册(便于单测),执行入口兜底。
+- **`Initialize()` 不再改写事务状态**:删除无锁的 `inTx=false`,避免 `inTx=false` 且 `tx!=nil` 的悬挂状态(Begin 报"已有事务"、Commit 报"无事务")。
+- **`AutoKeys` 短路 `LastError`**:非法表名/字段名不再进入元数据 SQL 的单引号拼接;`AutoKeys` 对 nil 引擎也显式报错。MySQL 元数据探测的 `DataBase` 纳入标识符白名单(`ErrInvalidDataBase`),各 `TExist*4MYSQLN` 生成器对非法输入返回空串(由 `existCount` 拒绝执行)。
+- **列名禁止点号**:struct tag 与 `RegisterField`/`RegisterPkeys`/`ExistField` 的字段名仅允许字母/数字/下划线(表名仍允许 `schema.table`),避免 `db:"a.b"` 被引成 `"a"."b"` 后静默指向另一 schema。
+- **`SetVerify` 登记期校验保护列类型**:`time.Time`/`[]byte` 等不被 `verifyFormat` 支持的 kind 直接写 `LastError`,不再等到首次读写才失败;提升字段(内嵌结构体)同样在登记期拒绝。
+- **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不打印实参值,避免明文密码/证件号进入日志。
+- **锁窗口收敛**:`mu` 改为内嵌 `sync.RWMutex`,删除包级 `muLazy` 懒初始化锁(每次查询不再抢全局锁);新增 `txGate` 串行化事务生命周期,`BeginTx`/`Commit`/`Rollback` 的驱动网络等待不再持注册表写锁。
+
+### 升级注意
+
+- `SelectS`/`SelectD`/`SelectF` 多行从"取最后一行"变为 `ErrMultipleRows`;条件写漏会显式失败,请补唯一性条件或改用 `SelectL`。
+- `SelectH` 的 `f` 不能为 nil;需要固定键时请传显式函数。
+- `Db` 未装配时执行入口返回 `ErrNoDatabase`(不再 panic);`Initialize()` 不再终结进行中的事务。
+- 自定义 COPY 钩子在加密/验签激活时可能被拒;请改用默认列/值路径,或先关闭该表的加密/验签。
+- 调试输出不再包含实参值;若排障确需值,请在应用侧脱敏后记录。
+
 ## master-20261015
 
 ### 新增
@@ -38,7 +63,7 @@
 
 ### 代码质量评审修复（第一批 + 第二批）
 
-依据 `CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68/100)分两批修复 6 项 P1;修复设计见 `FIX_DESIGN_BATCH2_2026-10-14.md`。
+依据 `docs/reviews/CODE_QUALITY_REVIEW_2026-10-14.md`(评分 68/100)分两批修复 6 项 P1;修复设计见 `docs/reviews/FIX_DESIGN_BATCH2_2026-10-14.md`。
 
 #### 第二批(行为变更,升级须读)
 
@@ -408,7 +433,7 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 
 ### 健壮性加固（评审 P0：消除全部反射 panic 路径）
 
-外部评估报告（`UniEngine-评估报告.md`）以探针实测确认 17 条可复现 panic 路径（13 个公共 CRUD 入口对裸 `nil`、4 处反射类型 panic），本批全部消除：
+外部评估报告（`docs/reviews/UniEngine-评估报告.md`）以探针实测确认 17 条可复现 panic 路径（13 个公共 CRUD 入口对裸 `nil`、4 处反射类型 panic），本批全部消除：
 
 - **新增哨兵 `ErrNilParam`** 与统一校验助手 `nilParamOf`：裸 `nil` 与 typed nil 统一判别返回 `ErrNilParam` 包装错误。**判断先于任何 `reflect.TypeOf/Kind`**——裸 `nil` 时 `TypeOf` 返回 nil Type，此前写路径的 typed-nil 守卫排在 `Kind()` 之后永远执行不到（根因即判断顺序）。
 - **覆盖全部 13 个入口**：写路径 7 个（经 `resolveTarget`）+ `Select`/`SelectL`/`SelectM`/`SelectH` + `InsertP`/`CopyInP`。

@@ -49,11 +49,21 @@ func (this *TUniEngine) publishTableMetadata(Old, Next *TUniTable) {
 }
 
 // identGuard 注册类 API 的统一标识符白名单校验(防注入;与 Write/Exist* 路径同一 validIdent)。
-// #运行时传入的表名/字段名一律经此校验——这些字符串会被直接拼进生成的 SQL 文本。
+// #运行时传入的表名/约束名一律经此校验——这些字符串会被直接拼进生成的 SQL 文本。
 // #Sentinel 区分语义(表名用 ErrInvalidTableName,字段名用 ErrInvalidFieldName),便于调用方 errors.Is 判别。
 func identGuard(Sentinel error, What string, Name string) error {
 	if !validIdent(Name) {
 		return fmt.Errorf("%w: %s [%s] (only letters/digits/underscore/dot are allowed); check your code;", Sentinel, What, Name)
+	}
+	return nil
+}
+
+// columnGuard 列名专用白名单:在 identGuard 基础上禁止点号。
+// 表名允许 schema.table,列名不允许——"a.b" 会被 quoteIdent 引成 "a"."b",
+// 在 PG/Oracle 下静默指向另一 schema 的同名列,而非报错。
+func columnGuard(Sentinel error, What string, Name string) error {
+	if !validColumnName(Name) {
+		return fmt.Errorf("%w: %s [%s] (only letters/digits/underscore are allowed for column names); check your code;", Sentinel, What, Name)
 	}
 	return nil
 }
@@ -114,7 +124,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 
 		//#"db:\"-\" / db:\"_\"" 是只读标记,不是列名,豁免校验(多个标记字段共存合法);其余列名走白名单
 		if UniField.FieldName != "-" && UniField.FieldName != "_" {
-			if eror := identGuard(ErrInvalidFieldName, fmt.Sprintf("RegisterClass field tag on %s", f.Name), UniField.FieldName); eror != nil {
+			if eror := columnGuard(ErrInvalidFieldName, fmt.Sprintf("RegisterClass field tag on %s", f.Name), UniField.FieldName); eror != nil {
 				return invalidTable(TableName, eror)
 			}
 
@@ -184,7 +194,7 @@ func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 	if eror := identGuard(ErrInvalidTableName, "RegisterField table name", TableName); eror != nil {
 		return invalidTable(TableName, eror)
 	}
-	if eror := identGuard(ErrInvalidFieldName, "RegisterField field name", FieldName); eror != nil {
+	if eror := columnGuard(ErrInvalidFieldName, "RegisterField field name", FieldName); eror != nil {
 		return invalidTable(TableName, eror)
 	}
 
@@ -226,7 +236,7 @@ func (this *TUniEngine) RegisterPkeys(TableName string, FieldName string) *TUniT
 	if eror := identGuard(ErrInvalidTableName, "RegisterPkeys table name", TableName); eror != nil {
 		return invalidTable(TableName, eror)
 	}
-	if eror := identGuard(ErrInvalidFieldName, "RegisterPkeys field name", FieldName); eror != nil {
+	if eror := columnGuard(ErrInvalidFieldName, "RegisterPkeys field name", FieldName); eror != nil {
 		return invalidTable(TableName, eror)
 	}
 

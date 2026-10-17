@@ -432,8 +432,11 @@ func TestSelectMHValidMapsStillWork(t *testing.T) {
 	}
 
 	VarViaPtr := map[string]p0Row{}
-	if eror := eng.SelectH(&VarViaPtr, nil, "select * from t_p0"); eror != nil || len(VarViaPtr) != 1 {
+	if eror := eng.SelectH(&VarViaPtr, func(u interface{}) string { return "k" }, "select * from t_p0"); eror != nil || len(VarViaPtr) != 1 {
 		t.Errorf("SelectH via pointer: %v len=%d", eror, len(VarViaPtr))
+	}
+	if eror := eng.SelectH(&VarViaPtr, nil, "select * from t_p0"); eror == nil || !strings.Contains(eror.Error(), "nil key function") {
+		t.Errorf("SelectH nil key function should error for a valid map, got: %v", eror)
 	}
 }
 
@@ -455,11 +458,12 @@ func TestSelectMHNamedStringKeyWorks(t *testing.T) {
 	}
 
 	NamedH := map[MyKey]p0Row{}
-	if eror := eng.SelectH(NamedH, nil, "select * from t_p0"); eror != nil {
+	NamedHook := func(u interface{}) string { return "k" }
+	if eror := eng.SelectH(NamedH, NamedHook, "select * from t_p0"); eror != nil {
 		t.Fatalf("SelectH named-string key: %v", eror)
 	}
-	if _, Valid := NamedH[""]; !Valid {
-		t.Fatalf("SelectH named-string key should be written (nil f → empty key), got %+v", NamedH)
+	if _, Valid := NamedH["k"]; !Valid {
+		t.Fatalf("SelectH named-string key should be written, got %+v", NamedH)
 	}
 }
 

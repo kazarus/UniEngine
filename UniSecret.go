@@ -112,7 +112,7 @@ func (St *secretState) cacheKeyLocked(CacheKey string, Key []byte) {
 // #deriveKey 用于写入:按"盐+迭代数+密钥指纹"缓存,容量有界。
 // #同一冷密钥的并发派生由锁串行化,后续调用可命中缓存。
 // #键必须覆盖**全部派生输入**:曾漏掉 SecretBy,导致运行时改密钥仍命中旧派生密钥,
-// #轮换既不生效也不报错(见评估报告 §4.6,回归测试 TestSecretRotateKeyTakesEffect)
+// #轮换既不生效也不报错(见 docs/reviews/CODE_QUALITY_REVIEW_2026-10-14.md §4.6,回归测试 TestSecretRotateKeyTakesEffect)
 func (this *TUniEngine) deriveKey(Salt []byte, Iter int) ([]byte, error) {
 	St := this.secretStateOf()
 	CacheKey := this.secretCacheKey(Salt, Iter)

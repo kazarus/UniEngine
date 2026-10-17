@@ -27,7 +27,7 @@
 >   `sql.NullString` / `sql.NullInt64` / pointers, or `[]byte`. The scalar helpers
 >   (`SelectS`/`SelectD`/`SelectF`) are the opposite: they scan into `sql.NullXxx`
 >   and return a zero value on `NULL`. See §3 (Chinese) for the measured matrix.
-> - **Tests**: 170+ unit tests (~88% statement coverage, mock driver) plus
+> - **Tests**: 229 unit tests (~89% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
 >
@@ -167,9 +167,10 @@ eror = UniEngineEx.InsertCtx(ctx, &row)
 
 - 结构体入口 `Select` / `SelectL` / `SelectM` / `SelectH` 遇 NULL 即失败,错误形如
   `sql: Scan error on column index 1, name "v": converting NULL to string is unsupported`。
-  该错误**只给列下标与列名、不含行号**,多行结果时无法据此定位是哪一行;`SelectL` 会**整批返回空**(已扫过的行一并丢弃)。
-- **标量入口相反、是宽容的**:`SelectS`(内部 `sql.NullString`)、`SelectD`(`sql.NullInt64`)、
-  `SelectF`(`sql.NullFloat64`)遇 NULL **不报错**,分别返回 `""` / `0` / `0`。
+  该错误**只给列下标与列名、不含行号**,多行结果时无法据此定位是哪一行;`SelectL` 失败时**本次查询已追加的行全部回滚**(常见用法下切片返回空;调用方预置的元素保留)。
+- **标量入口对 NULL 相反、是宽容的**:`SelectS`(内部 `sql.NullString`)、`SelectD`(`sql.NullInt64`)、
+  `SelectF`(`sql.NullFloat64`)遇 NULL **不报错**,分别返回 `""` / `0` / `0`;
+  但三者只接受**单行**结果,查询返回多行时统一报 `ErrMultipleRows`(不再静默取最后一行)。
 - 结论:**列可空时请把结构体字段声明为 `sql.NullXxx` 或指针**(推荐前者,语义最明确)。
   否则一条 NULL 就会让整次 `SelectL` 失败——这是"查不出数据"最常见的原因。
 - 引擎**不提供**"NULL 自动降级为空值 / 跳过该行":前者会把 NULL 静默变成 `""`/`0`(判空与统计语义出错),
@@ -210,6 +211,9 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
 - **严格验签读取**:`VerifyMode=2` 且表启用验签时,结构体查询若缺少任一保护列或 MAC 列会返回 `ErrIncompleteVerification`;自定义结果钩子无法由引擎验签时也返回该错误。查询应投影完整受保护列及 MAC 列。
 - **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)或验签激活时 fail-fast 报错且不执行 SQL——验签侧签名无法附带进钩子语句。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**
 - **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。 **完整契约见 §4.2**
+- **COPY 钩子与加密/验签**:`CopyInL` 走 `HasGetSqlCopyInL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)自定义列/值时,引擎按列名映射注册表并**就地加密**secreton 实参;列名不可映射、行长度不符、实参类型非 string/[]byte、或返回了值却没有列清单时 fail-fast 不执行 COPY。验签激活时一律拒绝(钩子列清单无法保证包含 MAC 伴随列)。`SecretOn=0` 且未验签时行为不变。
+- **钩子接收者**:所有钩子(`SetSqlResult`/`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`/`GetMapUnique`/COPY 钩子)同时支持值接收者与指针接收者 `func (u *TUser) ...`;旧实现只在部分入口识别指针接收者,现已统一。
+- **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不再打印实参值(避免明文密码/证件号进入日志)。
 
 ##### 4.1.存量数据鉴别与迁移
 
@@ -301,7 +305,7 @@ UPDATE t SET c1 = ?, c2 = ? WHERE k = ?             -- 每个赋值段右值须�
 - **SaveIt / SaveItWhenNotExist 默认走方言原生 UPSERT**(PG `on conflict`、Oracle/SQLServer `merge`),消除 count 与写入两步之间的并发窗口;实现自定义 SQL 钩子的类与 MySQL(唯一键语义不等价)自动回退旧的 count-then-dispatch;
 - **查询补 `rows.Err()` 检查**:读取中途出错不再被静默吞掉(此前表现为"正常返回但数据截断");
 - **SQL 生成确定性**:CRUD 列序按类声明序(手工注册字段按字段名排序补齐),同一输入不再产生不同 SQL 文本,利于数据库端语句缓存;
-- **表名/字段名白名单校验**:所有**运行时传入**的表名/字段名(`RegisterClass`/`RegisterTable`/`RegisterField`/`RegisterPkeys` 的参数、写方法的 `TableName`、`Exist*`)与 **struct tag 列名**(`db:"..."`,只读标记 `-`/`_` 豁免)仅允许字母/数字/下划线/点,非法字符直接报错(`ErrInvalidTableName`/`ErrInvalidFieldName`,防注入);注册类 API 遇非法名返回**带 `LastError` 的未注册表**(链式短路,签名不变,非法名不进注册表);
+- **表名/字段名白名单校验**:所有**运行时传入**的表名/字段名(`RegisterClass`/`RegisterTable`/`RegisterField`/`RegisterPkeys` 的参数、写方法的 `TableName`、`Exist*`)与 **struct tag 列名**(`db:"..."`,只读标记 `-`/`_` 豁免)仅允许字母/数字/下划线,表名另允许点(schema.table);非法字符直接报错(`ErrInvalidTableName`/`ErrInvalidFieldName`,防注入);列名带点(`db:"a.b"`)会被引成 schema 限定引用,现于登记期拒绝;注册类 API 遇非法名返回**带 `LastError` 的未注册表**(链式短路,签名不变,非法名不进注册表);
 - **ExistViews 修正**:PostgreSQL(补 `relkind='v'`)/ SQLServer(补 `xtype='V'`)/ MySQL(改查 `information_schema.views`)不再把同名普通表误判为视图;
 - **SQLServer 主键探测**改用 `sys.indexes` 目录视图(替代老旧的 syscolumns/sysindexes 联查);
 - **RegisterClass 双 key 注册**:类同时以"小写表名"和"类全名"注册(统一 GetTable 与 SaveIt 路径的可见性)。注意:两个类注册同一表名时,小写表名 key 以后注册者为准;
@@ -324,6 +328,17 @@ go test -bench . -benchmem -run '^$'
 - **行扫描热路径**:`BenchmarkSelectLScan`(列→字段下标预解析)对比 `BenchmarkSelectLScanLegacy`(旧算法复刻:每行每列 FieldByName + HashField 查找),两者走同一 mock 传输,差值即优化净收益(Apple M3 Ultra 实测 1000 行×10 列:约 320µs vs 777µs,2.4×,分配次数少 1/3);
 - **加解密**:`BenchmarkSecretEncrypt/Decrypt`(稳定态,按 16B/256B/4KB 分档);**4KB 档实测吞吐:加密约 0.75 GB/s、解密约 1.17 GB/s**(此前文档写作 0.8-1.2 GB/s,加密档偏乐观,已按实测更正);小尺寸以固定开销为主,16B 档约 23 / 39 MB/s。另有 `BenchmarkSelectLScanDecrypt`(行扫描+逐行解密联合路径,约 0.4µs/值)、`BenchmarkSecretDecryptPlaintext`(存量明文直通,零分配);
 - **密钥派生**:`BenchmarkSecretPBKDF2DeriveCold`(600000 次迭代冷派生约 53ms,每进程每份盐只付一次)。
+
+#### 5.1.2026-10-17 升级注意
+
+- **`SelectS`/`SelectD`/`SelectF` 多行改为报错**(`ErrMultipleRows`):旧版静默取最后一行。条件写漏返回多行时现在会显式失败,请补唯一性条件或改用 `SelectL`。
+- **`SelectH` 的 `f` 不能为 nil**:旧版把所有行折叠到键 `""`,map 静默只剩一条;现在先校验 map/键类型,再拒绝 nil 键函数。
+- **`Db` 未装配返回 `ErrNoDatabase`**:查询/写入/`Begin` 不再在 `database/sql` 内空指针 panic;`Initialize()` 本身仍允许只做注册(便于单元测试),执行入口统一兜底。
+- **`Initialize()` 不再改写事务状态**:进行中的事务必须由调用方 `Commit`/`Cancel` 终结;重复调用初始化不会让实例卡在"既不能提交也不能重开"。
+- **`AutoKeys` 短路链式 `LastError`**:非法表名/字段名不会再进入元数据 SQL;MySQL 的 `DataBase` 纳入标识符白名单(`ErrInvalidDataBase`)。
+- **`SetVerify` 登记期校验保护列类型**:`time.Time`/`[]byte` 等不被 `verifyFormat` 支持的列会直接报 `LastError`,不再等到首次读写才失败。
+- **`SelectL` 的整批语义落地**:查询中途失败(扫描错误/`rows.Err`)会回滚本次已追加的行,调用方预置的元素不变。
+- **调试输出不再打印实参值**;事务的 `Begin/Commit/Rollback` 也不再持注册表写锁等待网络往返。
 
 #### 6.真实数据库集成测试
 

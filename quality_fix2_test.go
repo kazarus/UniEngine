@@ -1,5 +1,5 @@
 // quality_fix2_test
-// #第二批修复回归测试(Q1/Q2/Q5),对应设计文档 FIX_DESIGN_BATCH2_2026-10-14.md。
+// #第二批修复回归测试(Q1/Q2/Q5),对应设计文档 docs/reviews/FIX_DESIGN_BATCH2_2026-10-14.md。
 // #断言修复后的目标行为;评审探针(复现缺陷视角)复跑见批量验证步骤。
 
 package UniEngine

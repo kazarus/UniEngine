@@ -143,13 +143,13 @@ func (this *TUniEngine) upsertStmt(Mode int, TablName string, Keys, Cols []TUniF
 // canNativeSave 判断该类是否可走方言原生 UPSERT:任一自定义 SQL 钩子
 // (GetSqlUpdate/GetSqlInsert/SetSqlValues)存在时,自定义语句无法转为 UPSERT,回退旧路径。
 func canNativeSave(v reflect.Value) bool {
-	if _, Ok := v.Interface().(HasGetSqlUpdate); Ok {
+	if _, Ok := hookOf[HasGetSqlUpdate](v); Ok {
 		return false
 	}
-	if _, Ok := v.Interface().(HasGetSqlInsert); Ok {
+	if _, Ok := hookOf[HasGetSqlInsert](v); Ok {
 		return false
 	}
-	if _, Ok := v.Interface().(HasSetSqlValues); Ok {
+	if _, Ok := hookOf[HasSetSqlValues](v); Ok {
 		return false
 	}
 

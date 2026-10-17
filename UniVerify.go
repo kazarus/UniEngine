@@ -72,9 +72,28 @@ func (this *TUniEngine) verifySign(Payload []byte) ([]byte, error) {
 	return Mac.Sum(nil), nil
 }
 
+// verifyKindSupported 报告 verifyFormat 是否能规范化该 kind。
+// SetVerify 在登记期用它校验保护列类型,避免 time.Time/[]byte 等"登记成功、
+// 首次读写才失败"的迟到错误。
+func verifyKindSupported(Kind reflect.Kind) bool {
+	switch Kind {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64, reflect.Bool:
+		return true
+	}
+
+	return false
+}
+
 // #verifyFormat 保护列值的规范化:定长类型走 strconv 确定序格式(同值必同串),
 // #不支持的类型 fast-fail——静默降级会产出验不过的行
 func verifyFormat(FieldValue reflect.Value) ([]byte, error) {
+	if !verifyKindSupported(FieldValue.Kind()) {
+		return nil, fmt.Errorf("UniEngine: verify does not support field kind [%s]", FieldValue.Kind().String())
+	}
+
 	switch FieldValue.Kind() {
 	case reflect.String:
 		return []byte(FieldValue.String()), nil

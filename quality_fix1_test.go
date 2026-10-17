@@ -1,5 +1,5 @@
 // quality_fix_test
-// #评审报告 CODE_QUALITY_REVIEW_2026-10-14 第一批修复的回归测试(Q3/Q4/Q7)。
+// #评审报告 docs/reviews/CODE_QUALITY_REVIEW_2026-10-14.md 第一批修复的回归测试(Q3/Q4/Q7)。
 // #报告附录探针以"复现缺陷"为 PASS;本文件改为断言修复后的目标行为。
 
 package UniEngine

@@ -360,6 +360,23 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected Fields must map to class attributes", this.TableName, LowerTxt)
 			return this
 		}
+		//#登记期校验保护列类型:verifyFormat 不支持的 kind(如 time.Time/[]byte)若放行,
+		//#会在首次读写时才报 "verify does not support field kind",整表表现为不可用。
+		if this.ClassType != nil {
+			Sf, Ok := this.ClassType.FieldByName(Field.AttriName)
+			if !Ok {
+				this.LastError = fmt.Errorf("UniEngine: class[%s] has no attribute[%s] for protected field[%s]", this.ClassType.String(), Field.AttriName, LowerTxt)
+				return this
+			}
+			if len(Sf.Index) != 1 {
+				this.LastError = fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", this.ClassType.String(), Field.AttriName)
+				return this
+			}
+			if !verifyKindSupported(Sf.Type.Kind()) {
+				this.LastError = fmt.Errorf("UniEngine: protected field[%s.%s] has kind [%s], which verify does not support (use string/int/uint/float/bool)", this.TableName, LowerTxt, Sf.Type.Kind().String())
+				return this
+			}
+		}
 		if HashList[LowerTxt] {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, LowerTxt)
 			return this
@@ -400,6 +417,15 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 // AutoKeys 按数据库元数据自动登记主键。UniEngineEx 为引擎指针(第二阶段起不再按值拷贝)。
 func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...interface{}) error {
+	//#链式登记的首个错误必须短路:非法表名/字段名会进入元数据 SQL 的单引号拼接,
+	//#旧实现跳过本检查直接触网(注入面),也违反了 SetKeys/SetSecret/SetVerify 的共同契约。
+	if this.LastError != nil {
+		return this.LastError
+	}
+	if UniEngineEx == nil {
+		return fmt.Errorf("UniEngine: table[%s] AutoKeys got a nil engine; check your code;", this.TableName)
+	}
+
 	//#同 SetKeys:SetVerify 之后主键冻结,不再从库元数据追加(评审 Q2 顺序变体)。
 	//#置于最前,连元数据查询都不发起
 	if this.VerifyOn {

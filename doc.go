@@ -37,16 +37,17 @@
 //   - 配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更
 //     (SetKeys/SetSecret/SetVerify/AutoKeys/PrepareTables/PrepareRunSQL)
 //     应在并发查询开始前完成;
-//   - 引擎**不得按值拷贝**,请一律使用 *TUniEngine:拷贝会复制 tx/inTx 等值字段却共享
-//     mu,导致副本开启的事务对原件不可见。该约束由 noCopy + go vet(copylocks 分析器)
-//     在静态检查阶段强制。
+//   - 引擎**不得按值拷贝**,请一律使用 *TUniEngine:拷贝会复制 tx/inTx 与内嵌的
+//     mu/txGate,导致副本开启的事务对原件不可见。该约束由 noCopy + go vet(copylocks
+//     分析器)在静态检查阶段强制。
 //
 // # 错误处理
 //
 // 报错点以哨兵错误(见 errors.go)加 %w 包装,调用方应使用 errors.Is 判别而非匹配文本:
 // ErrUnregisteredClass / ErrNoPkeys / ErrNilParam / ErrInvalidTableName /
 // ErrInvalidFieldName / ErrInvalidConstraintName / ErrNoTransaction / ErrAlreadyInTransaction /
-// ErrInvalidPlaceholderBinding / ErrIncompleteVerification。
+// ErrInvalidPlaceholderBinding / ErrIncompleteVerification / ErrNoDatabase /
+// ErrInvalidDataBase / ErrMultipleRows。
 // 注册类 API(RegisterClass/RegisterTable/RegisterField/RegisterPkeys)遇到非法输入时不 panic,
 // 而是返回**带 LastError 的未注册表**,便于链式调用在链尾统一检查。
 //
@@ -55,7 +56,8 @@
 // 扫描目标就是结构体字段本身,引擎不做 NULL 转换:字段为不可空类型(string/int64/bool/time.Time 等)
 // 而库中该列为 NULL 时,Select/SelectL/SelectM/SelectH 报错,且 SelectL 会整批丢弃(不是跳过该行)。
 // 请改用 sql.NullString 等 sql.NullXxx 或指针(*string/*int64);[]byte 天然接受 NULL(置 nil)。
-// 标量入口 SelectS/SelectD/SelectF 相反:内部使用 sql.NullXxx,NULL 时返回零值且不报错。
+// 标量入口 SelectS/SelectD/SelectF 相反:内部使用 sql.NullXxx,NULL 时返回零值且不报错;
+// 但三者只接受单行结果,多行时返回 ErrMultipleRows。
 //
 // # 应用层加密与存储完整性
 //

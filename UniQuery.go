@@ -16,7 +16,8 @@ import (
 // 查询公共核心
 // ---------------------------------------------------------------------------
 
-// selectColsCtx 标量查询公共核心：执行并取最后一行的单列值（SelectD/F/S 共用）。
+// selectColsCtx 标量查询公共核心：执行并取单行单列值（SelectD/F/S 共用）。
+// 多行结果显式报错:静默取最后一行会让"条件写漏"表现为偶发取错金额/状态,极难排查。
 func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst sql.Scanner, Args []interface{}) error {
 	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
 	if eror != nil {
@@ -37,7 +38,12 @@ func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst 
 	}
 	defer Rows.Close()
 
+	RowCount := 0
 	for Rows.Next() {
+		RowCount++
+		if RowCount > 1 {
+			return fmt.Errorf("%w: scalar SelectD/F/S expects a single row; use SelectL or add a uniqueness predicate", ErrMultipleRows)
+		}
 		if eror = Rows.Scan(Dst); eror != nil {
 			return eror
 		}
@@ -272,8 +278,8 @@ func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery s
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	//#钩子探测保持旧语义:以传入值本身是否实现 HasSetSqlResult 为准
-	_, HasHook := i.(HasSetSqlResult)
+	//#钩子探测统一走 hookOf:值接收者与指针接收者一视同仁
+	_, HasHook := hookOf[HasSetSqlResult](reflect.ValueOf(i))
 
 	//#单 struct 目标按列合并:仅 SELECT 列覆盖目标字段,未出现在结果列里的字段
 	//#保留调用方原值(修"SELECT 少量列灌回业务结构体"把其余字段清零的坑,如
@@ -324,10 +330,19 @@ func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	//#整批语义:查询中途失败(扫描错误/rows.Err)时回滚本次已追加的行,
+	//#与 README/doc.go 的"SelectL 失败即整批丢弃"保持一致;调用方预置的元素不动。
+	StartLen := Result.Len()
+	eror := this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
 		Result.Set(reflect.Append(Result, Row))
 		return nil
 	}, Args...)
+	if eror != nil {
+		Result.SetLen(StartLen)
+		return eror
+	}
+
+	return nil
 }
 
 // return map of struct;User;GetMapUnique;
@@ -367,14 +382,18 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 	}
 	t = t.Elem()
 
-	if !t.Implements(THasGetMapUnique) {
+	if !typeHasHook(t, THasGetMapUnique) {
 		return fmt.Errorf("UniEngine: the class registered:[%s] does not Implemented [HasGetMapUnique]", t.String())
 	}
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
-		MapUnique := Row.Interface().(HasGetMapUnique).GetMapUnique()
+	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+		UniqueHook, Ok := hookOf[HasGetMapUnique](Row)
+		if !Ok {
+			return fmt.Errorf("UniEngine: class[%s] does not Implemented [HasGetMapUnique]", t.String())
+		}
+		MapUnique := UniqueHook.GetMapUnique()
 		KeyValue := reflect.ValueOf(MapUnique)
 		if !KeyDirect {
 			KeyValue = KeyValue.Convert(KeyType)
@@ -414,15 +433,17 @@ func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapU
 	if Map := reflect.Indirect(reflect.ValueOf(i)); Map.Kind() == reflect.Map && Map.IsNil() {
 		return errors.New("UniEngine: method [SelectH] got a nil map; initialize the map before calling; check your code;")
 	}
+	//#nil 键函数会让所有行折叠到键 "",map 静默只剩一条;在容器/键校验之后拒绝,
+	//#保证 nil map / 非法键仍先报各自更具体的错误。
+	if f == nil {
+		return errors.New("UniEngine: method [SelectH] got a nil key function; check your code;")
+	}
 	t = t.Elem()
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(Ctx, t, t.Implements(THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
-		var MapUnique string
-		if f != nil {
-			MapUnique = f(Row.Interface())
-		}
+	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+		MapUnique := f(Row.Interface())
 		KeyValue := reflect.ValueOf(MapUnique)
 		if !KeyDirect {
 			KeyValue = KeyValue.Convert(KeyType)
