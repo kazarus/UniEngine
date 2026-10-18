@@ -202,7 +202,8 @@ func TestRegisterClassSetKeysPersists(t *testing.T) {
 	if tbl == nil {
 		t.Fatal("RegisterClass returned nil")
 	}
-	if err := tbl.SetKeys("id").LastError; err != nil {
+	tbl = tbl.SetKeys("id")
+	if err := tbl.LastError; err != nil {
 		t.Fatalf("SetKeys error: %v", err)
 	}
 	if _, ok := tbl.HashPkeys["id"]; !ok {

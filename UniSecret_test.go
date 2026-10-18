@@ -908,7 +908,8 @@ func TestTableSecretOnFlag(t *testing.T) {
 	if tblPlain.SecretOn {
 		t.Fatal("table without any secret field should not be marked")
 	}
-	if eror := tblPlain.SetSecret("password").LastError; eror != nil {
+	tblPlain = tblPlain.SetSecret("password")
+	if eror := tblPlain.LastError; eror != nil {
 		t.Fatalf("SetSecret: %v", eror)
 	}
 	if !tblPlain.SecretOn {
@@ -1036,7 +1037,8 @@ func TestListSecretColumns(t *testing.T) {
 		Remark   string `db:"remark"`
 	}
 	tbl2 := eng.RegisterClass(tDualSecret{}, "t_dual_secret")
-	if eror := tbl2.SetSecret("password", "remark").LastError; eror != nil {
+	tbl2 = tbl2.SetSecret("password", "remark")
+	if eror := tbl2.LastError; eror != nil {
 		t.Fatalf("SetSecret: %v", eror)
 	}
 	if len(tbl2.ColSecret) != 2 {
@@ -1044,7 +1046,8 @@ func TestListSecretColumns(t *testing.T) {
 	}
 
 	//#去重:重复 SetSecret 同一列,清单不增长
-	if eror := tbl2.SetSecret("password").LastError; eror != nil {
+	tbl2 = tbl2.SetSecret("password")
+	if eror := tbl2.LastError; eror != nil {
 		t.Fatalf("SetSecret again: %v", eror)
 	}
 	if len(tbl2.ColSecret) != 2 {

@@ -328,6 +328,7 @@ func TestMySQLMetadata(t *testing.T) {
 	if eror := tbl.AutoKeys(auto, UniEngine.TAutoKeys4MYSQLN{DataBase: auto.DataBase}); eror != nil {
 		t.Fatalf("AutoKeys: %v", eror)
 	}
+	tbl = auto.GetTable(mysqlProbeTable)
 	if _, ok := tbl.HashPkeys["id"]; !ok {
 		t.Errorf("AutoKeys 应登记主键 id, got %v", tbl.ListPkeys)
 	}
@@ -416,13 +417,15 @@ func TestMySQLVerifyRowBinding(t *testing.T) {
 
 	//#① 登记期强制:保护列不含主键 → 拒绝(否则"行级绑定"只是纸面承诺)
 	tblReject, _ := newMySQLVerifyProbe(t, db)
-	if tblReject.SetVerify("mac_text", "name").LastError == nil {
+	tblReject = tblReject.SetVerify("mac_text", "name")
+	if tblReject.LastError == nil {
 		t.Fatal("保护列不含主键应被登记期拒绝")
 	}
 
 	//#② 含主键:整行搬运(数据连同 MAC 一起搬)必须被检出
 	tbl, eng := newMySQLVerifyProbe(t, db)
-	if eror := tbl.SetVerify("mac_text", "id", "name").LastError; eror != nil {
+	tbl = tbl.SetVerify("mac_text", "id", "name")
+	if eror := tbl.LastError; eror != nil {
 		t.Fatalf("SetVerify: %v", eror)
 	}
 

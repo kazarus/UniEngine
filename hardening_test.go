@@ -68,10 +68,12 @@ func TestSetKeysDedupAndOrder(t *testing.T) {
 	engine := newHardeningEngine(DtPOSTGR)
 	tb := engine.RegisterClass(hardeningUser{}, "test_user")
 
-	if err := tb.SetKeys("name", "id").LastError; err != nil {
+	tb = tb.SetKeys("name", "id")
+	if err := tb.LastError; err != nil {
 		t.Fatalf("SetKeys: %v", err)
 	}
-	if err := tb.SetKeys("id").LastError; err != nil {
+	tb = tb.SetKeys("id")
+	if err := tb.LastError; err != nil {
 		t.Fatalf("SetKeys dup: %v", err)
 	}
 	if len(tb.ListPkeys) != 2 {

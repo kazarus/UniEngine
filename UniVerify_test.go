@@ -84,14 +84,14 @@ func TestSetVerifyRegister(t *testing.T) {
 func TestSetVerifyValidation(t *testing.T) {
 	cases := []struct {
 		name string
-		call func(tab *TUniTable)
+		call func(tab *TUniTable) *TUniTable
 	}{
-		{"mac列未登记", func(tab *TUniTable) { tab.SetVerify("no_such", "who_build") }},
-		{"mac列是主键", func(tab *TUniTable) { tab.SetVerify("who_build", "user_indx") }},
-		{"mac列自身入保护列", func(tab *TUniTable) { tab.SetVerify("mac_text", "mac_text") }},
-		{"保护列未登记", func(tab *TUniTable) { tab.SetVerify("mac_text", "no_such") }},
-		{"保护列重复", func(tab *TUniTable) { tab.SetVerify("mac_text", "who_build", "who_build") }},
-		{"保护列为空", func(tab *TUniTable) { tab.SetVerify("mac_text") }},
+		{"mac列未登记", func(tab *TUniTable) *TUniTable { return tab.SetVerify("no_such", "who_build") }},
+		{"mac列是主键", func(tab *TUniTable) *TUniTable { return tab.SetVerify("who_build", "user_indx") }},
+		{"mac列自身入保护列", func(tab *TUniTable) *TUniTable { return tab.SetVerify("mac_text", "mac_text") }},
+		{"保护列未登记", func(tab *TUniTable) *TUniTable { return tab.SetVerify("mac_text", "no_such") }},
+		{"保护列重复", func(tab *TUniTable) *TUniTable { return tab.SetVerify("mac_text", "who_build", "who_build") }},
+		{"保护列为空", func(tab *TUniTable) *TUniTable { return tab.SetVerify("mac_text") }},
 	}
 
 	for _, item := range cases {
@@ -99,7 +99,7 @@ func TestSetVerifyValidation(t *testing.T) {
 		eng.Initialize()
 		tab := eng.RegisterClass(TVerifyRow{}, "tbl_case").SetKeys("who_build", "user_indx")
 
-		item.call(tab)
+		tab = item.call(tab)
 
 		if tab.LastError == nil {
 			t.Fatalf("case[%s] should fail", item.name)
@@ -460,7 +460,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
 	eng.Initialize()
 	tab := eng.RegisterClass(TVerifyRow{}, "tbl_bind_1").SetKeys("who_build", "user_indx")
-	tab.SetVerify("mac_text", "data_stat", "mast_name")
+	tab = tab.SetVerify("mac_text", "data_stat", "mast_name")
 	if tab.LastError == nil {
 		t.Fatal("保护列不含主键时应拒绝登记")
 	}
@@ -470,7 +470,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 
 	//#② 复合主键只保护其中一列:同样拒绝(未覆盖的 user_indx 被改写仍能过验签)
 	tab2 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2").SetKeys("who_build", "user_indx")
-	tab2.SetVerify("mac_text", "who_build", "data_stat")
+	tab2 = tab2.SetVerify("mac_text", "who_build", "data_stat")
 	if tab2.LastError == nil {
 		t.Fatal("复合主键只覆盖一列应拒绝登记")
 	}
@@ -480,7 +480,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 
 	//#②b 全部主键纳入保护:通过(载荷含完整行标识,任何主键列搬移/改写均可检出)
 	tab2b := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2b").SetKeys("who_build", "user_indx")
-	tab2b.SetVerify("mac_text", "who_build", "user_indx", "data_stat")
+	tab2b = tab2b.SetVerify("mac_text", "who_build", "user_indx", "data_stat")
 	if tab2b.LastError != nil {
 		t.Fatalf("覆盖全部主键应通过, got %v", tab2b.LastError)
 	}
@@ -491,7 +491,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	//#③ 逃生口:显式放弃行级绑定(确有理由时才用),登记前置于表上
 	tab3 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_3").SetKeys("who_build", "user_indx")
 	tab3.VerifyUnkeyed = true
-	tab3.SetVerify("mac_text", "data_stat", "mast_name")
+	tab3 = tab3.SetVerify("mac_text", "data_stat", "mast_name")
 	if tab3.LastError != nil {
 		t.Fatalf("VerifyUnkeyed 应放行, got %v", tab3.LastError)
 	}
@@ -547,7 +547,8 @@ func TestPkeysNotFrozenWhenSetVerifyFails(t *testing.T) {
 	eng.Initialize()
 
 	tab := eng.RegisterClass(TVerifyRow{}, "tbl_nofreeze").SetKeys("who_build")
-	if eror := tab.SetVerify("mac_text", "no_such_col").LastError; eror == nil {
+	tab = tab.SetVerify("mac_text", "no_such_col")
+	if eror := tab.LastError; eror == nil {
 		t.Fatal("前置:引用未登记列的 SetVerify 应失败")
 	}
 	if tab.VerifyOn {
@@ -559,7 +560,8 @@ func TestPkeysNotFrozenWhenSetVerifyFails(t *testing.T) {
 	tab.LastError = nil
 
 	//#未启用验签 ⇒ 主键未冻结,仍可补登
-	if eror := tab.SetKeys("user_indx").LastError; eror != nil {
+	tab = tab.SetKeys("user_indx")
+	if eror := tab.LastError; eror != nil {
 		t.Fatalf("VerifyOn=false 时 SetKeys 不应被拒, got %v", eror)
 	}
 	if _, Ok := tab.HashPkeys["user_indx"]; !Ok {

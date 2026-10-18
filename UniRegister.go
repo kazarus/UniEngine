@@ -103,6 +103,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 	UniTable.HashPkeys = make(map[string]TUniField, 0)
 	UniTable.TableName = TableName
 	UniTable.ClassType = t
+	UniTable.engine = this
 
 	for i := 0; i < n; i++ {
 		f := t.Field(i)
@@ -173,6 +174,7 @@ func (this *TUniEngine) RegisterTable(TableName string, IPriority int64) *TUniTa
 		UniTable.HashField = make(map[string]TUniField, 0)
 		UniTable.HashPkeys = make(map[string]TUniField, 0)
 		UniTable.TableName = strings.ToLower(TableName)
+		UniTable.engine = this
 	} else {
 		UniTable = cloneTableMetadata(UniTable)
 	}
@@ -205,6 +207,7 @@ func (this *TUniEngine) RegisterField(TableName string, FieldName string) *TUniT
 		UniTable.HashField = make(map[string]TUniField, 0)
 		UniTable.HashPkeys = make(map[string]TUniField, 0)
 		UniTable.TableName = strings.ToLower(TableName)
+		UniTable.engine = this
 	} else {
 		UniTable = cloneTableMetadata(UniTable)
 	}
@@ -307,11 +310,15 @@ func (this *TUniEngine) PrepareTables(TableName string) error {
 	this.lockTables()
 	defer this.mu.Unlock()
 
-	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	Old, Valid := this.HashTabl[strings.ToLower(TableName)]
 	if !Valid {
 		//#未注册的表静默跳过,保持旧行为
 		return nil
 	}
+
+	//#COW:读者可能已持有该指针且不持锁访问 ListField/ListPkeys;
+	//#必须克隆后改写副本并发布,不能原地改已发布快照。
+	UniTable := cloneTableMetadata(Old)
 
 	//#按确定序重建(ListField 既有序优先,其余按字段名排序),避免 map 迭代序导致 SQL 文本漂移
 	ListField := make([]TUniField, 0, len(UniTable.HashField))
@@ -332,6 +339,8 @@ func (this *TUniEngine) PrepareTables(TableName string) error {
 	}
 	UniTable.ListPkeys = ListPkeys
 
+	this.publishTableMetadata(Old, UniTable)
+
 	return nil
 }
 
@@ -342,11 +351,15 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 	var SqlResult string
 	var ListField = make([]TUniField, 0)
 
-	UniTable, Valid := this.HashTabl[strings.ToLower(TableName)]
+	Old, Valid := this.HashTabl[strings.ToLower(TableName)]
 	if !Valid {
 		//#未注册的表:返回空结果(旧代码在此对 nil 指针取 ListPkeys 会 panic)
 		return SqlResult, ListField, nil, nil
 	}
+
+	//#COW:SqlSelect~SqlDelete 是发布快照上的留痕,写它同样要克隆后发布;
+	//#否则与"已注册表以新快照发布"的并发契约自相矛盾。
+	UniTable := cloneTableMetadata(Old)
 
 	switch QueryType {
 	case EtSelect:
@@ -442,6 +455,8 @@ func (this *TUniEngine) PrepareRunSQL(TableName string, QueryType TQueryType) (s
 			UniTable.SqlDelete = SqlResult
 		}
 	}
+
+	this.publishTableMetadata(Old, UniTable)
 
 	return SqlResult, ListField, UniTable.ListPkeys, nil
 }

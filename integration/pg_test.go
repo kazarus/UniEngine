@@ -90,7 +90,8 @@ func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTabl
 	}
 
 	tbl := eng.RegisterClass(itUser{}, "it_user")
-	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
+	tbl = tbl.SetKeys("user_name")
+	if eror := tbl.LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
@@ -292,7 +293,8 @@ func TestIntegrationSecret(t *testing.T) {
 	eng := newSecretEngine(t)
 	setupUserTable(t, eng)
 	tbl := eng.RegisterClass(itSecretUser{}, "it_user")
-	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
+	tbl = tbl.SetKeys("user_name")
+	if eror := tbl.LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 
@@ -421,6 +423,7 @@ func TestIntegrationAutoKeysAndExist(t *testing.T) {
 	if eror := tbl.AutoKeys(eng); eror != nil {
 		t.Fatalf("autokeys: %v", eror)
 	}
+	tbl = eng.GetTable("it_auto")
 	key, Valid := tbl.HashPkeys["id"]
 	if !Valid || key.FieldName != "id" {
 		t.Fatalf("autokeys should register id, got %+v", tbl.HashPkeys)

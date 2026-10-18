@@ -17,6 +17,9 @@
 - **列名禁止点号**:struct tag 与 `RegisterField`/`RegisterPkeys`/`ExistField` 的字段名仅允许字母/数字/下划线(表名仍允许 `schema.table`),避免 `db:"a.b"` 被引成 `"a"."b"` 后静默指向另一 schema。
 - **`SetVerify` 登记期校验保护列类型**:`time.Time`/`[]byte` 等不被 `verifyFormat` 支持的 kind 直接写 `LastError`,不再等到首次读写才失败;提升字段(内嵌结构体)同样在登记期拒绝。
 - **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不打印实参值,避免明文密码/证件号进入日志。
+- **链式登记改为快照 COW**(并发安全,行为变更):`SetKeys`/`SetSecret`/`SetVerify`/`AutoKeys` 此前直接改写 `RegisterClass` 已发布的 `*TUniTable`,与并发查询读取 `HashField/ListField/HashPkeys` 构成数据竞争(并发 map 读写可致进程 fatal)。现在这些方法在引擎写锁内克隆当前快照、修改副本并发布,返回**新的** `*TUniTable`;旧指针保持不变。链式写法 `tbl := eng.RegisterClass(...).SetKeys(...).SetSecret(...)` 不受影响;忽略返回值后再读旧指针属性会看到旧快照,`AutoKeys` 之后请用 `eng.GetTable(name)` 重新取表。
+- **`PrepareTables`/`PrepareRunSQL` 改为快照 COW**:两者原在持锁状态下原地改写已发布快照的 `ListField/ListPkeys/SqlSelect~SqlDelete`,读者取到指针后不持锁访问,构成数据竞争。现均克隆后发布新快照,旧指针保持只读。
+- **`ExistTable` 按对象种类过滤**:PostgreSQL 补 `relkind in ('r','p')`(排除视图/索引/序列),SQL Server 补 `xtype='U'`(排除视图/系统对象),MySQL 补 `table_type='BASE TABLE'`(排除视图);Oracle 仍走 `all_tables`。
 - **锁窗口收敛**:`mu` 改为内嵌 `sync.RWMutex`,删除包级 `muLazy` 懒初始化锁(每次查询不再抢全局锁);新增 `txGate` 串行化事务生命周期,`BeginTx`/`Commit`/`Rollback` 的驱动网络等待不再持注册表写锁。
 
 ### 升级注意
@@ -25,6 +28,7 @@
 - `SelectH` 的 `f` 不能为 nil;需要固定键时请传显式函数。
 - `Db` 未装配时执行入口返回 `ErrNoDatabase`(不再 panic);`Initialize()` 不再终结进行中的事务。
 - 自定义 COPY 钩子在加密/验签激活时可能被拒;请改用默认列/值路径,或先关闭该表的加密/验签。
+- **链式登记返回新快照**:`SetKeys`/`SetSecret`/`SetVerify`/`AutoKeys` 不再原地修改接收者。请始终使用返回值(链式调用天然满足);忽略返回值后继续读旧 `*TUniTable` 会看到旧元数据,`AutoKeys` 后请 `eng.GetTable(name)` 取新表。
 - 调试输出不再包含实参值;若排障确需值,请在应用侧脱敏后记录。
 
 ## master-20261015

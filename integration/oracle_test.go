@@ -345,6 +345,7 @@ func TestOracleMetadata(t *testing.T) {
 	if eror := tbl.AutoKeys(auto, UniEngine.TAutoKeys4ORACLE{}); eror != nil {
 		t.Fatalf("AutoKeys: %v", eror)
 	}
+	tbl = auto.GetTable(oraProbeTable)
 	if _, ok := tbl.HashPkeys["id"]; !ok {
 		t.Errorf("AutoKeys 应登记主键 id, got %v", tbl.ListPkeys)
 	}

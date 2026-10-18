@@ -46,6 +46,11 @@ type TUniTable struct {
 	ListPkeys []TUniField //ToLower
 
 	LastError error //#链式登记(SetKeys/SetSecret)的首个错误#置位后短路后续登记,链尾检查
+
+	// engine 所属引擎(不导出,不参与列映射)。链式登记(SetKeys/SetSecret/SetVerify/
+	// AutoKeys)通过它在引擎写锁内克隆当前快照、修改副本并发布,避免原地改写读者已拿到的
+	// 已发布快照。RegisterClass/RegisterTable/RegisterField/RegisterPkeys 负责设置。
+	engine *TUniEngine
 }
 
 func (this *TUniTable) HasField(FieldName string) (bool, error) {
@@ -185,7 +190,39 @@ func (this *TUniTable) hasSecretDataCols() bool {
 	return false
 }
 
-// #SetKeys 登记主键并返回本表,支持链式:
+// updateSnapshot 在引擎写锁内克隆当前快照、应用 Mutate,并在成功时发布新快照。
+// 失败时不发布:调用方拿到带 LastError 的副本检查错误,注册表仍保持最后一个完整快照。
+// 无 engine 的表(手工构造/未注册载体)退化为原地修改,保持既有测试与兼容行为。
+func (this *TUniTable) updateSnapshot(Mutate func(*TUniTable)) *TUniTable {
+	if this == nil {
+		return nil
+	}
+	if this.engine == nil {
+		Mutate(this)
+		return this
+	}
+
+	Eng := this.engine
+	Eng.lockTables()
+	defer Eng.mu.Unlock()
+
+	//#以注册表中的当前快照为基线:失败链之后继续登记时,不会把"未发布的半成品"当基线;
+	//#正常链式调用中 this 就是当前快照,二者一致。
+	Base := this
+	if Current, Ok := Eng.HashTabl[strings.ToLower(this.TableName)]; Ok && Current != nil {
+		Base = Current
+	}
+
+	Next := cloneTableMetadata(Base)
+	Mutate(Next)
+	if Next.LastError == nil {
+		Eng.publishTableMetadata(Base, Next)
+	}
+
+	return Next
+}
+
+// #SetKeys 登记主键并返回**新快照**,支持链式:
 // #  UniEngineEx.RegisterClass(core.TSYSPATH{}, "sys_path").SetKeys("WHO_BUILD", "USER_INDX", "SYS_PATHC").SetSecret("MAST_NAME")
 // #链中首个错误记入 LastError 并短路后续登记,链尾以 if tbl.LastError != nil 检查
 func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
@@ -193,31 +230,38 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 		return this
 	}
 
+	return this.updateSnapshot(func(Next *TUniTable) {
+		Next.setKeys(Fields...)
+	})
+}
+
+// setKeys 在副本上执行主键登记;错误写入副本 LastError,由 updateSnapshot 决定不发布。
+func (this *TUniTable) setKeys(Fields ...interface{}) {
 	//#SetVerify 是元数据配置的终点:主键集合已与保护列绑定,此后再追加主键会让
 	//#"主键必须全部纳入 MAC 载荷"这一保证失效(评审 Q2 的顺序变体)。在变更前直接拒绝,
 	//#不写入任何主键;需变更请重新 RegisterClass 后按 [SetKeys/AutoKeys → SetVerify] 顺序登记
 	if this.VerifyOn {
 		this.LastError = fmt.Errorf("%w: table[%s] SetKeys is not allowed after SetVerify; register pkeys before SetVerify (re-register the class to change pkeys)", ErrPkeysFrozenAfterVerify, this.TableName)
-		return this
+		return
 	}
 
 	for _, ItemPara := range Fields {
 		FieldName, Ok := ItemPara.(string)
 		if !Ok {
 			this.LastError = fmt.Errorf("UniEngine: SetKeys argument %v is not a string", ItemPara)
-			return this
+			return
 		}
 
 		Field, Valid := this.HashField[strings.ToLower(FieldName)]
 		if !Valid {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered", this.TableName, strings.ToLower(FieldName))
-			return this
+			return
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if Field.SecretOn {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey Values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, strings.ToLower(FieldName))
-			return this
+			return
 		}
 
 		//#只读标记字段(db:"-" / db:"_")的 FieldName 就是标记本身,没有真实列名:当主键会生成
@@ -226,7 +270,7 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 		//#这里只拦"标记字段":db:"real_col,readonly" 有真实列名,作 WHERE 定位键是合法的
 		if Field.FieldName == "-" || Field.FieldName == "_" {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a readonly marker (db:\"-\" / db:\"_\") without a real column name; it can not be a pkey", this.TableName, Field.FieldName)
-			return this
+			return
 		}
 
 		LowerTxt := strings.ToLower(FieldName)
@@ -235,21 +279,26 @@ func (this *TUniTable) SetKeys(Fields ...interface{}) *TUniTable {
 			this.ListPkeys = append(this.ListPkeys, Field)
 		}
 	}
-
-	return this
 }
 
-// #SetSecret 标记加密列并返回本表,支持链式(错误处理同 SetKeys:记入 LastError 并短路)
+// #SetSecret 标记加密列并返回**新快照**,支持链式(错误处理同 SetKeys:记入 LastError 并短路)
 func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 	if this.LastError != nil {
 		return this
 	}
 
+	return this.updateSnapshot(func(Next *TUniTable) {
+		Next.setSecret(Fields...)
+	})
+}
+
+// setSecret 在副本上执行加密列标记;错误写入副本 LastError。
+func (this *TUniTable) setSecret(Fields ...interface{}) {
 	for _, ItemPara := range Fields {
 		FieldName, Ok := ItemPara.(string)
 		if !Ok {
 			this.LastError = fmt.Errorf("UniEngine: SetSecret argument %v is not a string", ItemPara)
-			return this
+			return
 		}
 
 		LowerTxt := strings.ToLower(FieldName)
@@ -257,13 +306,13 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 		Field, Valid := this.HashField[LowerTxt]
 		if !Valid {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerTxt)
-			return this
+			return
 		}
 
 		//#主键值一律明文(WHERE 定位语义),与 secreton 互斥
 		if _, IsPkey := this.HashPkeys[LowerTxt]; IsPkey {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; pkey Values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, LowerTxt)
-			return this
+			return
 		}
 
 		Field.SecretOn = true
@@ -291,11 +340,9 @@ func (this *TUniTable) SetSecret(Fields ...interface{}) *TUniTable {
 			}
 		}
 	}
-
-	return this
 }
 
-// #SetVerify 登记存储完整性保护并返回本表,支持链式(错误处理同 SetKeys:记入 LastError 并短路):
+// #SetVerify 登记存储完整性保护并返回**新快照**,支持链式(错误处理同 SetKeys:记入 LastError 并短路):
 // #  UniEngineEx.RegisterClass(core.TUSERPART{}, "tbl_user_part").SetKeys(...).SetVerify("mac_text", "who_build", "user_indx", "data_stat")
 // #MacField 为 MAC 伴随列(须为已登记的 string 字段,建议建列 varchar(64) NOT NULL DEFAULT ”,
 // #NOT NULL 缺省空串——存量行扫描 NULL 会报错),Fields 为保护列(登记顺序=载荷顺序);
@@ -307,10 +354,17 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 		return this
 	}
 
+	return this.updateSnapshot(func(Next *TUniTable) {
+		Next.setVerify(VerifyAt, Fields...)
+	})
+}
+
+// setVerify 在副本上执行完整性保护登记;错误写入副本 LastError。
+func (this *TUniTable) setVerify(VerifyAt string, Fields ...string) {
 	//#参数形态检查最廉且最根本,先于 MAC 列校验(fail-fast:调用缺保护列时不必陪跑后续查找)
 	if len(Fields) == 0 {
 		this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs at least one protected field", this.TableName, strings.ToLower(VerifyAt))
-		return this
+		return
 	}
 
 	LowerCol := strings.ToLower(VerifyAt)
@@ -318,25 +372,25 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 	FieldCol, Valid := this.HashField[LowerCol]
 	if !Valid {
 		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerCol)
-		return this
+		return
 	}
 	if FieldCol.AttriName == "" {
 		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; Mac Column needs a writable string field", this.TableName, LowerCol)
-		return this
+		return
 	}
 	if FieldCol.ReadOnly {
 		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is readonly; Mac Column must be writable", this.TableName, LowerCol)
-		return this
+		return
 	}
 	if _, IsPkey := this.HashPkeys[LowerCol]; IsPkey {
 		this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is a pkey; Mac Column is engine-computed and can not be a pkey", this.TableName, LowerCol)
-		return this
+		return
 	}
 	//#MAC 值写入 string 字段;其它类型无法回填,登记期直接拒绝
 	if this.ClassType != nil {
 		if Sf, Ok := this.ClassType.FieldByName(FieldCol.AttriName); !Ok || Sf.Type.Kind() != reflect.String {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] maps to a non-string attribute; Mac Column must be string", this.TableName, LowerCol)
-			return this
+			return
 		}
 	}
 
@@ -348,17 +402,17 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 
 		if LowerTxt == LowerCol {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is the Mac Column itself; it can not protect itself", this.TableName, LowerTxt)
-			return this
+			return
 		}
 
 		Field, Valid := this.HashField[LowerTxt]
 		if !Valid {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is unregistered;", this.TableName, LowerTxt)
-			return this
+			return
 		}
 		if Field.AttriName == "" {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] has no class attribute; protected Fields must map to class attributes", this.TableName, LowerTxt)
-			return this
+			return
 		}
 		//#登记期校验保护列类型:verifyFormat 不支持的 kind(如 time.Time/[]byte)若放行,
 		//#会在首次读写时才报 "verify does not support field kind",整表表现为不可用。
@@ -366,20 +420,20 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 			Sf, Ok := this.ClassType.FieldByName(Field.AttriName)
 			if !Ok {
 				this.LastError = fmt.Errorf("UniEngine: class[%s] has no attribute[%s] for protected field[%s]", this.ClassType.String(), Field.AttriName, LowerTxt)
-				return this
+				return
 			}
 			if len(Sf.Index) != 1 {
 				this.LastError = fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", this.ClassType.String(), Field.AttriName)
-				return this
+				return
 			}
 			if !verifyKindSupported(Sf.Type.Kind()) {
 				this.LastError = fmt.Errorf("UniEngine: protected field[%s.%s] has kind [%s], which verify does not support (use string/int/uint/float/bool)", this.TableName, LowerTxt, Sf.Type.Kind().String())
-				return this
+				return
 			}
 		}
 		if HashList[LowerTxt] {
 			this.LastError = fmt.Errorf("UniEngine: field[%s.%s] is duplicated in SetVerify", this.TableName, LowerTxt)
-			return this
+			return
 		}
 
 		HashList[LowerTxt] = true
@@ -392,7 +446,7 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 	if !this.VerifyUnkeyed {
 		if len(this.HashPkeys) == 0 {
 			this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] needs pkeys registered first; call SetKeys/AutoKeys before SetVerify, or set VerifyUnkeyed to opt out of row binding", this.TableName, LowerCol)
-			return this
+			return
 		}
 
 		var ListMiss = make([]string, 0, len(this.HashPkeys))
@@ -404,7 +458,7 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 		if len(ListMiss) > 0 {
 			sort.Strings(ListMiss)
 			this.LastError = fmt.Errorf("UniEngine: SetVerify[%s.%s] must cover all registered pkeys for row binding; missing: %s; add them or set VerifyUnkeyed to opt out", this.TableName, LowerCol, strings.Join(ListMiss, ","))
-			return this
+			return
 		}
 	}
 
@@ -412,10 +466,10 @@ func (this *TUniTable) SetVerify(VerifyAt string, Fields ...string) *TUniTable {
 	this.VerifyAt = LowerCol
 	this.ColVerify = ListCols
 
-	return this
 }
 
-// AutoKeys 按数据库元数据自动登记主键。UniEngineEx 为引擎指针(第二阶段起不再按值拷贝)。
+// AutoKeys 按数据库元数据自动登记主键,并发布新快照(旧指针不变;
+// 调用方需通过 eng.GetTable(name) 取回含新主键的快照)。UniEngineEx 为引擎指针。
 func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...interface{}) error {
 	//#链式登记的首个错误必须短路:非法表名/字段名会进入元数据 SQL 的单引号拼接,
 	//#旧实现跳过本检查直接触网(注入面),也违反了 SetKeys/SetSecret/SetVerify 的共同契约。
@@ -480,14 +534,33 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 		if ItemCopy.SecretOn {
 			return fmt.Errorf("UniEngine: field[%s.%s] is secreton-marked; pkey Values stay plaintext for WHERE matching, secreton does not apply to pkeys", this.TableName, ItemPara.FieldName)
 		}
-
-		LowerTxt := strings.ToLower(ItemPara.FieldName)
-		if _, Exists := this.HashPkeys[LowerTxt]; !Exists {
-			this.HashPkeys[LowerTxt] = ItemCopy
-			this.ListPkeys = append(this.ListPkeys, ItemCopy)
-		}
 		CodeText = CodeText + "," + `"` + ItemPara.FieldName + `"`
 	}
+
+	//#COW:查询在锁外完成,落库主键在写锁内克隆+发布;读者的旧快照保持不变。
+	Next := this.updateSnapshot(func(Next *TUniTable) {
+		//#以副本状态再检查一次:查询期间快照可能已被 SetVerify 更新。
+		if Next.VerifyOn {
+			Next.LastError = fmt.Errorf("%w: table[%s] AutoKeys is not allowed after SetVerify; register pkeys before SetVerify (re-register the class to change pkeys)", ErrPkeysFrozenAfterVerify, Next.TableName)
+			return
+		}
+		for _, ItemPara := range ListData {
+			ItemCopy, Valid := Next.HashField[strings.ToLower(ItemPara.FieldName)]
+			if !Valid {
+				Next.LastError = fmt.Errorf("UniEngine: database have field[%s.%s], but class not.", Next.TableName, ItemPara.FieldName)
+				return
+			}
+			LowerTxt := strings.ToLower(ItemPara.FieldName)
+			if _, Exists := Next.HashPkeys[LowerTxt]; !Exists {
+				Next.HashPkeys[LowerTxt] = ItemCopy
+				Next.ListPkeys = append(Next.ListPkeys, ItemCopy)
+			}
+		}
+	})
+	if Next.LastError != nil {
+		return Next.LastError
+	}
+
 	CodeText = fmt.Sprintf(".SetKeys( %s )", CodeText[1:])
 	if UniEngineEx.debugging() {
 		fmt.Printf("UniEngine: recommend this line instead of [%s.AutoKeys]:%s\n", this.TableName, CodeText)

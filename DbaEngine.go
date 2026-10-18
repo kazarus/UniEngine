@@ -223,7 +223,7 @@ type HasGetSqlExistViews interface {
 type TExistTable4POSTGR struct{}
 
 func (this TExistTable4POSTGR) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
-	Result := "select count(relname) as value from pg_class where relname='%s'"
+	Result := "select count(relname) as value from pg_class where relname='%s' and relkind in ('r','p')"
 
 	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
@@ -237,7 +237,7 @@ func (this TExistTable4POSTGR) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 type TExistTable4SQLSRV struct{}
 
 func (this TExistTable4SQLSRV) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
-	Result := "select count(*) from sysobjects where 1=1 and name='%s'"
+	Result := "select count(*) from sysobjects where 1=1 and name='%s' and xtype='U'"
 
 	return fmt.Sprintf(Result, strings.ToLower(TableName))
 }
@@ -270,8 +270,8 @@ func (this TExistTable4MYSQLN) GetSqlExistTable(UniEngineEx *TUniEngine, TableNa
 	}
 	Result := "select count(*) from information_schema.tables t where lower(table_name)='%s' and table_schema='%s'"
 
-	//#全部换成小写
-	return strings.ToLower(fmt.Sprintf(Result, TableName, DataBase))
+	//#表名/库名换小写;table_type 字面量保持大写,避免依赖列的排序规则大小写不敏感
+	return strings.ToLower(fmt.Sprintf(Result, TableName, DataBase)) + " and table_type='BASE TABLE'"
 }
 
 func (this TExistTable4MYSQLN) GetSqlExistViews(UniEngineEx *TUniEngine, TableName string, DataBase string) string {

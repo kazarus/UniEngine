@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -437,7 +438,7 @@ type verifyTimeRow struct {
 func TestSetVerifyRejectsUnsupportedProtectedKind(t *testing.T) {
 	eng := newTestEngine()
 	tbl := eng.RegisterClass(verifyTimeRow{}, "t_verify_time").SetKeys("id")
-	tbl.SetVerify("mac", "id", "updated")
+	tbl = tbl.SetVerify("mac", "id", "updated")
 	if tbl.LastError == nil || !strings.Contains(tbl.LastError.Error(), "verify does not support") {
 		t.Fatalf("time.Time protected column must be rejected at registration, got %v", tbl.LastError)
 	}
@@ -469,5 +470,172 @@ func TestSQLDebugRedactsArgumentValues(t *testing.T) {
 	}
 	if !strings.Contains(string(Output), "values redacted") {
 		t.Fatalf("debug output should state that values are redacted: %s", Output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #快照 COW:PrepareTables/PrepareRunSQL/链式登记不得原地改写已发布快照
+// ---------------------------------------------------------------------------
+
+func TestPrepareTablesPublishesNewSnapshot(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.RegisterClass(mockRow{}, "t_cow").SetKeys("id")
+
+	Old := eng.GetTable("t_cow")
+	if eror := eng.PrepareTables("t_cow"); eror != nil {
+		t.Fatal(eror)
+	}
+	Next := eng.GetTable("t_cow")
+	if Old == Next {
+		t.Fatal("PrepareTables must publish a new snapshot")
+	}
+	if len(Old.ListField) == 0 || len(Next.ListField) == 0 {
+		t.Fatalf("ListField should be populated in both snapshots: old=%d new=%d", len(Old.ListField), len(Next.ListField))
+	}
+}
+
+func TestPrepareRunSQLPublishesNewSnapshot(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.RegisterClass(mockRow{}, "t_cow_sql").SetKeys("id")
+
+	Old := eng.GetTable("t_cow_sql")
+	SQL, _, _, eror := eng.PrepareRunSQL("t_cow_sql", EtInsert)
+	if eror != nil || SQL == "" {
+		t.Fatalf("PrepareRunSQL: %q, %v", SQL, eror)
+	}
+	Next := eng.GetTable("t_cow_sql")
+	if Old == Next {
+		t.Fatal("PrepareRunSQL must publish a new snapshot")
+	}
+	if Old.SqlInsert != "" {
+		t.Fatalf("old snapshot must not be mutated, got %q", Old.SqlInsert)
+	}
+	if Next.SqlInsert != SQL {
+		t.Fatalf("new snapshot should carry SqlInsert: %q", Next.SqlInsert)
+	}
+}
+
+func TestChainMutationPublishesNewSnapshot(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	Old := eng.RegisterClass(mockRow{}, "t_chain")
+
+	Next := Old.SetSecret("name")
+	if Next == Old {
+		t.Fatal("SetSecret must publish a new snapshot")
+	}
+	if Old.SecretOn || len(Old.ColSecret) != 0 {
+		t.Fatalf("old snapshot must stay immutable, got SecretOn=%v cols=%d", Old.SecretOn, len(Old.ColSecret))
+	}
+	if !Next.SecretOn || len(Next.ColSecret) != 1 {
+		t.Fatalf("new snapshot should carry secret metadata, got %+v", Next.ColSecret)
+	}
+	if eng.GetTable("t_chain") != Next {
+		t.Fatal("registry should point at the newly published snapshot")
+	}
+}
+
+func TestAutoKeysPublishesNewSnapshot(t *testing.T) {
+	d := &mockDriver{columns: []string{"field_name"}, queryRows: [][]driver.Value{{"id"}}}
+	eng := newMockEngine(d)
+	tbl := eng.RegisterClass(mockRow{}, "t_auto_cow")
+
+	if eror := tbl.AutoKeys(eng); eror != nil {
+		t.Fatal(eror)
+	}
+	if _, Ok := tbl.HashPkeys["id"]; Ok {
+		t.Fatal("AutoKeys must not mutate the old snapshot")
+	}
+	if _, Ok := eng.GetTable("t_auto_cow").HashPkeys["id"]; !Ok {
+		t.Fatal("AutoKeys should publish a snapshot with the discovered pkey")
+	}
+}
+
+func TestPrepareTablesConcurrentWithUpdate(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.RegisterClass(mockRow{}, "t_race").SetKeys("id")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if eror := eng.PrepareTables("t_race"); eror != nil {
+				errCh <- eror
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			if eror := eng.Update(&mockRow{ID: i, Name: "n"}); eror != nil {
+				errCh <- eror
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for eror := range errCh {
+		t.Fatal(eror)
+	}
+}
+
+func TestChainMutationConcurrentWithSelect(t *testing.T) {
+	d := &mockDriver{columns: []string{"id", "name"}, queryRows: [][]driver.Value{{int64(1), "n"}}}
+	eng := newMockEngine(d)
+	tbl := eng.RegisterClass(mockRow{}, "t_chain_race")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			tbl = tbl.SetSecret("name")
+			if tbl.LastError != nil {
+				errCh <- tbl.LastError
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			var rows []mockRow
+			if eror := eng.SelectL(&rows, "select id,name from t_chain_race"); eror != nil {
+				errCh <- eror
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for eror := range errCh {
+		t.Fatal(eror)
+	}
+}
+
+func TestExistTableObjectKindFilters(t *testing.T) {
+	eng := &TUniEngine{}
+
+	PG := TExistTable4POSTGR{}.GetSqlExistTable(eng, "t_obj")
+	if !strings.Contains(PG, "relkind in ('r','p')") {
+		t.Fatalf("PG ExistTable must exclude views/indexes/sequences, got %q", PG)
+	}
+
+	MSSQL := TExistTable4SQLSRV{}.GetSqlExistTable(eng, "t_obj")
+	if !strings.Contains(MSSQL, "xtype='U'") {
+		t.Fatalf("SQLServer ExistTable must filter user tables, got %q", MSSQL)
+	}
+
+	MySQL := strings.ToLower(TExistTable4MYSQLN{}.GetSqlExistTable(eng, "t_obj", "db"))
+	if !strings.Contains(MySQL, "table_type='base table'") {
+		t.Fatalf("MySQL ExistTable must exclude views, got %q", MySQL)
 	}
 }
