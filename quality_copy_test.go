@@ -1,5 +1,5 @@
 // quality_copy_test
-// #历史兼容:downstream-project 等调用方按值复制 TUniEngine(每请求 c.Set("DB", ...)),
+// #历史兼容:部分调用方按值复制 TUniEngine(每请求 c.Set("DB", ...)),
 // #副本必须共享注册表锁;否则运行时 RegisterClass/PrepareTables 会与查询并发写同一张 map。
 package UniEngine
 

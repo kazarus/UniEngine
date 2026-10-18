@@ -33,7 +33,7 @@ type TUniEngine struct {
 	txGate    *sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询);同样共享
 	locksOnce sync.Once     //#并发零值引擎的懒初始化;Initialize 后复制副本时 done 已置位
 
-	//#说明:这两个锁必须是共享指针。downstream-project 等历史调用方大量按值复制
+	//#说明:这两个锁必须是共享指针。历史调用方可能大量按值复制
 	//#TUniEngine(每请求 c.Set("DB", ...)),若改为内嵌值,副本会各自持锁,
 	//#却仍写同一张 HashTabl,运行时 RegisterClass/PrepareTables 会与读并发。
 	//#新代码仍应使用 *TUniEngine;noCopy 只是静态提示,不能强制既有调用方。

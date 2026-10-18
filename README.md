@@ -237,7 +237,7 @@ eror := UniEngineEx.WithTx(func() error {
 - 回滚错误不覆盖 `fn` 的原始错误/panic;
 - 它不提供跨 goroutine 的共享事务:同一引擎实例上的事务仍须串行,并发事务请使用各自的引擎副本(如每请求复制)。
 
-生产代码原有的 3800+ 个手工 `Begin/Commit/Cancel` 块无需修改;新代码可逐步采用。
+既有调用方原有的手工 `Begin/Commit/Cancel` 块无需修改;新代码可逐步采用。
 
 ##### 3.可空列与 NULL(读路径语义)
 
@@ -474,7 +474,7 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | PG / MySQL | 60000(65535 留余量) | — | 600 行/页 |
 | 未知方言 | 60000 | — | 600 行/页 |
 
-达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,并套用达梦自己的 100 行/页性能上限;这样不会触发应用侧 507 处 `switch Provider == DtORACLE` 的迁移。
+达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,并套用达梦自己的 100 行/页性能上限;这样不会触发应用侧 大量 `switch Provider == DtORACLE` 的迁移。
 
 达梦真机测量(1000 行 × 2 列,稳态):999 行/页约 0.36s,500 约 0.15s,200/100/50 约 0.1s;100 行/页与 Oracle 一样避开 `INSERT ALL` 的 `INTO` 拐点。47 列时 `2000/47=42` 行/页,绑定预算更紧,优先于 100 行上限。
 
@@ -485,7 +485,7 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 
 #### 5.4.旧调用方接入检查清单
 
-把当前版本替换到既有生产代码(尤其大量按值复制 `TUniEngine`、同一表名多个投影类的项目)时,按以下顺序检查:
+把当前版本替换到既有调用方(尤其大量按值复制 `TUniEngine`、同一表名多个投影类的项目)时,按以下顺序检查:
 
 1. **一表多类**:新版本允许不同类共享同一表名;类名键各自保留,表名键指向最后一次注册。若旧代码依赖“表名键固定指向第一个类”,需改用 `GetTableByClass`。
 2. **引擎复制**:`mu`/`txGate` 已恢复为共享指针,按值复制的副本仍共享注册表锁;但 `tx/inTx` 仍按值复制,事务只能在单个副本内使用。新代码请用 `*TUniEngine`。

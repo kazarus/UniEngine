@@ -24,7 +24,7 @@
 - **真机测试数据库名脱敏**:所有集成测试示例、README/CONTRIBUTING、CI 服务与历史评估报告统一使用 `UNIENGINE_TESTDB` 作为数据库名占位;真实库名/口令只经环境变量传入,不写入仓库。
 - **`Initialize` 基础配置校验**:`Db` 非空时检查 `ColLabel`/`ColParam`/`Provider`,非法返回新增的 `ErrInvalidConfig`;`Db` 为空的注册-only 引擎继续跳过,避免破坏单测/元数据登记用法。
 - **`AutoKeys` 默认 SQL 按协议族选择**:不传生成器时,PG/SQLServer/Oracle/MySQL 分别使用各自的主键探测 SQL,不再写死 PostgreSQL;MySQL 缺 `DataBase` 或未知 Provider 明确报错。
-- **达梦批量预算接入 `Supplier`**:新增 `batchDialect()`;`Provider=DtORACLE` + `Supplier=DtDAMENG` 时按达梦 2000 参数预算分页,不套 Oracle 100 行上限,SQL 生成仍走 Oracle 分支。生产无需改 `Provider`(避免 507 处 `case DtORACLE` 迁移)。
+- **达梦批量预算接入 `Supplier`**:新增 `batchDialect()`;`Provider=DtORACLE` + `Supplier=DtDAMENG` 时按达梦 2000 参数预算分页,不套 Oracle 100 行上限,SQL 生成仍走 Oracle 分支。下游无需改 `Provider`(避免大量 `case DtORACLE` 迁移)。
 - **锁模型恢复共享指针**:`mu`/`txGate` 改回 `*sync.RWMutex`/`*sync.Mutex`,使历史“按值复制引擎”调用方的副本共享注册表锁;否则副本各自持锁却写同一张 `HashTabl`,运行时 `RegisterClass`/`PrepareTables` 与查询并发会触发 map 竞态。零值引擎用 `sync.Once` 做并发安全的懒初始化;事务状态(`tx`/`inTx`)仍按值复制,新代码仍应使用 `*TUniEngine`。
 - **新增 `RegisterClassForce`**:显式允许用类元数据替换**手工登记**的表(`ClassType==nil`);不会把已登记到其它表的类改绑(`ErrClassConflict`)。不同类共享同一表名本来就是允许的。
 - **批量分页 clamp**:`InsertP`/`CopyInP` 的 `PageSize` 统一归一化:
@@ -471,7 +471,7 @@ push / pull_request 触发，Go 版本矩阵（`1.24.x`/`1.25.x`/`1.26.x`/`1.27.
 
 等价性验证：拆分前后顶层声明签名集合完全一致（93 个），函数数一致（89），全量测试/`-race`/真实 PG 集成/基准冒烟全绿。
 
-### 行为修复（随 downstream 侧改动同步）
+### 行为修复（随下游项目反馈同步）
 
 - **`SelectS` 标量路径自动解密**：返回前经 `Secret` 走与列路径同一套语义——`SecretOn=0` 直通、带 `ENC:` 标签的密文还原、存量明文（无标签）直通；查加密列的标量查询不再返回密文（存储形态断言请绕过引擎用原生 query）。`SelectD/F` 为数值不涉及。
 
