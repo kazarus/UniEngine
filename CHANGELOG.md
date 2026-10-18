@@ -19,7 +19,8 @@
 - **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不打印实参值,避免明文密码/证件号进入日志。
 - **链式登记改为快照 COW**(并发安全,行为变更):`SetKeys`/`SetSecret`/`SetVerify`/`AutoKeys` 此前直接改写 `RegisterClass` 已发布的 `*TUniTable`,与并发查询读取 `HashField/ListField/HashPkeys` 构成数据竞争(并发 map 读写可致进程 fatal)。现在这些方法在引擎写锁内克隆当前快照、修改副本并发布,返回**新的** `*TUniTable`;旧指针保持不变。链式写法 `tbl := eng.RegisterClass(...).SetKeys(...).SetSecret(...)` 不受影响;忽略返回值后再读旧指针属性会看到旧快照,`AutoKeys` 之后请用 `eng.GetTable(name)` 重新取表。
 - **`PrepareTables`/`PrepareRunSQL` 改为快照 COW**:两者原在持锁状态下原地改写已发布快照的 `ListField/ListPkeys/SqlSelect~SqlDelete`,读者取到指针后不持锁访问,构成数据竞争。现均克隆后发布新快照,旧指针保持只读。
-- **`ExistTable` 按对象种类过滤**:PostgreSQL 补 `relkind in ('r','p')`(排除视图/索引/序列),SQL Server 补 `xtype='U'`(排除视图/系统对象),MySQL 补 `table_type='BASE TABLE'`(排除视图);Oracle 仍走 `all_tables`。
+- **`ExistTable` 按对象种类过滤**:PostgreSQL 补 `relkind in ('r','p')`(排除视图/索引/序列),SQL Server 补 `xtype='U'`(排除视图/系统对象),MySQL 补 `table_type='BASE TABLE'`(排除视图);Oracle 改为 `user_tables`,与 `ExistViews/ExistField/ExistConst/AutoKeys` 统一为当前用户 schema 口径,避免其它 schema 同名表让 `ExistTable=true` 而 `AutoKeys` 查不到主键。
+- **Oracle `AutoKeys` 复合主键顺序**:`user_cons_columns` 查询补 `order by cu.position`,复合主键的登记顺序不再依赖数据库返回序。
 - **锁窗口收敛**:`mu` 改为内嵌 `sync.RWMutex`,删除包级 `muLazy` 懒初始化锁(每次查询不再抢全局锁);新增 `txGate` 串行化事务生命周期,`BeginTx`/`Commit`/`Rollback` 的驱动网络等待不再持注册表写锁。
 
 ### 升级注意

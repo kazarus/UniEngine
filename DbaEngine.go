@@ -251,7 +251,10 @@ func (this TExistTable4SQLSRV) GetSqlExistViews(UniEngineEx *TUniEngine, TableNa
 type TExistTable4ORACLE struct{}
 
 func (this TExistTable4ORACLE) GetSqlExistTable(UniEngineEx *TUniEngine, TableName string) string {
-	Result := "select count(*) from all_tables where table_name=upper('%s')"
+	//#与 ExistViews/ExistField/ExistConst/AutoKeys 统一为当前用户 schema(user_*):
+	//#all_tables 会把其它 schema 的同名表算作存在,随后 AutoKeys(user_cons_columns)却查不到,
+	//#出现"表存在但没有主键"的自相矛盾。
+	Result := "select count(*) from user_tables where table_name=upper('%s')"
 
 	return fmt.Sprintf(Result, TableName)
 }
@@ -437,7 +440,7 @@ func (this TAutoKeys4SQLSRV) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName s
 type TAutoKeys4ORACLE struct{}
 
 func (this TAutoKeys4ORACLE) GetSqlAutoKeys(UniEngineEx *TUniEngine, TableName string) (string, error) {
-	Result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s')"
+	Result := "select cu.column_name as field_name from user_cons_columns cu, user_constraints au where cu.constraint_name=au.constraint_name and au.constraint_type=upper('p') and au.table_name =upper('%s') order by cu.position"
 
 	return fmt.Sprintf(Result, TableName), nil
 }

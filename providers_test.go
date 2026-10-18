@@ -157,7 +157,7 @@ func TestDamengOracleFamily(t *testing.T) {
 		t.Fatalf("dameng ExistTable should route to oracle catalog: %v %v", ok, eror)
 	}
 	queries := d.snapshotQueries()
-	if len(queries) == 0 || !strings.Contains(queries[0], "all_tables") {
+	if len(queries) == 0 || !strings.Contains(queries[0], "user_tables") {
 		t.Fatalf("dameng exist sql wrong: %v", queries)
 	}
 

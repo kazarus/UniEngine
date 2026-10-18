@@ -319,7 +319,7 @@ func TestOracleMetadata(t *testing.T) {
 		t.Errorf("普通表 %s 不应被判为视图", oraProbeTable)
 	}
 	if ok, _ := eng.ExistTable(oraProbeView); ok {
-		t.Errorf("视图 %s 不应出现在 all_tables 判定中", oraProbeView)
+		t.Errorf("视图 %s 不应出现在 ExistTable 判定中", oraProbeView)
 	}
 
 	//#字段

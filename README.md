@@ -27,7 +27,7 @@
 >   `sql.NullString` / `sql.NullInt64` / pointers, or `[]byte`. The scalar helpers
 >   (`SelectS`/`SelectD`/`SelectF`) are the opposite: they scan into `sql.NullXxx`
 >   and return a zero value on `NULL`. See §3 (Chinese) for the measured matrix.
-> - **Tests**: 236 unit tests (~89% statement coverage, mock driver) plus
+> - **Tests**: 238 unit tests (~90% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
 >
@@ -340,7 +340,7 @@ go test -bench . -benchmem -run '^$'
 - **`SelectL` 的整批语义落地**:查询中途失败(扫描错误/`rows.Err`)会回滚本次已追加的行,调用方预置的元素不变。
 - **链式登记改为快照 COW**:`SetKeys`/`SetSecret`/`SetVerify`/`AutoKeys` 现在克隆并发布新 `*TUniTable`,不再原地改写已发布快照。链式写法不受影响;若忽略返回值再读旧指针,会看到旧快照。`AutoKeys` 后请用 `eng.GetTable(name)` 重新取表。
 - **`PrepareTables`/`PrepareRunSQL` 也发布新快照**:旧 `*TUniTable` 指针保持只读,不再被原地更新。
-- **`ExistTable` 对象种类过滤**:PG `relkind in ('r','p')`、SQLServer `xtype='U'`、MySQL `table_type='BASE TABLE'`,同名视图/索引不再被误判为表。
+- **`ExistTable` 对象种类过滤**:PG `relkind in ('r','p')`、SQLServer `xtype='U'`、MySQL `table_type='BASE TABLE'`,同名视图/索引不再被误判为表;Oracle 统一用 `user_tables`(与其它元数据探测同一当前用户 schema 口径),`AutoKeys` 复合主键按 `position` 排序。
 - **调试输出不再打印实参值**;事务的 `Begin/Commit/Rollback` 也不再持注册表写锁等待网络往返。
 
 #### 6.真实数据库集成测试
