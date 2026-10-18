@@ -439,7 +439,7 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | 同义词(`SYNONYM`) | ❌ `ExistTable` / `ExistViews` 不识别 | 引擎不展开 `USER_SYNONYMS`;CRUD 可能经同义词正常读写,但迁移判存会得到 false。迁移场景请先查 `ALL_SYNONYMS` / `ALL_OBJECTS` |
 | 物化视图(`MATERIALIZED VIEW`) | ⚠️ `ExistViews` 不识别 | 只查 `USER_VIEWS`,未查 `USER_MVIEWS`;不要把 `ExistViews=false` 等同于“不是视图” |
 | 显式 `schema.table` 表名 | ❌ 元数据探测不支持 | 白名单与 CRUD 允许点号,但 `Exist*` / `AutoKeys` 把整串与 `TABLE_NAME` 比较,不会拆分 owner。元数据探测请传**裸表名** |
-| `ExistConst(CtDF, 列名)` | ⚠️ 仅按列名判断 | Oracle 默认值不是命名约束;同一 schema 下任意表有同名列且 `data_default is not null` 就返回 true。需要精确判定时请自行按 `USER_TAB_COLS(TABLE_NAME, COLUMN_NAME)` 查询 |
+| `ExistConst(CtDF, 列名)` | ⚠️ 仅按列名判断 | Oracle 默认值不是命名约束;同一 schema 下任意表有同名列且 `data_default is not null` 就返回 true。需要精确判定时用 `ExistConstOn(表名, CtDF, 列名)`(按 `USER_TAB_COLS(TABLE_NAME, COLUMN_NAME)` 查询) |
 | 复合主键 `AutoKeys` | ✅ 顺序稳定 | 已按 `USER_CONS_COLUMNS.POSITION` 排序,不依赖数据库返回序 |
 | 达梦(`DtDAMENG`) | ⚠️ 同路径、未真库覆盖 | 与 Oracle 共用上述 SQL;CI 只跑 Oracle 真库,达梦的 `USER_*` 兼容性需在目标库验证 |
 

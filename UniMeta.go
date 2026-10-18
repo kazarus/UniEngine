@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -244,4 +245,44 @@ func (this *TUniEngine) ExistConstCtx(Ctx context.Context, ConstType TConstType,
 	}
 
 	return this.existCount(Ctx, "existconst", SQL)
+}
+
+// ExistConstOn 判断“指定表上的列默认值”等需要表名限定的约束。
+// 对 CtDF,ConstName 为列名;其它约束类型仍按 ConstName 判断(表名参数被忽略),
+// 因为主键/外键/唯一约束名通常已在 schema 内唯一。
+// 该入口解决了 ExistConst(CtDF,列名) 只按列名匹配、无法区分同名列的问题。
+func (this *TUniEngine) ExistConstOn(TableName string, ConstType TConstType, ConstName string) (bool, error) {
+	return this.ExistConstOnCtx(context.Background(), TableName, ConstType, ConstName)
+}
+
+func (this *TUniEngine) ExistConstOnCtx(Ctx context.Context, TableName string, ConstType TConstType, ConstName string) (bool, error) {
+	if !validIdent(TableName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidTableName, TableName)
+	}
+	if !validIdent(ConstName) {
+		return false, fmt.Errorf("%w: %s", ErrInvalidConstraintName, ConstName)
+	}
+	if ConstType != CtDF {
+		return this.ExistConstCtx(Ctx, ConstType, ConstName)
+	}
+
+	var SQL string
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		SQL = fmt.Sprintf("select count(*) from pg_attrdef d join pg_class c on c.oid=d.adrelid join pg_attribute a on a.attrelid=c.oid and a.attnum=d.adnum where c.relname='%s' and a.attname='%s'", strings.ToLower(TableName), strings.ToLower(ConstName))
+	case FmSQLSRV:
+		SQL = fmt.Sprintf("select count(*) from sys.columns c join sys.tables t on c.object_id=t.object_id where t.name='%s' and c.name='%s' and c.default_object_id<>0", TableName, ConstName)
+	case FmORACLE:
+		SQL = fmt.Sprintf("select count(*) from user_tab_cols where table_name=upper('%s') and column_name=upper('%s') and data_default is not null", TableName, ConstName)
+	case FmMYSQLN:
+		DataBase, eror := this.mysqlDataBase()
+		if eror != nil {
+			return false, eror
+		}
+		SQL = fmt.Sprintf("select count(*) from information_schema.columns where table_schema='%s' and table_name='%s' and column_name='%s' and column_default is not null", DataBase, TableName, ConstName)
+	}
+	if SQL == "" {
+		return false, fmt.Errorf("UniEngine: ExistConstOn has no SQL for provider %v", this.Provider)
+	}
+	return this.existCount(Ctx, "existconston", SQL)
 }
