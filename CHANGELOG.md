@@ -20,6 +20,7 @@
   - 先 clamp 再转 `int`,消除 32 位截断/超大值导致的不分页;`CopyInP` 走 COPY,只做行数上限。
   这修复了达梦 3 列以上、Oracle/SQLServer 宽表使用默认 999 行时超出参数上限的问题,并把 Oracle `InsertP` 从分钟级降到秒级。
 - **Oracle 集成测试支持 godror**:`UNIENGINE_ORACLE_DRIVER=godror` + URL DSN 的 `libDir` 参数可走生产驱动;错误断言改为驱动无关(go-ora 抛 ORA-,godror 客户端直接拒绝),并新增 godror 真机 `InsertP` 用例。`integration/go.mod` 仅测试模块新增 godror 依赖。
+- **新增 TiDB 真机集成测试**:`integration/tidb_test.go` 覆盖 MySQL 协议(端口 4000)的 CRUD、`SaveIt` 的 count-then-dispatch 回退、`InsertL`、`InsertP` 页大小 clamp、ENC 加密往返、`information_schema` 元数据与事务提交/回滚;通过 `UNIENGINE_TIDB_*` 配置,未纳入固定 CI 服务。
 - **分页测试补全**:新增页大小归一化、按列预算(Oracle/达梦/SQLServer/PG)、负值/`MaxInt64`/COPY clamp 回归。
 
 ### 升级注意

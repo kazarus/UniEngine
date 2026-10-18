@@ -397,7 +397,7 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 
 #### 6.真实数据库集成测试
 
-`integration/` 是**独立 Go 模块**(自带 go.mod),用真实数据库验证各协议族的真实驱动行为——库本体保持零第三方依赖不受影响。覆盖 **PostgreSQL / SQL Server / Oracle / MySQL** 四族:
+`integration/` 是**独立 Go 模块**(自带 go.mod),用真实数据库验证各协议族的真实驱动行为——库本体保持零第三方依赖不受影响。覆盖 **PostgreSQL / SQL Server / Oracle / MySQL** 四族,并新增 **TiDB(MySQL 协议)** 真机用例:
 
 | 文件 | 驱动 | 覆盖内容 |
 | ---- | ---- | -------- |
@@ -405,6 +405,7 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 | `mssql_test.go` | `go-mssqldb` | **驱动名 × ColParam 绑定矩阵**(`mssql` 预处理 `?`/`:N`/`$N` → `@pN`;`sqlserver` 仅认 `@pN`)+ 四组合六步 CRUD + `sqlserver`+`$` 静默写错数据的复现用例(默认跳过) |
 | `oracle_test.go` | `go-ora` / `godror` | `:N` 占位符契约(错误风格**硬报错**,无静默写错)+ CRUD / `INSERT ALL` 多行 / `MERGE` 两条分支 / `AutoKeys`+`Exist*` 元数据 / ENC 加密落库与还原 |
 | `mysql_test.go` | `go-sql-driver/mysql` | `?` 占位符契约(三种错误风格**均不绑定实参**且均非静默写错)+ 六步 CRUD(含 `SaveIt` 的 count-then-dispatch 回退)+ `information_schema` 元数据 / ENC 加密落库与还原 |
+| `tidb_test.go` | `go-sql-driver/mysql` | TiDB(MySQL 协议,默认端口 4000):CRUD / `SaveIt` count-then-dispatch / `InsertL` / `InsertP` clamp / ENC 加密 / `information_schema` 元数据 / 事务提交回滚 |
 
 ```sh
 # PostgreSQL(连不上时自动跳过;REQUIRED=1 则强制失败,CI 即如此)
@@ -426,9 +427,14 @@ go test ./integration/ -run Oracle -v
 # MySQL:分量式或整串 DSN;元数据用例(Exist*/AutoKeys)需要库名,故分量模式下须给 UNIENGINE_MYSQL_DB
 UNIENGINE_MYSQL_HOST=127.0.0.1 UNIENGINE_MYSQL_USER=root UNIENGINE_MYSQL_PASS='...' \
 UNIENGINE_MYSQL_DB=demo go test ./integration/ -run MySQL -v
+
+# TiDB:MySQL 协议,默认端口 4000;同样需要库名供 information_schema 探测
+UNIENGINE_TIDB_HOST=127.0.0.1 UNIENGINE_TIDB_PORT=4000 \
+UNIENGINE_TIDB_USER=root UNIENGINE_TIDB_PASS='...' \
+UNIENGINE_TIDB_DB=demo go test ./integration/ -run TiDB -v
 ```
 
-四族各有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致。
+四族各有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致;TiDB 对应 `UNIENGINE_TIDB_REQUIRED=1`。TiDB 需自备实例,未纳入固定 CI 服务。
 
 **CI 覆盖**(`.github/workflows/ci.yml`):
 
