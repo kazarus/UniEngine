@@ -32,6 +32,8 @@ var (
 	ErrNoDatabase = errors.New("UniEngine: Db is nil")
 	// ErrInvalidDataBase MySQL 元数据探测使用的库名不合法(防注入白名单)
 	ErrInvalidDataBase = errors.New("UniEngine: invalid database name")
+	// ErrInvalidConfig 引擎基础配置缺失/非法(ColLabel/ColParam/Provider);Initialize 在使用真实 Db 时校验
+	ErrInvalidConfig = errors.New("UniEngine: invalid engine config")
 	// ErrMultipleRows 标量查询(SelectD/SelectF/SelectS)返回多行;此类入口只接受单行结果
 	ErrMultipleRows = errors.New("UniEngine: scalar query returned more than one row")
 	// ErrTableConflict 表名已被手工登记或由另一个类登记;RegisterClass 不会静默覆盖

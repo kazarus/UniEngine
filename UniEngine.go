@@ -639,9 +639,35 @@ func (this *TUniEngine) RunDebug(Value bool) error {
 	return nil
 }
 
+// validateBasicConfig 校验实际执行 SQL 所需的基础配置。
+// Db 为空时跳过:零值引擎/仅注册元数据的用法仍然合法。
+func (this *TUniEngine) validateBasicConfig() error {
+	if this.Db == nil {
+		return nil
+	}
+	if strings.TrimSpace(this.ColLabel) == "" {
+		return fmt.Errorf("%w: ColLabel is empty", ErrInvalidConfig)
+	}
+	switch this.ColParam {
+	case "$", ":", "?", "@p":
+	default:
+		return fmt.Errorf("%w: unsupported ColParam %q (want $, :, ? or @p)", ErrInvalidConfig, this.ColParam)
+	}
+	if dbFamilyOf(this.Provider) == FmUNKNOWN {
+		return fmt.Errorf("%w: unsupported Provider %v", ErrInvalidConfig, this.Provider)
+	}
+	return nil
+}
+
 func (this *TUniEngine) Initialize() error {
 	//#先装配共享锁指针:调用方可能在 Initialize 之后按值复制引擎。
 	this.ensureLocks()
+
+	//#基础配置校验:只在已装配 Db 时执行。零值引擎仍可用于注册/单元测试,
+	//#避免把"仅登记元数据"的合法用法误判为配置错误。
+	if eror := this.validateBasicConfig(); eror != nil {
+		return eror
+	}
 
 	//#SQL Server 初始化时检查开发者声明的驱动名与占位符组合。
 	//#失败时不登记内置表,由调用方直接处理初始化错误。

@@ -392,6 +392,7 @@ go test -bench . -benchmem -run '^$'
 - **`SelectS`/`SelectD`/`SelectF` 多行改为报错**(`ErrMultipleRows`):旧版静默取最后一行。条件写漏返回多行时现在会显式失败,请补唯一性条件或改用 `SelectL`。
 - **`SelectH` 的 `f` 不能为 nil**:旧版把所有行折叠到键 `""`,map 静默只剩一条;现在先校验 map/键类型,再拒绝 nil 键函数。
 - **`Db` 未装配返回 `ErrNoDatabase`**:查询/写入/`Begin` 不再在 `database/sql` 内空指针 panic;`Initialize()` 本身仍允许只做注册(便于单元测试),执行入口统一兜底。
+- **`Initialize()` 基础配置校验**:`Db` 非空时校验 `ColLabel` 非空、`ColParam` 属于 `$`/`:`/`?`/`@p`、`Provider` 可识别;缺失/非法返回 `ErrInvalidConfig`。`Db` 为空(仅注册/单测)不校验,保持原兼容。
 - **`Initialize()` 不再改写事务状态**:进行中的事务必须由调用方 `Commit`/`Cancel` 终结;重复调用初始化不会让实例卡在"既不能提交也不能重开"。
 - **`AutoKeys` 短路链式 `LastError`**:非法表名/字段名不会再进入元数据 SQL;MySQL 的 `DataBase` 纳入标识符白名单(`ErrInvalidDataBase`)。
 - **`SetVerify` 登记期校验保护列类型**:`time.Time`/`[]byte` 等不被 `verifyFormat` 支持的列会直接报 `LastError`,不再等到首次读写才失败。
