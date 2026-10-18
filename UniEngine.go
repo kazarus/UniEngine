@@ -29,8 +29,9 @@ type TUniEngine struct {
 
 	Db *sql.DB
 
-	mu     *sync.RWMutex //#保护 HashTabl 与事务状态;指针使历史副本共享同一把锁
-	txGate *sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询);同样共享
+	mu        *sync.RWMutex //#保护 HashTabl 与事务状态;指针使历史副本共享同一把锁
+	txGate    *sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询);同样共享
+	locksOnce sync.Once     //#并发零值引擎的懒初始化;Initialize 后复制副本时 done 已置位
 
 	//#说明:这两个锁必须是共享指针。downstream-project 等历史调用方大量按值复制
 	//#TUniEngine(每请求 c.Set("DB", ...)),若改为内嵌值,副本会各自持锁,
@@ -116,24 +117,19 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
-// locksInitMu 只保护 mu/txGate 指针的首次装配,不参与运行期加锁。
-var locksInitMu sync.Mutex
-
 // ensureLocks 为历史零值引擎/复制引擎补齐共享锁指针。
-// #Initialize 会先调用它;生产代码在复制引擎前已完成初始化,故副本共享同一组指针。
-// #并发首次调用零值引擎不在契约内,调用方应先 Initialize。
+// #用 sync.Once 而非"读指针再补写":并发首次调用零值引擎时,普通双重检查
+// #仍会对 mu/txGate 字段产生数据竞争。Initialize 会先调用它;生产代码在复制
+// #引擎前已完成初始化,副本的 locksOnce 已置位,Do 为无操作。
 func (this *TUniEngine) ensureLocks() {
-	if this.mu != nil && this.txGate != nil {
-		return
-	}
-	locksInitMu.Lock()
-	defer locksInitMu.Unlock()
-	if this.mu == nil {
-		this.mu = &sync.RWMutex{}
-	}
-	if this.txGate == nil {
-		this.txGate = &sync.Mutex{}
-	}
+	this.locksOnce.Do(func() {
+		if this.mu == nil {
+			this.mu = &sync.RWMutex{}
+		}
+		if this.txGate == nil {
+			this.txGate = &sync.Mutex{}
+		}
+	})
 }
 
 // lockTables 加写锁（注册/表结构变更/事务状态变更）
