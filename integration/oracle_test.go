@@ -385,3 +385,59 @@ func TestOracleSecretRoundTrip(t *testing.T) {
 		t.Errorf("解密后 = %q, want \"TOP-SECRET\"", loaded.Secret)
 	}
 }
+
+type oraPageRow struct {
+	C1  int64 `db:"c1"`
+	C2  int64 `db:"c2"`
+	C3  int64 `db:"c3"`
+	C4  int64 `db:"c4"`
+	C5  int64 `db:"c5"`
+	C6  int64 `db:"c6"`
+	C7  int64 `db:"c7"`
+	C8  int64 `db:"c8"`
+	C9  int64 `db:"c9"`
+	C10 int64 `db:"c10"`
+}
+
+// #InsertP 分页 clamp 的 Oracle 真机验证:
+// 10 列 × 2000 行,-5 归一化为 999 行/页(60000/10 > 999),分 3 页;
+// 同时验证 Oracle 能接受 999 个无条件 INSERT ALL 的 INTO 子句。
+func TestOracleInsertPPageSizeClamp(t *testing.T) {
+	db := openOracle(t)
+	eng := oracleEngineOn(db, ":")
+
+	const tableName = "UNI_IT_ORA_PAGE"
+	drop := "drop table " + tableName
+	_ = eng.Execute(drop) //#忽略不存在
+	columns := "c1 number, c2 number, c3 number, c4 number, c5 number, " +
+		"c6 number, c7 number, c8 number, c9 number, c10 number"
+	create := fmt.Sprintf("create table %s (%s)", tableName, columns)
+	if eror := eng.Execute(create); eror != nil {
+		t.Fatalf("create: %v", eror)
+	}
+	t.Cleanup(func() {
+		if eror := eng.Execute(drop); eror != nil {
+			t.Errorf("cleanup: drop %s failed: %v", tableName, eror)
+		}
+	})
+
+	tbl := eng.RegisterClass(oraPageRow{}, tableName)
+	if tbl.LastError != nil {
+		t.Fatalf("register: %v", tbl.LastError)
+	}
+
+	rows := make([]oraPageRow, 2000)
+	for i := range rows {
+		rows[i] = oraPageRow{
+			C1: int64(i + 1), C2: 2, C3: 3, C4: 4, C5: 5,
+			C6: 6, C7: 7, C8: 8, C9: 9, C10: 10,
+		}
+	}
+	if eror := eng.InsertP(&rows, -5, tableName); eror != nil {
+		t.Fatalf("InsertP: %v", eror)
+	}
+	n, eror := eng.SelectD("select count(1) from " + tableName)
+	if eror != nil || n != 2000 {
+		t.Fatalf("count=(%d,%v), want 2000", n, eror)
+	}
+}
