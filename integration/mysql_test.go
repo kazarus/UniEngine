@@ -522,3 +522,47 @@ func TestMySQLPlaceholderRewriteStoredValues(t *testing.T) {
 		t.Fatal("实参多余应报错")
 	}
 }
+
+const mysqlPageTable = "uni_it_mysql_page"
+
+type mysqlPageRow struct {
+	Id   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
+// #InsertP 分页 clamp 的 MySQL 真机验证:负值归一化为 999 行,2000 行分 3 页落库。
+func TestMySQLInsertPPageSizeClamp(t *testing.T) {
+	db := openMySQL(t)
+	eng := mysqlEngineOn(db, "?")
+
+	drop := "drop table if exists " + mysqlPageTable
+	if eror := eng.Execute(drop); eror != nil {
+		t.Fatalf("drop: %v", eror)
+	}
+	ddl := "create table " + mysqlPageTable + "(id bigint primary key, name varchar(64)) engine=InnoDB default charset=utf8mb4"
+	if eror := eng.Execute(ddl); eror != nil {
+		t.Fatalf("create: %v", eror)
+	}
+	t.Cleanup(func() {
+		if eror := eng.Execute(drop); eror != nil {
+			t.Logf("cleanup: drop %s failed: %v", mysqlPageTable, eror)
+		}
+	})
+
+	tbl := eng.RegisterClass(mysqlPageRow{}, mysqlPageTable).SetKeys("id")
+	if tbl.LastError != nil {
+		t.Fatalf("register: %v", tbl.LastError)
+	}
+
+	rows := make([]mysqlPageRow, 2000)
+	for i := range rows {
+		rows[i] = mysqlPageRow{Id: int64(i + 1), Name: "n"}
+	}
+	if eror := eng.InsertP(&rows, -5, mysqlPageTable); eror != nil {
+		t.Fatalf("InsertP: %v", eror)
+	}
+	n, eror := eng.SelectD("select count(1) from " + mysqlPageTable)
+	if eror != nil || n != 2000 {
+		t.Fatalf("count=(%d,%v), want 2000", n, eror)
+	}
+}
