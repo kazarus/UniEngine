@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -109,7 +110,14 @@ func TestConcurrentRegisterClass(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			engine.RegisterClass(hardeningUser{}, fmt.Sprintf("t_conc_%d", n))
+			//#同一类不能绑定多个表名(ErrClassConflict);用不同动态类型验证并发注册本身
+			T := reflect.StructOf([]reflect.StructField{{
+				Name: fmt.Sprintf("F%d", n),
+				Type: reflect.TypeOf(int64(0)),
+				Tag:  reflect.StructTag(fmt.Sprintf(`db:"f%d"`, n)),
+			}})
+			Obj := reflect.New(T).Elem().Interface()
+			engine.RegisterClass(Obj, fmt.Sprintf("t_conc_%d", n))
 		}(i)
 	}
 	wg.Wait()

@@ -806,7 +806,9 @@ func TestConcurrentQueryAndRegister(t *testing.T) {
 		wg.Add(2)
 		go func(n int) {
 			defer wg.Done()
-			eng.RegisterClass(TTestUser{}, fmt.Sprintf("t_new_%d", n))
+			name := fmt.Sprintf("t_new_%d", n)
+			eng.RegisterTable(name, 0)
+			eng.RegisterField(name, "id")
 		}(i)
 		go func() {
 			defer wg.Done()

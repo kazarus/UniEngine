@@ -378,6 +378,67 @@ func (this *TUniEngine) ProviderName() string {
 	return Result
 }
 
+// 批量写入的分页常量。与 UI 分页(DefaultPageSize/SpecialPageSize)解耦:
+// 批量页大小受单条 SQL 绑定参数上限约束,0/负值回退 999 行,且最高 999 行。
+const (
+	defaultBatchRows int64 = 999
+	maxBatchRows     int64 = 999
+
+	//#单语句绑定参数预算(预留余量):Oracle 65535 工程上限取 60000;
+	//#达梦实测 2048 上限取 2000;SQLServer 2100 上限取 2000;PG/MySQL 65535 取 60000。
+	oracleMaxBindParams    int64 = 60000
+	damengMaxBindParams    int64 = 2000
+	sqlserverMaxBindParams int64 = 2000
+	defaultMaxBindParams   int64 = 60000
+)
+
+// maxBatchBindParams 返回当前方言单条 INSERT 的绑定参数预算。
+func (this *TUniEngine) maxBatchBindParams() int64 {
+	switch this.Provider {
+	case DtDAMENG:
+		return damengMaxBindParams
+	case DtORACLE:
+		return oracleMaxBindParams
+	case DtSQLSRV:
+		return sqlserverMaxBindParams
+	}
+
+	return defaultMaxBindParams
+}
+
+// normalizeBatchPageSize 归一化批量写入页大小:
+//   - 0/负值 → 999 行;
+//   - 超过 999 → 999;
+//   - 按列数把"行数 × 列数"压到方言绑定参数预算内,至少 1 行。
+//
+// Columns 为 0(未解析/未知)时只做行数上限,不做参数预算;单行超过预算时仍返回 1,
+// 由数据库报错,避免静默丢行。
+func (this *TUniEngine) normalizeBatchPageSize(Requested int64, Columns int) int64 {
+	Rows := Requested
+	if Rows <= 0 {
+		Rows = defaultBatchRows
+	}
+	if Rows > maxBatchRows {
+		Rows = maxBatchRows
+	}
+
+	if Columns > 0 {
+		MaxRows := this.maxBatchBindParams() / int64(Columns)
+		if MaxRows < 1 {
+			MaxRows = 1
+		}
+		if Rows > MaxRows {
+			Rows = MaxRows
+		}
+	}
+
+	if Rows < 1 {
+		Rows = 1
+	}
+
+	return Rows
+}
+
 // SpecialPageSize 返回调用方请求的分页大小；非正值（0/负数）回退 DefaultPageSize。
 func (this *TUniEngine) SpecialPageSize(PageSize int64) int64 {
 	if PageSize <= 0 {
@@ -538,8 +599,12 @@ func (this *TUniEngine) Initialize() error {
 	//#内置元数据类的登记名必须是合法标识符:注册 API 现对表名做白名单校验,
 	//#旧值 "github.com/kazarus/uniengine/unitable" 含 '/' 会被拒。
 	//#该键仅作小写别名(另以类全名 t.String() 注册),改成短名不影响任何查找路径。
-	this.RegisterClass(TUniTable{}, "unitable")
-	this.RegisterClass(TUniField{}, "unifield")
+	if tbl := this.RegisterClass(TUniTable{}, "unitable"); tbl.LastError != nil {
+		return tbl.LastError
+	}
+	if tbl := this.RegisterClass(TUniField{}, "unifield"); tbl.LastError != nil {
+		return tbl.LastError
+	}
 
 	return nil
 }

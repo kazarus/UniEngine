@@ -47,9 +47,12 @@
 // ErrUnregisteredClass / ErrNoPkeys / ErrNilParam / ErrInvalidTableName /
 // ErrInvalidFieldName / ErrInvalidConstraintName / ErrNoTransaction / ErrAlreadyInTransaction /
 // ErrInvalidPlaceholderBinding / ErrIncompleteVerification / ErrNoDatabase /
-// ErrInvalidDataBase / ErrMultipleRows。
+// ErrInvalidDataBase / ErrMultipleRows / ErrTableConflict / ErrClassConflict /
+// ErrRegistryInconsistent。
 // 注册类 API(RegisterClass/RegisterTable/RegisterField/RegisterPkeys)遇到非法输入时不 panic,
 // 而是返回**带 LastError 的未注册表**,便于链式调用在链尾统一检查。
+// RegisterClass 不再静默覆盖双键:类改绑报 ErrClassConflict,表名被手工/他类占用报
+// ErrTableConflict;确需替换手工表用 RegisterClassForce。
 //
 // # 可空列与 NULL
 //

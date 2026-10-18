@@ -233,9 +233,11 @@ func (this *TUniEngine) InsertPCtx(Ctx context.Context, i interface{}, PageSize 
 		return eror
 	}
 
-	if PageSize == 0 || PageSize == -1 {
-		PageSize = 999
+	UniTable, _, _, eror := this.resolveTarget("InsertP", i, TableName, reflect.Slice, false)
+	if eror != nil {
+		return eror
 	}
+	PageSize = this.normalizeBatchPageSize(PageSize, len(UniTable.writableFields()))
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {
@@ -291,9 +293,7 @@ func (this *TUniEngine) CopyInPCtx(Ctx context.Context, i interface{}, PageSize 
 		return eror
 	}
 
-	if PageSize == 0 || PageSize == -1 {
-		PageSize = 999
-	}
+	PageSize = this.normalizeBatchPageSize(PageSize, 0)
 
 	t := reflect.TypeOf(i)
 	if t.Kind() == reflect.Ptr {

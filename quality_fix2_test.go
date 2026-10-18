@@ -187,8 +187,10 @@ func TestQ2ThreePkeyCoverage(t *testing.T) {
 		t.Fatal("missing k3 must be rejected")
 	}
 
-	//#全覆盖:接受
-	tbl2 := e.RegisterClass(row3k{}, "t_row3k_full").SetKeys("k1", "k2", "k3")
+	//#全覆盖:接受(另一个引擎,避免同类改绑)
+	e2 := newMockEngine(&mockDriver{})
+	defer e2.Db.Close()
+	tbl2 := e2.RegisterClass(row3k{}, "t_row3k_full").SetKeys("k1", "k2", "k3")
 	if eror := tbl2.SetVerify("mac", "k1", "k2", "k3", "val").LastError; eror != nil {
 		t.Fatalf("full coverage should register, got %v", eror)
 	}

@@ -5,6 +5,7 @@ package UniEngine
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestInsertPPagesAndRowCount(t *testing.T) {
 		{100, 1}, //大于行数 → 1 页
 		{0, 1},   //0 → 缺省 999 → 1 页
 		{-1, 1},  //-1 → 缺省 999 → 1 页
-		{-5, 1},  //其余负值不参与比较,退化为单页
+		{-5, 1},  //负值 clamp 到 999;5 行仍为 1 页
 	}
 
 	for _, c := range cases {
@@ -139,5 +140,125 @@ func TestDeprecatedPagingWrappers(t *testing.T) {
 		if !strings.HasPrefix(strings.ToUpper(Q), "COPY") {
 			t.Fatalf("废弃别名应等价于 CopyIn*, got %q", Q)
 		}
+	}
+}
+
+type pageWideRow struct {
+	C01 int64 `db:"c01"`
+	C02 int64 `db:"c02"`
+	C03 int64 `db:"c03"`
+	C04 int64 `db:"c04"`
+	C05 int64 `db:"c05"`
+	C06 int64 `db:"c06"`
+	C07 int64 `db:"c07"`
+	C08 int64 `db:"c08"`
+	C09 int64 `db:"c09"`
+	C10 int64 `db:"c10"`
+}
+
+func TestNormalizeBatchPageSize(t *testing.T) {
+	e := newTestEngine()
+	cases := []struct {
+		provider TDriveType
+		request  int64
+		columns  int
+		want     int64
+	}{
+		{DtPOSTGR, 0, 1, 999},
+		{DtPOSTGR, -5, 1, 999},
+		{DtPOSTGR, 1000, 1, 999},
+		{DtPOSTGR, 999, 100, 600}, // 60000/100
+		{DtPOSTGR, 999, 1000, 60},
+		{DtORACLE, 999, 100, 600},
+		{DtORACLE, 999, 3, 999},
+		{DtDAMENG, 999, 3, 666}, // 2000/3
+		{DtDAMENG, 999, 47, 42},
+		{DtDAMENG, 999, 1, 999},
+		{DtSQLSRV, 999, 100, 20}, // 2000/100
+		{DtMYSQLN, 999, 0, 999},
+	}
+
+	for _, C := range cases {
+		e.Provider = C.provider
+		if got := e.normalizeBatchPageSize(C.request, C.columns); got != C.want {
+			t.Errorf("provider=%v request=%d cols=%d: got %d want %d", C.provider, C.request, C.columns, got, C.want)
+		}
+	}
+}
+
+func TestInsertPPageSizeByColumnBudget(t *testing.T) {
+	rows := make([]pageWideRow, 1000)
+	for i := range rows {
+		rows[i] = pageWideRow{C01: int64(i), C02: 2, C03: 3, C04: 4, C05: 5, C06: 6, C07: 7, C08: 8, C09: 9, C10: 10}
+	}
+
+	cases := []struct {
+		provider TDriveType
+		param    string
+		name     string
+		wantPage int
+	}{
+		{DtPOSTGR, "$", "", 2},      // 999 行/页
+		{DtORACLE, ":", "", 2},      // 999 行/页(60000/10 > 999)
+		{DtDAMENG, ":", "", 5},      // 2000/10 = 200 行/页
+		{DtSQLSRV, "$", "mssql", 5}, // 2000/10 = 200 行/页
+	}
+
+	for _, C := range cases {
+		d := &mockDriver{}
+		e := newMockEngine(d)
+		e.Provider, e.ColParam, e.ProvideName = C.provider, C.param, C.name
+		e.RegisterClass(pageWideRow{}, "t_wide")
+
+		if eror := e.InsertP(&rows, 999, "t_wide"); eror != nil {
+			t.Fatalf("provider=%v InsertP: %v", C.provider, eror)
+		}
+		if got := len(d.insertValues); got != C.wantPage {
+			t.Fatalf("provider=%v pages=%d want %d", C.provider, got, C.wantPage)
+		}
+	}
+}
+
+func TestInsertPClampsNegativeAndHugePageSize(t *testing.T) {
+	for _, page := range []int64{-5, 1000, math.MaxInt64} {
+		d := &mockDriver{}
+		e := newPageEngine(d)
+		e.RegisterClass(pageRow{}, "t_page")
+
+		rows := make([]pageRow, 2000)
+		for i := range rows {
+			rows[i] = pageRow{Id: int64(i), Name: "n"}
+		}
+		if eror := e.InsertP(&rows, page, "t_page"); eror != nil {
+			t.Fatalf("page=%d: %v", page, eror)
+		}
+		//#999 行/页:2000 → 999 + 999 + 2
+		if got := len(d.insertValues); got != 3 {
+			t.Fatalf("page=%d pages=%d want 3", page, got)
+		}
+		total := 0
+		for _, Args := range d.insertValues {
+			total += len(Args)
+		}
+		if total != len(rows)*2 {
+			t.Fatalf("page=%d total args=%d want %d", page, total, len(rows)*2)
+		}
+	}
+}
+
+func TestCopyInPClampsPageSize(t *testing.T) {
+	d := &mockDriver{}
+	e := newPageEngine(d)
+	e.RegisterClass(pageRow{}, "t_page")
+
+	rows := make([]pageRow, 2000)
+	for i := range rows {
+		rows[i] = pageRow{Id: int64(i), Name: "n"}
+	}
+	if eror := e.CopyInP(&rows, math.MaxInt64, "t_page"); eror != nil {
+		t.Fatal(eror)
+	}
+	if got := len(d.snapshotQueries()); got != 3 {
+		t.Fatalf("CopyInP pages=%d want 3", got)
 	}
 }

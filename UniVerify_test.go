@@ -456,10 +456,14 @@ func TestVerifyWithSecretColumn(t *testing.T) {
 // #测试15:行级绑定强制——保护列须覆盖**全部**已登记主键,否则复合主键的未保护列
 // #被改写仍过验签,"整行搬运"无法检出(评估 §4.8 → 评审 Q2 收紧:至少一个 → 全覆盖)
 func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
+	newBindEngine := func() *TUniEngine {
+		eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
+		eng.Initialize()
+		return eng
+	}
+
 	//#① 只保护非键列:登记期即拒(fail-fast,而不是留到运行时才发现绑定失效)
-	eng := &TUniEngine{ColLabel: "db", ColParam: "$", Provider: DtPOSTGR}
-	eng.Initialize()
-	tab := eng.RegisterClass(TVerifyRow{}, "tbl_bind_1").SetKeys("who_build", "user_indx")
+	tab := newBindEngine().RegisterClass(TVerifyRow{}, "tbl_bind_1").SetKeys("who_build", "user_indx")
 	tab = tab.SetVerify("mac_text", "data_stat", "mast_name")
 	if tab.LastError == nil {
 		t.Fatal("保护列不含主键时应拒绝登记")
@@ -469,7 +473,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	}
 
 	//#② 复合主键只保护其中一列:同样拒绝(未覆盖的 user_indx 被改写仍能过验签)
-	tab2 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2").SetKeys("who_build", "user_indx")
+	tab2 := newBindEngine().RegisterClass(TVerifyRow{}, "tbl_bind_2").SetKeys("who_build", "user_indx")
 	tab2 = tab2.SetVerify("mac_text", "who_build", "data_stat")
 	if tab2.LastError == nil {
 		t.Fatal("复合主键只覆盖一列应拒绝登记")
@@ -479,7 +483,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	}
 
 	//#②b 全部主键纳入保护:通过(载荷含完整行标识,任何主键列搬移/改写均可检出)
-	tab2b := eng.RegisterClass(TVerifyRow{}, "tbl_bind_2b").SetKeys("who_build", "user_indx")
+	tab2b := newBindEngine().RegisterClass(TVerifyRow{}, "tbl_bind_2b").SetKeys("who_build", "user_indx")
 	tab2b = tab2b.SetVerify("mac_text", "who_build", "user_indx", "data_stat")
 	if tab2b.LastError != nil {
 		t.Fatalf("覆盖全部主键应通过, got %v", tab2b.LastError)
@@ -489,7 +493,7 @@ func TestSetVerifyRequiresPkeyForRowBinding(t *testing.T) {
 	}
 
 	//#③ 逃生口:显式放弃行级绑定(确有理由时才用),登记前置于表上
-	tab3 := eng.RegisterClass(TVerifyRow{}, "tbl_bind_3").SetKeys("who_build", "user_indx")
+	tab3 := newBindEngine().RegisterClass(TVerifyRow{}, "tbl_bind_3").SetKeys("who_build", "user_indx")
 	tab3.VerifyUnkeyed = true
 	tab3 = tab3.SetVerify("mac_text", "data_stat", "mast_name")
 	if tab3.LastError != nil {

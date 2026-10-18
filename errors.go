@@ -34,4 +34,10 @@ var (
 	ErrInvalidDataBase = errors.New("UniEngine: invalid database name")
 	// ErrMultipleRows 标量查询(SelectD/SelectF/SelectS)返回多行;此类入口只接受单行结果
 	ErrMultipleRows = errors.New("UniEngine: scalar query returned more than one row")
+	// ErrTableConflict 表名已被手工登记或由另一个类登记;RegisterClass 不会静默覆盖
+	ErrTableConflict = errors.New("UniEngine: table name already registered")
+	// ErrClassConflict 类已注册到另一个表名;RegisterClass 不会静默改绑
+	ErrClassConflict = errors.New("UniEngine: class already registered to another table")
+	// ErrRegistryInconsistent 注册表双键指向不同快照(遗留脏状态);需先显式清理
+	ErrRegistryInconsistent = errors.New("UniEngine: inconsistent registry entries")
 )

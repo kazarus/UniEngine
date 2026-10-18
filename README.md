@@ -27,7 +27,7 @@
 >   `sql.NullString` / `sql.NullInt64` / pointers, or `[]byte`. The scalar helpers
 >   (`SelectS`/`SelectD`/`SelectF`) are the opposite: they scan into `sql.NullXxx`
 >   and return a zero value on `NULL`. See §3 (Chinese) for the measured matrix.
-> - **Tests**: 238 unit tests (~90% statement coverage, mock driver) plus
+> - **Tests**: 250 unit tests (~90% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
 >
@@ -361,6 +361,36 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | 达梦(`DtDAMENG`) | ⚠️ 同路径、未真库覆盖 | 与 Oracle 共用上述 SQL;CI 只跑 Oracle 真库,达梦的 `USER_*` 兼容性需在目标库验证 |
 
 > **结论**:当前支持的稳定主路径是“登录用户即目标 schema、使用裸表名、对象为普通表/视图”。跨 schema、同义词、物化视图、显式 schema 前缀属于已知边界,不要仅凭 `Exist*` / `AutoKeys` 的结果做建表/迁移决策;必要时先用 `ALL_*` 数据字典自行校验。
+
+#### 5.3.注册冲突与批量分页上限(2026-10-18)
+
+**注册双键不再静默覆盖。** `RegisterClass` 同时写“小写表名键”和“类全名键”;现在发布前做冲突检测:
+
+| 场景 | 行为 |
+| --- | --- |
+| 同一类、同一表名重复注册 | ✅ 允许,按“重新注册”重建类元数据(旧 pkeys/Secret/Verify 需重新登记) |
+| 同一个类注册到另一个表名 | ❌ `ErrClassConflict`,类键保持原表 |
+| 不同类注册同一表名 | ❌ `ErrTableConflict`,表键保持原类 |
+| 表名已被 `RegisterTable/RegisterField/RegisterPkeys` 手工登记 | ❌ `ErrTableConflict`;确需替换用 `RegisterClassForce` |
+| 双键指向不同快照 / 类键存在但表键缺失 | ❌ `ErrRegistryInconsistent` |
+
+冲突时不修改注册表,返回带 `LastError` 的未注册载体。`RegisterClassForce` **只**允许替换手工表;不会覆盖另一个类的表,也不会给已登记到其它表的类改绑。
+
+**批量分页按方言绑定参数预算收敛。** `InsertP`/`CopyInP` 的 `PageSize`:
+
+- `0` 或负值 → 999 行;
+- 大于 999 → 999 行;
+- `InsertP` 再按可写列数压缩到单条 SQL 的参数预算内(至少 1 行):
+
+| 方言 | 单语句绑定参数预算 | 示例(100 列) |
+| --- | ---: | ---: |
+| Oracle | 60000(65535 留余量) | 600 行/页 |
+| 达梦 | 2000(实测 2048 上限留余量) | 20 行/页 |
+| SQLServer | 2000(2100 留余量) | 20 行/页 |
+| PG / MySQL | 60000(65535 留余量) | 600 行/页 |
+| 未知方言 | 60000 | 600 行/页 |
+
+`CopyInP` 走 COPY 协议,没有绑定参数上限,只做 999 行上限。自定义写钩子改变列数时,`InsertP` 的预算按默认可写列估算,请调用方自行控制批量大小。
 
 #### 6.真实数据库集成测试
 

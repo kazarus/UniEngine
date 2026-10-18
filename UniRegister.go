@@ -68,7 +68,85 @@ func columnGuard(Sentinel error, What string, Name string) error {
 	return nil
 }
 
+// checkClassRegistration 在写锁内校验 RegisterClass 的双键冲突,不修改注册表。
+// Force 只放宽"手工表"这一种冲突;类改绑与跨类抢表始终拒绝。
+func (this *TUniEngine) checkClassRegistration(t reflect.Type, TableName string, Force bool) error {
+	LowerTable := strings.ToLower(TableName)
+	ClassKey := t.String()
+
+	ByClass, HasClass := this.HashTabl[ClassKey]
+	ByTable, HasTable := this.HashTabl[LowerTable]
+
+	if HasClass {
+		if ByClass == nil {
+			return fmt.Errorf("%w: class key [%s] is nil", ErrRegistryInconsistent, ClassKey)
+		}
+		if ByClass.ClassType == nil || ByClass.ClassType != t {
+			return fmt.Errorf("%w: class key [%s] points to a table owned by [%v], not [%s]", ErrRegistryInconsistent, ClassKey, ByClass.ClassType, ClassKey)
+		}
+		if strings.ToLower(ByClass.TableName) != LowerTable {
+			return fmt.Errorf("%w: class [%s] is already registered to table [%s], requested [%s]; use the original table or register a distinct class", ErrClassConflict, ClassKey, ByClass.TableName, TableName)
+		}
+		if !HasTable {
+			return fmt.Errorf("%w: class [%s] points to table [%s], but the table key is missing", ErrRegistryInconsistent, ClassKey, ByClass.TableName)
+		}
+	}
+
+	if HasTable {
+		if ByTable == nil {
+			return fmt.Errorf("%w: table key [%s] is nil", ErrRegistryInconsistent, LowerTable)
+		}
+		if ByTable.ClassType != nil {
+			OwnerKey := ByTable.ClassType.String()
+			if Owner, Ok := this.HashTabl[OwnerKey]; !Ok || Owner != ByTable {
+				return fmt.Errorf("%w: table key [%s] is class-owned by [%s], but its class key is missing or stale", ErrRegistryInconsistent, LowerTable, OwnerKey)
+			}
+		}
+
+		if ByTable.ClassType == nil {
+			if !Force {
+				return fmt.Errorf("%w: table [%s] was registered manually (RegisterTable/RegisterField/RegisterPkeys); use RegisterClassForce to replace it or choose another table name", ErrTableConflict, TableName)
+			}
+		} else if ByTable.ClassType != t {
+			return fmt.Errorf("%w: table [%s] is already registered by class [%s], requested class [%s]; use a distinct table name", ErrTableConflict, TableName, ByTable.ClassType.String(), ClassKey)
+		}
+
+		//#同一张表只允许一个类名键;历史上可能有遗留的多类别名,先拒绝而不是把别名留在旧快照上。
+		for Key, Value := range this.HashTabl {
+			if Value == ByTable && Key != LowerTable && Key != ClassKey {
+				return fmt.Errorf("%w: table [%s] still has extra alias [%s]; clean the registry before re-registering", ErrRegistryInconsistent, TableName, Key)
+			}
+		}
+	}
+
+	if HasClass && HasTable && ByClass != ByTable {
+		return fmt.Errorf("%w: class [%s] and table [%s] point to different snapshots; re-initialize the registry", ErrRegistryInconsistent, ClassKey, LowerTable)
+	}
+
+	return nil
+}
+
+// RegisterClass 登记类并把表名/类名两个键指向同一快照。
+//
+// 冲突策略(不静默覆盖):
+//   - 类已登记到另一个表名 → ErrClassConflict;
+//   - 表名已由手工 RegisterTable 登记,或已由另一个类登记 → ErrTableConflict;
+//   - 同一类、同一表名重复登记 → 允许,按"重新注册"语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记);
+//   - 双键指向不同快照 → ErrRegistryInconsistent。
+//
+// 需要显式覆盖"手工登记表"时用 RegisterClassForce。
 func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUniTable {
+	return this.registerClass(Class, TableName, false)
+}
+
+// RegisterClassForce 与 RegisterClass 相同,但允许用类元数据替换一个**手工登记**的表
+// (RegisterTable/RegisterField/RegisterPkeys 创建、ClassType==nil)。
+// 它不会覆盖另一个类登记的表,也不会把已登记到其它表的类改绑;这两类冲突仍然报错。
+func (this *TUniEngine) RegisterClassForce(Class interface{}, TableName string) *TUniTable {
+	return this.registerClass(Class, TableName, true)
+}
+
+func (this *TUniEngine) registerClass(Class interface{}, TableName string, Force bool) *TUniTable {
 	this.lockTables()
 	defer this.mu.Unlock()
 
@@ -89,6 +167,10 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 	//#表名白名单:RegisterClass 的表名会经 PrepareRunSQL 直接拼进 SQL(CRUD 表名不引号),
 	//#此前只在写路径(resolveTarget)校验,PrepareRunSQL 路径构成注入面
 	if eror := identGuard(ErrInvalidTableName, "RegisterClass table name", TableName); eror != nil {
+		return invalidTable(TableName, eror)
+	}
+
+	if eror := this.checkClassRegistration(t, TableName, Force); eror != nil {
 		return invalidTable(TableName, eror)
 	}
 

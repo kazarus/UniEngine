@@ -517,10 +517,10 @@ func (u legacyCopyInUser) SpecialSetSqlValuesL(UniEngineEx *TUniEngine, QueryTyp
 func TestCopyInLegacyInterface(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
-	eng.RegisterClass(legacyCopyInUser{}, "test_user")
+	eng.RegisterClass(legacyCopyInUser{}, "legacy_user")
 
 	users := []legacyCopyInUser{{UserName: "bob", Password: "secret"}}
-	if eror := eng.CopyInL(&users, "test_user"); eror != nil {
+	if eror := eng.CopyInL(&users, "legacy_user"); eror != nil {
 		t.Fatal(eror)
 	}
 
@@ -601,8 +601,9 @@ func TestSetSecretSyncListField(t *testing.T) {
 func TestSetSecretRejectsPkey(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
-	tbl := eng.RegisterClass(TTestUser{}, "test_user2")
-	if eror := tbl.SetKeys("user_name").LastError; eror != nil {
+	tbl := eng.GetTable("test_user")
+	tbl = tbl.SetKeys("user_name")
+	if eror := tbl.LastError; eror != nil {
 		t.Fatalf("SetKeys: %v", eror)
 	}
 	if eror := tbl.SetSecret("user_name").LastError; eror == nil {
@@ -893,8 +894,8 @@ func TestTableSecretOnFlag(t *testing.T) {
 	d := &mockDriver{}
 	eng := newSecretTestEngine(d)
 
-	//#tag 路径:TTestUser.Password 带 secreton 标记,RegisterClass 即置位
-	tblTag := eng.RegisterClass(TTestUser{}, "test_user_tag")
+	//#tag 路径:TTestUser.Password 带 secreton 标记,newSecretTestEngine 已按 test_user 注册
+	tblTag := eng.GetTable("test_user")
 	if !tblTag.SecretOn {
 		t.Fatal("RegisterClass should set table SecretOn when a field carries the secreton tag")
 	}
@@ -1024,8 +1025,8 @@ func TestSelectSDecrypt(t *testing.T) {
 func TestListSecretColumns(t *testing.T) {
 	eng := newSecretTestEngine(&mockDriver{})
 
-	//#tag 路径:TTestUser.Password 带 secreton 标记,注册即登记(类声明序)
-	tbl := eng.RegisterClass(TTestUser{}, "test_user_list")
+	//#tag 路径:TTestUser.Password 带 secreton 标记,newSecretTestEngine 已按 test_user 注册
+	tbl := eng.GetTable("test_user")
 	if len(tbl.ColSecret) != 1 || tbl.ColSecret[0].FieldName != "password" {
 		t.Fatalf("tag path should register [password], got %+v", tbl.ColSecret)
 	}
