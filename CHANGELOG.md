@@ -13,6 +13,7 @@
   - 双键指向不同快照 / 类键存在但表键缺失 → `ErrRegistryInconsistent`;
   - 同一类、同一表名重复登记仍允许,按“重新注册”语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记)。
   冲突时不修改注册表,返回带 `LastError` 的未注册载体;`Initialize()` 的内置表登记错误不再被吞掉。
+- **锁模型恢复共享指针**:`mu`/`txGate` 改回 `*sync.RWMutex`/`*sync.Mutex`,使历史“按值复制引擎”调用方的副本共享注册表锁;否则副本各自持锁却写同一张 `HashTabl`,运行时 `RegisterClass`/`PrepareTables` 与查询并发会触发 map 竞态。事务状态(`tx`/`inTx`)仍按值复制,新代码仍应使用 `*TUniEngine`。
 - **新增 `RegisterClassForce`**:显式允许用类元数据替换**手工登记**的表(`ClassType==nil`);不会把已登记到其它表的类改绑(`ErrClassConflict`)。不同类共享同一表名本来就是允许的。
 - **批量分页 clamp**:`InsertP`/`CopyInP` 的 `PageSize` 统一归一化:
   - `0`/负值 → 999 行;超过 999 → 999 行;

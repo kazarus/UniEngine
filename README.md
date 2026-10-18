@@ -43,7 +43,7 @@ UniEngine 是一个基于 `database/sql` 的多数据库 ORM-like 引擎,支持 
 > 注意:`TUniEngine` **查询/写入路径并发安全**——预备语句为局部变量,查询仅持读锁做注册表/事务查找,`Register*` 可与查询并发执行。
 > 两个例外:**事务期间**(Begin 与 Commit/Cancel 之间)调用须串行(底层 `*sql.Tx` 非并发安全);配置字段(ColLabel/ColParam/Provider/SecretOn 等)与表结构变更(SetKeys/SetSecret/AutoKeys/PrepareTables/PrepareRunSQL)应在并发查询开始前完成。
 > 同表 `RegisterTable/RegisterField/RegisterPkeys` 会发布新的元数据快照;已经开始的调用使用原快照,后续调用读取新快照。不要在并发使用期间直接修改已返回的 `*TUniTable` 或其 map/slice。
-> 另:**引擎不得按值拷贝**——请一律使用 `*TUniEngine`。拷贝会复制 `tx`/`inTx` 等值字段却共享 `mu`,副本 Begin 之后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。该约束已由 `noCopy` + `go vet`(copylocks 分析器)在静态检查阶段强制,CI 有门禁。
+> 另:**新代码不得按值拷贝**——请一律使用 `*TUniEngine`。拷贝会复制 `tx`/`inTx` 等值字段,副本 Begin 之后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。为兼容历史调用方(如每请求 `c.Set("DB", UniEngineEx)` 的复制模式),`mu`/`txGate` 使用**共享指针**,副本仍共享注册表锁;但事务状态仍会被复制,因此旧复制模式只能用于“每个请求一个独立副本”,不能把同一个副本当共享事务句柄。该约束仍由 `noCopy` + `go vet`(copylocks 分析器)对新代码做静态提示,CI 有门禁。
 > 本模块**零第三方依赖**(COPY 语句由包内自实现,不依赖 lib/pq)。
 
 ##### 0.0.驱动安装

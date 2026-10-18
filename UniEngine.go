@@ -29,10 +29,15 @@ type TUniEngine struct {
 
 	Db *sql.DB
 
-	mu       sync.RWMutex //#保护 HashTabl 与事务状态(值类型:零值即可用,不再需要包级懒初始化锁)
-	txGate   sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询)
-	ColLabel string       //#字段字号
-	ColParam string       //#参数符号
+	mu     *sync.RWMutex //#保护 HashTabl 与事务状态;指针使历史副本共享同一把锁
+	txGate *sync.Mutex   //#串行化 Begin/Commit/Cancel 三个事务生命周期操作(不护查询);同样共享
+
+	//#说明:这两个锁必须是共享指针。downstream-project 等历史调用方大量按值复制
+	//#TUniEngine(每请求 c.Set("DB", ...)),若改为内嵌值,副本会各自持锁,
+	//#却仍写同一张 HashTabl,运行时 RegisterClass/PrepareTables 会与读并发。
+	//#新代码仍应使用 *TUniEngine;noCopy 只是静态提示,不能强制既有调用方。
+	ColLabel string //#字段字号
+	ColParam string //#参数符号
 	HashTabl map[string]*TUniTable
 
 	SecretOn   int64       //#开启敏感信息加密
@@ -87,8 +92,9 @@ type TUniEngine struct {
 // 在静态检查阶段拦下 TUniEngine 的按值拷贝。
 //
 // 为什么必须禁止按值拷贝:拷贝会复制 Db/ColLabel/ColParam/Provider/tx/inTx 等值字段,
-// 以及内嵌的 mu/txGate,于是副本与原件出现"锁各自一份、事务状态各自一份"的错配——
+// 以及事务状态(tx/inTx)等值字段,于是副本与原件出现"事务状态各自一份"的错配——
 // 副本 Begin 后原件仍认为无事务,原件上的写入会绕过该事务直接落到连接池。
+// 锁指针(mu/txGate)特意共享,以兼容历史副本;新代码仍应使用 *TUniEngine。
 //
 // 作为具名字段(非匿名嵌入)使用,故不会把 Lock/Unlock 提升到 TUniEngine 上;
 // 按值拷贝会被报告为:
@@ -102,13 +108,35 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
+// locksInitMu 只保护 mu/txGate 指针的首次装配,不参与运行期加锁。
+var locksInitMu sync.Mutex
+
+// ensureLocks 为历史零值引擎/复制引擎补齐共享锁指针。
+// #Initialize 会先调用它;生产代码在复制引擎前已完成初始化,故副本共享同一组指针。
+// #并发首次调用零值引擎不在契约内,调用方应先 Initialize。
+func (this *TUniEngine) ensureLocks() {
+	if this.mu != nil && this.txGate != nil {
+		return
+	}
+	locksInitMu.Lock()
+	defer locksInitMu.Unlock()
+	if this.mu == nil {
+		this.mu = &sync.RWMutex{}
+	}
+	if this.txGate == nil {
+		this.txGate = &sync.Mutex{}
+	}
+}
+
 // lockTables 加写锁（注册/表结构变更/事务状态变更）
 func (this *TUniEngine) lockTables() {
+	this.ensureLocks()
 	this.mu.Lock()
 }
 
 // rlockTables 加读锁（注册表/事务状态查询）
 func (this *TUniEngine) rlockTables() {
+	this.ensureLocks()
 	this.mu.RLock()
 }
 
@@ -502,6 +530,7 @@ func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
 
 	//#txGate 串行化事务生命周期操作;驱动调用的网络等待不持有 mu,
 	//#查询路径只会在 mu 的短临界区内取事务指针,不会排在 BeginTx 后面。
+	this.ensureLocks()
 	this.txGate.Lock()
 	defer this.txGate.Unlock()
 
@@ -535,6 +564,7 @@ func (this *TUniEngine) BeginCtx(Ctx context.Context) error {
 }
 
 func (this *TUniEngine) Cancel() error {
+	this.ensureLocks()
 	this.txGate.Lock()
 	defer this.txGate.Unlock()
 
@@ -561,6 +591,7 @@ func (this *TUniEngine) Cancel() error {
 }
 
 func (this *TUniEngine) Commit() error {
+	this.ensureLocks()
 	this.txGate.Lock()
 	defer this.txGate.Unlock()
 
@@ -592,6 +623,9 @@ func (this *TUniEngine) RunDebug(Value bool) error {
 }
 
 func (this *TUniEngine) Initialize() error {
+	//#先装配共享锁指针:调用方可能在 Initialize 之后按值复制引擎。
+	this.ensureLocks()
+
 	//#SQL Server 初始化时检查开发者声明的驱动名与占位符组合。
 	//#失败时不登记内置表,由调用方直接处理初始化错误。
 	if eror := this.validateSQLServerPlaceholderConfig(); eror != nil {
