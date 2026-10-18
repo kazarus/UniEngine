@@ -66,6 +66,11 @@ type itUser struct {
 	Password string `db:"password"`
 }
 
+type itPageRow struct {
+	ID   int64  `db:"id"`
+	Name string `db:"name"`
+}
+
 // #加密列变体:走 ENC 应用加密路径
 type itSecretUser struct {
 	UserName string `db:"user_name"`
@@ -79,7 +84,7 @@ func newSecretEngine(t *testing.T) *UniEngine.TUniEngine {
 	return eng
 }
 
-func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTable {
+func createUserTable(t *testing.T, eng *UniEngine.TUniEngine) {
 	t.Helper()
 
 	if eror := eng.Execute("drop table if exists it_user"); eror != nil {
@@ -88,6 +93,12 @@ func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTabl
 	if eror := eng.Execute("create table it_user(user_name varchar(64) primary key, password varchar(1024))"); eror != nil {
 		t.Fatalf("create it_user: %v", eror)
 	}
+}
+
+func setupUserTable(t *testing.T, eng *UniEngine.TUniEngine) *UniEngine.TUniTable {
+	t.Helper()
+
+	createUserTable(t, eng)
 
 	tbl := eng.RegisterClass(itUser{}, "it_user")
 	tbl = tbl.SetKeys("user_name")
@@ -291,7 +302,7 @@ func TestIntegrationCopyInDefaultPathPinned(t *testing.T) {
 
 func TestIntegrationSecret(t *testing.T) {
 	eng := newSecretEngine(t)
-	setupUserTable(t, eng)
+	createUserTable(t, eng)
 	tbl := eng.RegisterClass(itSecretUser{}, "it_user")
 	tbl = tbl.SetKeys("user_name")
 	if eror := tbl.LastError; eror != nil {
@@ -373,7 +384,7 @@ func TestIntegrationSecret(t *testing.T) {
 	}
 
 	//#COPY + 加密:批量协议路径同样落密文、读还原
-	setupUserTable(t, eng)
+	createUserTable(t, eng)
 	eng.RegisterClass(itSecretUser{}, "it_user").SetKeys("user_name")
 	eng.CopyInHook = pgxcopy.Hook
 
@@ -500,4 +511,33 @@ func TestIntegrationTransaction(t *testing.T) {
 		t.Fatalf("copyin hook in tx should be rejected, got %v", eror)
 	}
 	eng.Cancel()
+}
+
+// #InsertP 分页 clamp 的真机验证:负值归一化为 999 行,2000 行分 3 页落库。
+func TestIntegrationInsertPPageSizeClamp(t *testing.T) {
+	eng := newEngine(t)
+	if eror := eng.Execute("drop table if exists it_insertp_clamp"); eror != nil {
+		t.Fatalf("drop: %v", eror)
+	}
+	if eror := eng.Execute("create table it_insertp_clamp(id bigint primary key, name varchar(64))"); eror != nil {
+		t.Fatalf("create: %v", eror)
+	}
+	t.Cleanup(func() { _ = eng.Execute("drop table if exists it_insertp_clamp") })
+
+	tbl := eng.RegisterClass(itPageRow{}, "it_insertp_clamp").SetKeys("id")
+	if tbl.LastError != nil {
+		t.Fatalf("register: %v", tbl.LastError)
+	}
+
+	rows := make([]itPageRow, 2000)
+	for i := range rows {
+		rows[i] = itPageRow{ID: int64(i + 1), Name: "n"}
+	}
+	if eror := eng.InsertP(&rows, -5, "it_insertp_clamp"); eror != nil {
+		t.Fatalf("InsertP: %v", eror)
+	}
+	n, eror := eng.SelectD("select count(1) from it_insertp_clamp")
+	if eror != nil || n != 2000 {
+		t.Fatalf("count=(%d,%v), want 2000", n, eror)
+	}
 }
