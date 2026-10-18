@@ -93,6 +93,57 @@ UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Prov
 >
 > 现代写法与 `mssql` 同语义(同样只接受 `:`/`$`/`?`):`sql.OpenDB(mssql.NewConnectorWithProcessQueryText(cfg))`;这种连接器模式下也须设置 `ProvideName: "mssql"`。
 
+##### 0.3.为什么需要 `Supplier`(与 `Provider`、`ProvideName` 的区别)
+
+UniEngine 用三个字段回答三个不同的问题,不要把它们混成“数据库类型”:
+
+| 字段 | 回答的问题 | 影响范围 |
+| --- | --- | --- |
+| `Provider` | SQL 按**哪个协议族**生成? | 占位符、标识符引用、元数据目录、UPSERT/INSERT ALL、COPY 白名单,以及应用侧大量 `switch Provider` 分支 |
+| `Supplier` | 这个部署实际是**哪家产品**,是否需要某种**不改变 SQL 语义**的优化? | 目前仅 `InsertP` 的 PolarDB→COPY 路由;零值表示不启用 |
+| `ProvideName` | `sql.Open` 实际使用的**驱动名**是什么? | SQL Server 的 `mssql` / `sqlserver` 占位符校验 |
+
+**引入 `Supplier` 的直接原因**是 PolarDB:
+
+- PolarDB 使用 PostgreSQL 协议,SQL 方言、占位符、引号、元数据、UPSERT 都应按 PostgreSQL 处理,因此 `Provider` 必须保持 `DtPOSTGR`;
+- 但 PolarDB 部署在批量写入时希望走 COPY,而不是多行 `INSERT`;
+- 如果为了这个优化把 `Provider` 改成 `DtPOLODB`,会改变应用侧所有按 `Provider` 分支的 SQL 生成/判断,代价远大于收益。
+
+因此用 `Supplier` 单独表达“底层协议族之外的产品身份”:
+
+```go
+// PolarDB:SQL 仍是 PostgreSQL,只有 InsertP 走 COPY
+eng := &UniEngine.TUniEngine{
+    Db:       db,
+    ColLabel: "db",
+    ColParam: "$",
+    Provider: UniEngine.DtPOSTGR, //#协议族:PostgreSQL
+    Supplier: UniEngine.DtPOLODB, //#产品: PolarDB;仅影响 InsertP 路由
+}
+```
+
+同理,达梦是 Oracle 兼容协议。对已有大量 `switch Provider == DtORACLE` 的应用:
+
+```go
+eng := &UniEngine.TUniEngine{
+    Db:       db,
+    ColLabel: "db",
+    ColParam: ":",
+    Provider: UniEngine.DtORACLE, //#SQL 仍走 Oracle 分支
+    Supplier: UniEngine.DtDAMENG, //#产品: 达梦;用于标识部署,不改变 SQL 文本
+}
+```
+
+**使用规则:**
+
+1. `Provider` 只表达协议族;不要为了标注厂商而改成 `DtPOLODB` / `DtDAMENG`,否则应用侧按 `Provider` 的 SQL 分支会全部改变。
+2. `Supplier` 只承载“不改变 SQL 语义”的厂商差异;不要用它选择占位符、引号、UPSERT 或元数据方言。
+3. 标准 PostgreSQL / Oracle / MySQL / SQL Server 部署不需要设置 `Supplier`;零值即不启用任何厂商优化。
+4. 当前代码只消费 `Supplier == DtPOLODB`:把 `Supplier=DtPOLODB` 配到非 PG 族 `Provider` 上,`InsertP` 会直接报错;其它 `Supplier` 取值当前不影响 SQL,也不影响批量预算。
+5. 如果后续把达梦的批量页预算接到 `Supplier`,它也只能影响 `InsertP` 页大小,不能改变 `Provider` 决定的 SQL 方言、元数据或 UPSERT 分支。
+
+> 一句话:`Provider` 决定“怎么生成 SQL”,`Supplier` 只决定“这个部署要不要启用某个厂商特有、且不改变 SQL 语义的行为”。两者不是二选一,也不是同一个维度的枚举。
+
 #### 1.安装方式
 
 ```sh
