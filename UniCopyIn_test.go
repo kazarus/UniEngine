@@ -169,8 +169,9 @@ func TestNormalizeBatchPageSize(t *testing.T) {
 		{DtPOSTGR, 1000, 1, 999},
 		{DtPOSTGR, 999, 100, 600}, // 60000/100
 		{DtPOSTGR, 999, 1000, 60},
-		{DtORACLE, 999, 100, 600},
-		{DtORACLE, 999, 3, 999},
+		{DtORACLE, 999, 100, 100},
+		{DtORACLE, 999, 3, 100},
+		{DtORACLE, 50, 3, 50},
 		{DtDAMENG, 999, 3, 666}, // 2000/3
 		{DtDAMENG, 999, 47, 42},
 		{DtDAMENG, 999, 1, 999},
@@ -199,7 +200,7 @@ func TestInsertPPageSizeByColumnBudget(t *testing.T) {
 		wantPage int
 	}{
 		{DtPOSTGR, "$", "", 2},      // 999 行/页
-		{DtORACLE, ":", "", 2},      // 999 行/页(60000/10 > 999)
+		{DtORACLE, ":", "", 10},     // 100 行/页(INSERT ALL 性能拐点)
 		{DtDAMENG, ":", "", 5},      // 2000/10 = 200 行/页
 		{DtSQLSRV, "$", "mssql", 5}, // 2000/10 = 200 行/页
 	}

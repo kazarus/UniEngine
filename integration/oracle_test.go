@@ -5,6 +5,9 @@
 // #(注册名 "oracle");README 记录的生产驱动 godror 需 Instant Client。引擎对 Oracle 族生成的是
 // #":N" 占位符 + 裸标识符,两驱动一致,故本文件同时支持二者:
 // #  UNIENGINE_ORACLE_DRIVER 默认 "oracle"(go-ora);用 godror 时设为 "godror" 并给整串 DSN。
+// #  godror 需 Oracle Instant Client;macOS 用 URL DSN 的 libDir 参数最稳:
+// #    UNIENGINE_ORACLE_DRIVER=godror \
+// #    UNIENGINE_ORACLE_DSN="oracle://user:pass@host:1521/ORCL?libDir=/path/to/instantclient"
 // #
 // #运行(需可达的 Oracle):
 // #  UNIENGINE_ORACLE_HOST=127.0.0.1 UNIENGINE_ORACLE_PORT=1521 \
@@ -25,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/godror/godror" //#生产驱动 godror(需 Oracle Instant Client)
 	UniEngine "github.com/kazarus/UniEngine"
 	_ "github.com/sijms/go-ora/v2" //#纯 Go Oracle 驱动,注册名 "oracle"
 )
@@ -190,9 +194,8 @@ func TestOraclePlaceholderContract(t *testing.T) {
 			t.Errorf("%s 竟然执行成功(值 %q);Oracle 上错误占位符应硬报错", style, v.String)
 			continue
 		}
-		if !strings.Contains(eror.Error(), "ORA-") {
-			t.Errorf("%s 报错内容非 ORA- 错误: %v", style, eror)
-		}
+		//#go-ora 抛 ORA- 文本;godror 在客户端就直接拒绝(如 sql: expected 0 arguments)。
+		//#两者都是硬报错,关键是绝不静默执行。
 		t.Logf("%s -> %v", style, eror)
 	}
 }
@@ -289,9 +292,7 @@ func TestOracleWrongColParamFailsLoudly(t *testing.T) {
 			t.Errorf("ColParam=%q 应报错(Oracle 不接受该占位符),却返回成功", colParam)
 			continue
 		}
-		if !strings.Contains(eror.Error(), "ORA-") {
-			t.Errorf("ColParam=%q 报错内容非 ORA-: %v", colParam, eror)
-		}
+		//#go-ora 抛 ORA- 文本;godror 在客户端直接拒绝;两者都是硬报错。
 		//#关键:必须**没有**行被写入(不存在 SQL Server 那种"报成功却写错"的形态)
 		if name, ok := rawOraName(t, eng, 100); ok {
 			t.Errorf("ColParam=%q 下竟然写入了 id=100(name=%q);Oracle 上不应出现静默写入", colParam, name)
@@ -400,8 +401,7 @@ type oraPageRow struct {
 }
 
 // #InsertP 分页 clamp 的 Oracle 真机验证:
-// 10 列 × 2000 行,-5 归一化为 999 行/页(60000/10 > 999),分 3 页;
-// 同时验证 Oracle 能接受 999 个无条件 INSERT ALL 的 INTO 子句。
+// 10 列 × 2000 行,-5 归一化为 100 行/页(INSERT ALL 性能拐点),分 20 页。
 func TestOracleInsertPPageSizeClamp(t *testing.T) {
 	db := openOracle(t)
 	eng := oracleEngineOn(db, ":")

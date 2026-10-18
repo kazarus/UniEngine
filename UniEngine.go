@@ -383,6 +383,9 @@ func (this *TUniEngine) ProviderName() string {
 const (
 	defaultBatchRows int64 = 999
 	maxBatchRows     int64 = 999
+	//#Oracle INSERT ALL 的性能拐点:999 个 INTO 约 144s,500 约 14s,200 约 0.3s,
+	//#100 约 0.1s,50 约 0.05s(10 列/1 列真机均复现);按 100 行/页收敛。
+	oracleMaxBatchRows int64 = 100
 
 	//#单语句绑定参数预算(预留余量):Oracle 65535 工程上限取 60000;
 	//#达梦实测 2048 上限取 2000;SQLServer 2100 上限取 2000;PG/MySQL 65535 取 60000。
@@ -409,6 +412,7 @@ func (this *TUniEngine) maxBatchBindParams() int64 {
 // normalizeBatchPageSize 归一化批量写入页大小:
 //   - 0/负值 → 999 行;
 //   - 超过 999 → 999;
+//   - Oracle 再压到 100 行/页(INSERT ALL 的 INTO 数量是性能拐点);
 //   - 按列数把"行数 × 列数"压到方言绑定参数预算内,至少 1 行。
 //
 // Columns 为 0(未解析/未知)时只做行数上限,不做参数预算;单行超过预算时仍返回 1,
@@ -420,6 +424,9 @@ func (this *TUniEngine) normalizeBatchPageSize(Requested int64, Columns int) int
 	}
 	if Rows > maxBatchRows {
 		Rows = maxBatchRows
+	}
+	if this.Provider == DtORACLE && Rows > oracleMaxBatchRows {
+		Rows = oracleMaxBatchRows
 	}
 
 	if Columns > 0 {

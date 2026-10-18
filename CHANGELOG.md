@@ -16,8 +16,10 @@
 - **批量分页 clamp**:`InsertP`/`CopyInP` 的 `PageSize` 统一归一化:
   - `0`/负值 → 999 行;超过 999 → 999 行;
   - `InsertP` 按可写列数压到方言单语句绑定参数预算内:Oracle 60000、达梦 2000、SQLServer 2000、PG/MySQL 60000;至少 1 行;
+  - Oracle 额外限制 **100 行/页**(真机测得 `INSERT ALL` 的 `INTO` 子句数存在性能拐点:999 行约 144s、500 行约 14s、200 行约 0.3s、100 行约 0.1s、50 行约 0.05s);
   - 先 clamp 再转 `int`,消除 32 位截断/超大值导致的不分页;`CopyInP` 走 COPY,只做行数上限。
-  这修复了达梦 3 列以上、Oracle/SQLServer 宽表使用默认 999 行时超出参数上限的问题。
+  这修复了达梦 3 列以上、Oracle/SQLServer 宽表使用默认 999 行时超出参数上限的问题,并把 Oracle `InsertP` 从分钟级降到秒级。
+- **Oracle 集成测试支持 godror**:`UNIENGINE_ORACLE_DRIVER=godror` + URL DSN 的 `libDir` 参数可走生产驱动;错误断言改为驱动无关(go-ora 抛 ORA-,godror 客户端直接拒绝),并新增 godror 真机 `InsertP` 用例。`integration/go.mod` 仅测试模块新增 godror 依赖。
 - **分页测试补全**:新增页大小归一化、按列预算(Oracle/达梦/SQLServer/PG)、负值/`MaxInt64`/COPY clamp 回归。
 
 ### 升级注意

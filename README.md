@@ -382,15 +382,18 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 - 大于 999 → 999 行;
 - `InsertP` 再按可写列数压缩到单条 SQL 的参数预算内(至少 1 行):
 
-| 方言 | 单语句绑定参数预算 | 示例(100 列) |
-| --- | ---: | ---: |
-| Oracle | 60000(65535 留余量) | 600 行/页 |
-| 达梦 | 2000(实测 2048 上限留余量) | 20 行/页 |
-| SQLServer | 2000(2100 留余量) | 20 行/页 |
-| PG / MySQL | 60000(65535 留余量) | 600 行/页 |
-| 未知方言 | 60000 | 600 行/页 |
+| 方言 | 单语句绑定参数预算 | 额外行数上限 | 示例(100 列) |
+| --- | ---: | ---: | ---: |
+| Oracle | 60000(65535 留余量) | **100 行/页** | 100 行/页 |
+| 达梦 | 2000(实测 2048 上限留余量) | — | 20 行/页 |
+| SQLServer | 2000(2100 留余量) | — | 20 行/页 |
+| PG / MySQL | 60000(65535 留余量) | — | 600 行/页 |
+| 未知方言 | 60000 | — | 600 行/页 |
 
-`CopyInP` 走 COPY 协议,没有绑定参数上限,只做 999 行上限。自定义写钩子改变列数时,`InsertP` 的预算按默认可写列估算,请调用方自行控制批量大小。
+Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果一致):
+`INSERT ALL` 每页 999 行约 **144s**,500 行约 **14s**,200 行约 **0.25–0.31s**,100 行约 **0.06–0.10s**,50 行约 **0.05s**。瓶颈是 `INTO` 子句数量而非绑定变量总数,因此 Oracle 单独压到 100 行/页;50–100 行是吞吐平台区,取 100 以少发包。
+
+`CopyInP` 走 COPY 协议,没有绑定参数上限,只做 999 行上限。`InsertL` 不自动分页,大行数请用 `InsertP`。自定义写钩子改变列数时,`InsertP` 的预算按默认可写列估算,请调用方自行控制批量大小。
 
 #### 6.真实数据库集成测试
 
@@ -400,7 +403,7 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | ---- | ---- | -------- |
 | `pg_test.go` | `pgx` | COPY 协议(on conflict UPSERT / CopyInL+CopyInP / ENC 密文落库与还原 / 存量明文直通 / AutoKeys+Exist* 元数据 / 事务提交回滚) |
 | `mssql_test.go` | `go-mssqldb` | **驱动名 × ColParam 绑定矩阵**(`mssql` 预处理 `?`/`:N`/`$N` → `@pN`;`sqlserver` 仅认 `@pN`)+ 四组合六步 CRUD + `sqlserver`+`$` 静默写错数据的复现用例(默认跳过) |
-| `oracle_test.go` | `go-ora`(纯 Go;`godror` 亦可) | `:N` 占位符契约(错误风格**硬报错**,无静默写错)+ CRUD / `INSERT ALL` 多行 / `MERGE` 两条分支 / `AutoKeys`+`Exist*` 元数据 / ENC 加密落库与还原 |
+| `oracle_test.go` | `go-ora` / `godror` | `:N` 占位符契约(错误风格**硬报错**,无静默写错)+ CRUD / `INSERT ALL` 多行 / `MERGE` 两条分支 / `AutoKeys`+`Exist*` 元数据 / ENC 加密落库与还原 |
 | `mysql_test.go` | `go-sql-driver/mysql` | `?` 占位符契约(三种错误风格**均不绑定实参**且均非静默写错)+ 六步 CRUD(含 `SaveIt` 的 count-then-dispatch 回退)+ `information_schema` 元数据 / ENC 加密落库与还原 |
 
 ```sh
@@ -411,9 +414,14 @@ UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" go tes
 UNIENGINE_MSSQL_HOST=127.0.0.1 UNIENGINE_MSSQL_USER=sa UNIENGINE_MSSQL_PASS='...' \
 UNIENGINE_MSSQL_DB=demo go test ./integration/ -run MSSQL -v
 
-# Oracle:分量式或整串 DSN;驱动默认纯 Go 的 go-ora,用 godror 时设 UNIENGINE_ORACLE_DRIVER=godror
+# Oracle:分量式或整串 DSN;驱动默认纯 Go 的 go-ora
 UNIENGINE_ORACLE_HOST=127.0.0.1 UNIENGINE_ORACLE_USER=scott UNIENGINE_ORACLE_PASS='tiger' \
 UNIENGINE_ORACLE_SERVICE=ORCL go test ./integration/ -run Oracle -v
+
+# Oracle + godror:给 URL DSN,并用 libDir 指向 Instant Client
+UNIENGINE_ORACLE_DRIVER=godror \
+UNIENGINE_ORACLE_DSN='oracle://scott:tiger@127.0.0.1:1521/ORCL?libDir=/path/to/instantclient' \
+go test ./integration/ -run Oracle -v
 
 # MySQL:分量式或整串 DSN;元数据用例(Exist*/AutoKeys)需要库名,故分量模式下须给 UNIENGINE_MYSQL_DB
 UNIENGINE_MYSQL_HOST=127.0.0.1 UNIENGINE_MYSQL_USER=root UNIENGINE_MYSQL_PASS='...' \

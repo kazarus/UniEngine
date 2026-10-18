@@ -16,7 +16,16 @@ require (
 )
 
 require (
+	github.com/VictoriaMetrics/easyproto v0.1.4 // indirect
+	github.com/go-logfmt/logfmt v0.6.0 // indirect
+	github.com/godror/knownpb v0.3.0 // indirect
+	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
+)
+
+require (
 	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/godror/godror v0.51.4
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
