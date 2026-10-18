@@ -13,6 +13,7 @@
   - 双键指向不同快照 / 类键存在但表键缺失 → `ErrRegistryInconsistent`;
   - 同一类、同一表名重复登记仍允许,按“重新注册”语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记)。
   冲突时不修改注册表,返回带 `LastError` 的未注册载体;`Initialize()` 的内置表登记错误不再被吞掉。
+- **新增达梦真机测试**:`integration/dameng_test.go` 覆盖 CRUD、`SaveIt` MERGE、`InsertL`/`InsertP`、ENC、`USER_*` 元数据、AutoKeys、事务及 `Provider=DtORACLE+Supplier=DtDAMENG` 生产兼容配置。真机发现达梦 `INSERT ALL` 同样存在行数拐点:1000 行 2 列 999 行/页约 0.36s、500 约 0.15s、200/100/50 约 0.1s;因此给达梦也加 100 行/页上限(与 2000/列数绑定预算取小)。`InsertP` 真机用例从 21s 降到约 0.28s。
 - **新增引擎级 `WithTx`**:`fn` 成功才 Commit,错误/panic 自动 Cancel(panic 原样重抛);嵌套/闭包内手工 Commit/Cancel 显式报错。纯加法 API,现有 `Begin/Commit/Cancel` 代码零改动,不改变事务状态机。
 - **`InsertL` 超限保护**:单次超过 999 行返回新增的 `ErrBatchTooLarge`,并提示改用 `InsertP`;避免静默生成超大 SQL 撞绑定参数上限或 Oracle `INSERT ALL` 性能拐点。`InsertP` 内部分页不受影响。
 - **CI 加固**:根模块覆盖率门槛 80%→85%(当前约 89.7%);新增 `FuzzSQLMasking`,对 `maskSQLLiterals`/`scanPlaceholders` 做开放输入的短时模糊,断言掩码等长、占位符位置不越界。

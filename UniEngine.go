@@ -418,6 +418,9 @@ const (
 	//#Oracle INSERT ALL 的性能拐点:999 个 INTO 约 144s,500 约 14s,200 约 0.3s,
 	//#100 约 0.1s,50 约 0.05s(10 列/1 列真机均复现);按 100 行/页收敛。
 	oracleMaxBatchRows int64 = 100
+	//#达梦 INSERT ALL 同样随 INTO 数增长:1000 行 2 列,999 行/页约 0.36s,
+	//#500 约 0.15s,200/100/50 约 0.1s(稳态);按 100 行/页收敛,并保留 2000/列数预算。
+	damengMaxBatchRows int64 = 100
 
 	//#单语句绑定参数预算(预留余量):Oracle 65535 工程上限取 60000;
 	//#达梦实测 2048 上限取 2000;SQLServer 2100 上限取 2000;PG/MySQL 65535 取 60000。
@@ -474,8 +477,15 @@ func (this *TUniEngine) normalizeBatchPageSize(Requested int64, Columns int) int
 	if Rows > maxBatchRows {
 		Rows = maxBatchRows
 	}
-	if this.batchDialect() == DtORACLE && Rows > oracleMaxBatchRows {
-		Rows = oracleMaxBatchRows
+	switch this.batchDialect() {
+	case DtORACLE:
+		if Rows > oracleMaxBatchRows {
+			Rows = oracleMaxBatchRows
+		}
+	case DtDAMENG:
+		if Rows > damengMaxBatchRows {
+			Rows = damengMaxBatchRows
+		}
 	}
 
 	if Columns > 0 {

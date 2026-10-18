@@ -172,9 +172,9 @@ func TestNormalizeBatchPageSize(t *testing.T) {
 		{DtORACLE, 999, 100, 100},
 		{DtORACLE, 999, 3, 100},
 		{DtORACLE, 50, 3, 50},
-		{DtDAMENG, 999, 3, 666}, // 2000/3
-		{DtDAMENG, 999, 47, 42},
-		{DtDAMENG, 999, 1, 999},
+		{DtDAMENG, 999, 3, 100}, // 100 行性能上限
+		{DtDAMENG, 999, 47, 42}, // 2000/47 绑定预算更紧
+		{DtDAMENG, 999, 1, 100},
 		{DtSQLSRV, 999, 100, 20}, // 2000/100
 		{DtMYSQLN, 999, 0, 999},
 	}
@@ -201,7 +201,7 @@ func TestInsertPPageSizeByColumnBudget(t *testing.T) {
 	}{
 		{DtPOSTGR, "$", "", 2},      // 999 行/页
 		{DtORACLE, ":", "", 10},     // 100 行/页(INSERT ALL 性能拐点)
-		{DtDAMENG, ":", "", 5},      // 2000/10 = 200 行/页
+		{DtDAMENG, ":", "", 10},     // 100 行/页性能上限
 		{DtSQLSRV, "$", "mssql", 5}, // 2000/10 = 200 行/页
 	}
 
@@ -277,8 +277,8 @@ func TestDamengSupplierUsesDamengBatchBudget(t *testing.T) {
 	if got := e.normalizeBatchPageSize(999, 47); got != 42 {
 		t.Fatalf("DM 47 cols page=%d want 42 (2000/47)", got)
 	}
-	if got := e.normalizeBatchPageSize(999, 10); got != 200 {
-		t.Fatalf("DM 10 cols page=%d want 200 (2000/10), Oracle 100 cap must not apply", got)
+	if got := e.normalizeBatchPageSize(999, 10); got != 100 {
+		t.Fatalf("DM 10 cols page=%d want 100 (DM row cap)", got)
 	}
 
 	//#不带 Supplier 时仍是 Oracle:100 行上限。
@@ -301,8 +301,8 @@ func TestInsertPDamengSupplierBudget(t *testing.T) {
 	if eror := e.InsertP(&rows, 999, "t_wide"); eror != nil {
 		t.Fatalf("InsertP: %v", eror)
 	}
-	if got := len(d.insertValues); got != 5 {
-		t.Fatalf("DM 10 cols pages=%d want 5 (2000/10=200 rows/page)", got)
+	if got := len(d.insertValues); got != 10 {
+		t.Fatalf("DM 10 cols pages=%d want 10 (100 rows/page)", got)
 	}
 }
 

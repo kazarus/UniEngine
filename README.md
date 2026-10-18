@@ -144,7 +144,7 @@ eng := &UniEngine.TUniEngine{
 4. `BatchDialect` 是显式的批量厂商字段,优先于 `Supplier` 推断;它只改页大小,不会改 `dbFamily()`/SQL。标准部署不需要设置,达梦也可写 `BatchDialect: DtDAMENG` 而不依赖 `Supplier`。
 5. 当前代码消费两个 `Supplier` 取值:
    - `DtPOLODB`:仅 `InsertP`→COPY;配到非 PG 族 `Provider` 上会直接报错;
-   - `DtDAMENG`:仅把批量预算切到 2000/列数(用于 `Provider=DtORACLE` 的达梦兼容接入),不改变 SQL。
+   - `DtDAMENG`:把批量预算切到 2000/列数 + 100 行/页(用于 `Provider=DtORACLE` 的达梦兼容接入),不改变 SQL。
    其它取值当前不影响 SQL,也不影响批量预算。
 6. 达梦兼容接入的标准写法是 `Provider: DtORACLE, Supplier: DtDAMENG`(或 `BatchDialect: DtDAMENG`):SQL/元数据/UPSERT 仍走 Oracle 分支,只有 `InsertP` 页大小按达梦 2048 上限收敛,不能反过来改 `Provider`。
 
@@ -442,7 +442,7 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | 显式 `schema.table` 表名 | ❌ 元数据探测不支持 | 白名单与 CRUD 允许点号,但 `Exist*` / `AutoKeys` 把整串与 `TABLE_NAME` 比较,不会拆分 owner。元数据探测请传**裸表名** |
 | `ExistConst(CtDF, 列名)` | ⚠️ 仅按列名判断 | Oracle 默认值不是命名约束;同一 schema 下任意表有同名列且 `data_default is not null` 就返回 true。需要精确判定时用 `ExistConstOn(表名, CtDF, 列名)`(按 `USER_TAB_COLS(TABLE_NAME, COLUMN_NAME)` 查询) |
 | 复合主键 `AutoKeys` | ✅ 顺序稳定 | 已按 `USER_CONS_COLUMNS.POSITION` 排序,不依赖数据库返回序 |
-| 达梦(`DtDAMENG`) | ⚠️ 同路径、未真库覆盖 | 与 Oracle 共用上述 SQL;CI 只跑 Oracle 真库,达梦的 `USER_*` 兼容性需在目标库验证 |
+| 达梦(`DtDAMENG`) | ✅ 已真机覆盖(2026-10-18) | 与 Oracle 共用 `USER_*` SQL;已在达梦 DM8 验证 CRUD/`INSERT ALL`/`SaveIt MERGE`/`AutoKeys`/`Exist*`/事务。CI 未配置达梦固定服务,需自备实例 |
 
 > **结论**:当前支持的稳定主路径是“登录用户即目标 schema、使用裸表名、对象为普通表/视图”。跨 schema、同义词、物化视图、显式 schema 前缀属于已知边界,不要仅凭 `Exist*` / `AutoKeys` 的结果做建表/迁移决策;必要时先用 `ALL_*` 数据字典自行校验。
 
@@ -469,12 +469,14 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | 方言 | 单语句绑定参数预算 | 额外行数上限 | 示例(100 列) |
 | --- | ---: | ---: | ---: |
 | Oracle | 60000(65535 留余量) | **100 行/页** | 100 行/页 |
-| 达梦 | 2000(实测 2048 上限留余量) | — | 20 行/页 |
+| 达梦 | 2000(实测 2048 上限留余量) | **100 行/页** | 20 行/页 |
 | SQLServer | 2000(2100 留余量) | — | 20 行/页 |
 | PG / MySQL | 60000(65535 留余量) | — | 600 行/页 |
 | 未知方言 | 60000 | — | 600 行/页 |
 
-达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,且不套 Oracle 的 100 行上限;这样不会触发应用侧 507 处 `switch Provider == DtORACLE` 的迁移。
+达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,并套用达梦自己的 100 行/页性能上限;这样不会触发应用侧 507 处 `switch Provider == DtORACLE` 的迁移。
+
+达梦真机测量(1000 行 × 2 列,稳态):999 行/页约 0.36s,500 约 0.15s,200/100/50 约 0.1s;100 行/页与 Oracle 一样避开 `INSERT ALL` 的 `INTO` 拐点。47 列时 `2000/47=42` 行/页,绑定预算更紧,优先于 100 行上限。
 
 Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果一致):
 `INSERT ALL` 每页 999 行约 **144s**,500 行约 **14s**,200 行约 **0.25–0.31s**,100 行约 **0.06–0.10s**,50 行约 **0.05s**。瓶颈是 `INTO` 子句数量而非绑定变量总数,因此 Oracle 单独压到 100 行/页;50–100 行是吞吐平台区,取 100 以少发包。
@@ -496,7 +498,7 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 
 #### 6.真实数据库集成测试
 
-`integration/` 是**独立 Go 模块**(自带 go.mod),用真实数据库验证各协议族的真实驱动行为——库本体保持零第三方依赖不受影响。覆盖 **PostgreSQL / SQL Server / Oracle / MySQL** 四族,并新增 **TiDB(MySQL 协议)** 真机用例:
+`integration/` 是**独立 Go 模块**(自带 go.mod),用真实数据库验证各协议族的真实驱动行为——库本体保持零第三方依赖不受影响。覆盖 **PostgreSQL / SQL Server / Oracle / MySQL** 四族,并新增 **TiDB(MySQL 协议)** 与 **达梦(Oracle 兼容)** 真机用例:
 
 | 文件 | 驱动 | 覆盖内容 |
 | ---- | ---- | -------- |
@@ -505,6 +507,7 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 | `oracle_test.go` | `go-ora` / `godror` | `:N` 占位符契约(错误风格**硬报错**,无静默写错)+ CRUD / `INSERT ALL` 多行 / `MERGE` 两条分支 / `AutoKeys`+`Exist*` 元数据 / ENC 加密落库与还原 |
 | `mysql_test.go` | `go-sql-driver/mysql` | `?` 占位符契约(三种错误风格**均不绑定实参**且均非静默写错)+ 六步 CRUD(含 `SaveIt` 的 count-then-dispatch 回退)+ `information_schema` 元数据 / ENC 加密落库与还原 |
 | `tidb_test.go` | `go-sql-driver/mysql` | TiDB(MySQL 协议,默认端口 4000):CRUD / `SaveIt` count-then-dispatch / `InsertL` / `InsertP` clamp / ENC 加密 / `information_schema` 元数据 / 事务提交回滚 |
+| `dameng_test.go` | `gitee.com/chunanyong/dm` | 达梦(Oracle 兼容):CRUD / `SaveIt` MERGE / `InsertL` INSERT ALL / `InsertP` 100 行预算 / ENC 加密 / `USER_*` 元数据 / AutoKeys / 事务;含 `Provider=DtORACLE+Supplier=DtDAMENG` 生产兼容用例 |
 
 ```sh
 # PostgreSQL(连不上时自动跳过;REQUIRED=1 则强制失败,CI 即如此)
@@ -531,9 +534,14 @@ UNIENGINE_MYSQL_DB=demo go test ./integration/ -run MySQL -v
 UNIENGINE_TIDB_HOST=127.0.0.1 UNIENGINE_TIDB_PORT=4000 \
 UNIENGINE_TIDB_USER=root UNIENGINE_TIDB_PASS='...' \
 UNIENGINE_TIDB_DB=demo go test ./integration/ -run TiDB -v
+
+# 达梦:默认端口 5236;schema 可用 UNIENGINE_DM_DB 或 UNIENGINE_DM_SCHEMA 指定
+UNIENGINE_DM_HOST=127.0.0.1 UNIENGINE_DM_PORT=5236 \
+UNIENGINE_DM_USER=SYSDBA UNIENGINE_DM_PASS='...' \
+UNIENGINE_DM_DB=demo go test ./integration/ -run Dameng -v
 ```
 
-四族各有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致;TiDB 对应 `UNIENGINE_TIDB_REQUIRED=1`。TiDB 需自备实例,未纳入固定 CI 服务。
+各库有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL,TIDB,DM}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致。TiDB/达梦需自备实例,未纳入固定 CI 服务。
 
 **CI 覆盖**(`.github/workflows/ci.yml`):
 

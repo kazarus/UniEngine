@@ -7,6 +7,7 @@ replace github.com/kazarus/UniEngine => ../
 replace github.com/kazarus/UniEngine/contrib/pgxcopy => ../contrib/pgxcopy
 
 require (
+	gitee.com/chunanyong/dm v1.8.23
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/kazarus/UniEngine v0.0.0-00010101000000-000000000000
@@ -19,6 +20,7 @@ require (
 	github.com/VictoriaMetrics/easyproto v0.1.4 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/godror/knownpb v0.3.0 // indirect
+	github.com/golang/snappy v0.0.4 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )
