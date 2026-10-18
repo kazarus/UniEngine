@@ -190,6 +190,8 @@ if eror := UniEngineEx.Initialize(); eror != nil {
 var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
 AutoKeys.DataBase = "kz2020_gcgl_demo"
 
+//#AutoKeys 不传生成器时按 Provider 协议族自动选择 PG/SQLServer/Oracle/MySQL 的内置 SQL;
+//#MySQL/TiDB 仍需 DataBase。也可显式传 TAutoKeys4* 覆盖。
 //#注册数据库操作类(AutoKeys 接收 *TUniEngine,返回 error,需处理)
 if eror := UniEngineEx.RegisterClass(mock.TMAIN{}, "mock_main").AutoKeys(&UniEngineEx, AutoKeys); eror != nil {
   panic(eror)

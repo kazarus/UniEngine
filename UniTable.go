@@ -468,8 +468,25 @@ func (this *TUniTable) setVerify(VerifyAt string, Fields ...string) {
 
 }
 
+// defaultAutoKeysSQL 按协议族选择内置主键探测 SQL。
+// 历史上这里写死 PostgreSQL,导致 MySQL/Oracle/SQLServer 不传生成器时必然失败。
+func (this *TUniEngine) defaultAutoKeysSQL(TableName string) (string, error) {
+	switch this.dbFamily() {
+	case FmPOSTGR:
+		return TAutoKeys4POSTGR{}.GetSqlAutoKeys(this, TableName)
+	case FmSQLSRV:
+		return TAutoKeys4SQLSRV{}.GetSqlAutoKeys(this, TableName)
+	case FmORACLE:
+		return TAutoKeys4ORACLE{}.GetSqlAutoKeys(this, TableName)
+	case FmMYSQLN:
+		return TAutoKeys4MYSQLN{DataBase: this.DataBase}.GetSqlAutoKeys(this, TableName)
+	}
+	return "", fmt.Errorf("UniEngine: AutoKeys has no default SQL for provider %v; pass a GetSqlAutoKeys generator", this.Provider)
+}
+
 // AutoKeys 按数据库元数据自动登记主键,并发布新快照(旧指针不变;
 // 调用方需通过 eng.GetTable(name) 取回含新主键的快照)。UniEngineEx 为引擎指针。
+// GetSqlAutoKeys 为空时按 Provider 协议族选择内置 SQL;显式传入则使用传入生成器。
 func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...interface{}) error {
 	//#链式登记的首个错误必须短路:非法表名/字段名会进入元数据 SQL 的单引号拼接,
 	//#旧实现跳过本检查直接触网(注入面),也违反了 SetKeys/SetSecret/SetVerify 的共同契约。
@@ -499,7 +516,7 @@ func (this *TUniTable) AutoKeys(UniEngineEx *TUniEngine, GetSqlAutoKeys ...inter
 
 	} else {
 		var eror error
-		SQL, eror = TAutoKeys4POSTGR{}.GetSqlAutoKeys(UniEngineEx, this.TableName)
+		SQL, eror = UniEngineEx.defaultAutoKeysSQL(this.TableName)
 		if eror != nil {
 			return eror
 		}
