@@ -253,8 +253,8 @@ type dmWideRow struct {
 	C10 int64 `db:"c10"`
 }
 
-// #生产兼容配置:Provider=DtORACLE + Supplier=DtDAMENG。
-// #SQL 仍走 Oracle 分支,批量预算走达梦 2000/列数(10 列 → 200 行/页)。
+// #生产兼容配置:Provider=DtORACLE。
+// #SQL 与分页参数都走 Oracle;达梦与 Oracle 一致(10 列 → 100 行/页)。
 func TestDamengOracleCompatInsertP(t *testing.T) {
 	db := openDameng(t)
 	eng := &UniEngine.TUniEngine{
@@ -262,7 +262,6 @@ func TestDamengOracleCompatInsertP(t *testing.T) {
 		ColLabel: "db",
 		ColParam: ":",
 		Provider: UniEngine.DtORACLE,
-		Supplier: UniEngine.DtDAMENG,
 	}
 	if eror := eng.Initialize(); eror != nil {
 		t.Fatalf("Initialize: %v", eror)

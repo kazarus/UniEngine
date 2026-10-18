@@ -13,23 +13,21 @@
   - 双键指向不同快照 / 类键存在但表键缺失 → `ErrRegistryInconsistent`;
   - 同一类、同一表名重复登记仍允许,按“重新注册”语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记)。
   冲突时不修改注册表,返回带 `LastError` 的未注册载体;`Initialize()` 的内置表登记错误不再被吞掉。
-- **新增达梦真机测试**:`integration/dameng_test.go` 覆盖 CRUD、`SaveIt` MERGE、`InsertL`/`InsertP`、ENC、`USER_*` 元数据、AutoKeys、事务及 `Provider=DtORACLE+Supplier=DtDAMENG` 生产兼容配置。真机发现达梦 `INSERT ALL` 同样存在行数拐点:1000 行 2 列 999 行/页约 0.36s、500 约 0.15s、200/100/50 约 0.1s;因此给达梦也加 100 行/页上限(与 2000/列数绑定预算取小)。`InsertP` 真机用例从 21s 降到约 0.28s。
+- **新增达梦真机测试**:`integration/dameng_test.go` 覆盖 CRUD、`SaveIt` MERGE、`InsertL`/`InsertP`、ENC、`USER_*` 元数据、AutoKeys、事务及 `Provider=DtORACLE` 兼容配置。真机确认达梦与 Oracle 使用同一组分页参数(100 行/页、60000 绑定预算):1000 行 2 列在 999 行/页约 0.36s、500 约 0.15s、200/100/50 约 0.1s;`InsertP` 真机用例从 21s 降到约 0.28s。
 - **新增引擎级 `WithTx`**:`fn` 成功才 Commit,错误/panic 自动 Cancel(panic 原样重抛);嵌套/闭包内手工 Commit/Cancel 显式报错。纯加法 API,现有 `Begin/Commit/Cancel` 代码零改动,不改变事务状态机。
 - **`InsertL` 超限保护**:单次超过 999 行返回新增的 `ErrBatchTooLarge`,并提示改用 `InsertP`;避免静默生成超大 SQL 撞绑定参数上限或 Oracle `INSERT ALL` 性能拐点。`InsertP` 内部分页不受影响。
 - **CI 加固**:根模块覆盖率门槛 80%→85%(当前约 89.7%);新增 `FuzzSQLMasking`,对 `maskSQLLiterals`/`scanPlaceholders` 做开放输入的短时模糊,断言掩码等长、占位符位置不越界。
 - **README 增加旧调用方接入检查清单**:一表多类、引擎复制、达梦批量预算、`SelectD/F/S` 多行、`SelectL` 整批回滚、`HashTabl` 访问、`InsertL` 上限、`WithTx` 混用边界。
 - **新增 `ExistConstOn(TableName, CtDF, ColumnName)`**:默认值约束按“表名+列名”精确判定,解决 `ExistConst(CtDF,列名)` 只按列名匹配的歧义;PG/SQLServer/Oracle/MySQL 各自生成表名限定 SQL,其它约束类型仍委托 `ExistConst`。
 - **新增 `GetTableByClass`**:按类名键持读锁取表快照,替代生产代码直接读 `HashTabl["pkg.Type"]` 的无锁访问;README 明确 `HashTabl` 只读快照定位。
-- **新增显式 `BatchDialect`**:优先于 `Supplier` 推断,仅决定批量页大小的厂商预算,不改变 SQL 方言;达梦可用 `Provider=DtORACLE` + `BatchDialect=DtDAMENG`,避免 `Supplier` 语义过载。
 - **真机测试数据库名脱敏**:所有集成测试示例、README/CONTRIBUTING、CI 服务与历史评估报告统一使用 `UNIENGINE_TESTDB` 作为数据库名占位;真实库名/口令只经环境变量传入,不写入仓库。
 - **`Initialize` 基础配置校验**:`Db` 非空时检查 `ColLabel`/`ColParam`/`Provider`,非法返回新增的 `ErrInvalidConfig`;`Db` 为空的注册-only 引擎继续跳过,避免破坏单测/元数据登记用法。
 - **`AutoKeys` 默认 SQL 按协议族选择**:不传生成器时,PG/SQLServer/Oracle/MySQL 分别使用各自的主键探测 SQL,不再写死 PostgreSQL;MySQL 缺 `DataBase` 或未知 Provider 明确报错。
-- **达梦批量预算接入 `Supplier`**:新增 `batchDialect()`;`Provider=DtORACLE` + `Supplier=DtDAMENG` 时按达梦 2000 参数预算分页,不套 Oracle 100 行上限,SQL 生成仍走 Oracle 分支。下游无需改 `Provider`(避免大量 `case DtORACLE` 迁移)。
 - **锁模型恢复共享指针**:`mu`/`txGate` 改回 `*sync.RWMutex`/`*sync.Mutex`,使历史“按值复制引擎”调用方的副本共享注册表锁;否则副本各自持锁却写同一张 `HashTabl`,运行时 `RegisterClass`/`PrepareTables` 与查询并发会触发 map 竞态。零值引擎用 `sync.Once` 做并发安全的懒初始化;事务状态(`tx`/`inTx`)仍按值复制,新代码仍应使用 `*TUniEngine`。
 - **新增 `RegisterClassForce`**:显式允许用类元数据替换**手工登记**的表(`ClassType==nil`);不会把已登记到其它表的类改绑(`ErrClassConflict`)。不同类共享同一表名本来就是允许的。
 - **批量分页 clamp**:`InsertP`/`CopyInP` 的 `PageSize` 统一归一化:
   - `0`/负值 → 999 行;超过 999 → 999 行;
-  - `InsertP` 按可写列数压到方言单语句绑定参数预算内:Oracle 60000、达梦 2000、SQLServer 2000、PG/MySQL 60000;至少 1 行;
+  - `InsertP` 按可写列数压到方言单语句绑定参数预算内:Oracle/达梦 60000、SQLServer 2000、PG/MySQL 60000;至少 1 行;
   - Oracle 额外限制 **100 行/页**(真机测得 `INSERT ALL` 的 `INTO` 子句数存在性能拐点:999 行约 144s、500 行约 14s、200 行约 0.3s、100 行约 0.1s、50 行约 0.05s);
   - 先 clamp 再转 `int`,消除 32 位截断/超大值导致的不分页;`CopyInP` 走 COPY,只做行数上限。
   这修复了达梦 3 列以上、Oracle/SQLServer 宽表使用默认 999 行时超出参数上限的问题,并把 Oracle `InsertP` 从分钟级降到秒级。

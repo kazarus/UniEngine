@@ -615,7 +615,7 @@ func (this *TUniEngine) secretIterForWrite() (int, error) {
    - **仍未解决**：`noCopy` 只是禁止拷贝，并未把 `tx`/`inTx` 收进与 `mu` 同级的共享结构——根因（值字段事务状态）仍在，故并发维度只加到 7.5。深改建议保留：把事务状态整体移入指针持有结构。
 
 8. **统一方言判断入口 ✎ 已细化——原论证需修正**
-   - 复核结论：✅ 问题成立，但理由比原表述更准确。`Supplier` 的字段注释明确写着用途是「数据库驱动（**区分 DtORACLE VS DtDAMENG**）」（`UniEngine.go:50`），而 `UniCopyIn.go:205` 却用它判断 `DtPOLODB` 决定是否走 COPY——**与字段自身文档语义相矛盾**，属误用。
+   - 复核结论：✅ 问题成立。该历史版本中 `Supplier` 的字段语义与 `UniCopyIn.go` 的 `DtPOLODB` 判断不一致；当前版本已将 `Supplier` 收敛为仅 PolarDB→COPY，达梦与 Oracle 共用同一组分页参数。
    - 修法：PolarDB 已由 `Provider` 表达且属 `FmPOSTGR`，应改为按 `Provider`/`dbFamily()` 路由；`Supplier` 要么删除，要么在文档中明确它到底承担什么。
 
 9. **零散一致性 ✔ 有效（含本轮两条新发现）**

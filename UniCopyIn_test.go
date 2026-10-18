@@ -172,8 +172,8 @@ func TestNormalizeBatchPageSize(t *testing.T) {
 		{DtORACLE, 999, 100, 100},
 		{DtORACLE, 999, 3, 100},
 		{DtORACLE, 50, 3, 50},
-		{DtDAMENG, 999, 3, 100}, // 100 行性能上限
-		{DtDAMENG, 999, 47, 42}, // 2000/47 绑定预算更紧
+		{DtDAMENG, 999, 3, 100}, // 与 Oracle 一致
+		{DtDAMENG, 999, 47, 100},
 		{DtDAMENG, 999, 1, 100},
 		{DtSQLSRV, 999, 100, 20}, // 2000/100
 		{DtMYSQLN, 999, 0, 999},
@@ -201,7 +201,7 @@ func TestInsertPPageSizeByColumnBudget(t *testing.T) {
 	}{
 		{DtPOSTGR, "$", "", 2},      // 999 行/页
 		{DtORACLE, ":", "", 10},     // 100 行/页(INSERT ALL 性能拐点)
-		{DtDAMENG, ":", "", 10},     // 100 行/页性能上限
+		{DtDAMENG, ":", "", 10},     // 与 Oracle 一致:100 行/页
 		{DtSQLSRV, "$", "mssql", 5}, // 2000/10 = 200 行/页
 	}
 
@@ -264,34 +264,24 @@ func TestCopyInPClampsPageSize(t *testing.T) {
 	}
 }
 
-// #达梦经 Oracle 兼容协议接入:Provider 保持 DtORACLE(应用 SQL 分支不变),
-// #Supplier=DtDAMENG 只把批量预算切到 2000/列数,不套 Oracle 100 行性能上限。
-func TestDamengSupplierUsesDamengBatchBudget(t *testing.T) {
+// #达梦与 Oracle 使用完全相同的分页参数:100 行/页 + 60000 绑定预算。
+func TestDamengAndOraclePaginationSame(t *testing.T) {
 	e := newTestEngine()
-	e.Provider = DtORACLE
-	e.Supplier = DtDAMENG
-
-	if got := e.batchDialect(); got != DtDAMENG {
-		t.Fatalf("batchDialect=%v want DtDAMENG", got)
-	}
-	if got := e.normalizeBatchPageSize(999, 47); got != 42 {
-		t.Fatalf("DM 47 cols page=%d want 42 (2000/47)", got)
-	}
-	if got := e.normalizeBatchPageSize(999, 10); got != 100 {
-		t.Fatalf("DM 10 cols page=%d want 100 (DM row cap)", got)
-	}
-
-	//#不带 Supplier 时仍是 Oracle:100 行上限。
-	e.Supplier = 0
-	if got := e.normalizeBatchPageSize(999, 10); got != 100 {
-		t.Fatalf("Oracle page=%d want 100", got)
+	for _, provider := range []TDriveType{DtORACLE, DtDAMENG} {
+		e.Provider = provider
+		if got := e.normalizeBatchPageSize(999, 47); got != 100 {
+			t.Fatalf("provider=%v 47 cols page=%d want 100", provider, got)
+		}
+		if got := e.normalizeBatchPageSize(999, 10); got != 100 {
+			t.Fatalf("provider=%v 10 cols page=%d want 100", provider, got)
+		}
 	}
 }
 
-func TestInsertPDamengSupplierBudget(t *testing.T) {
+func TestInsertPDamengSameAsOracle(t *testing.T) {
 	d := &mockDriver{}
 	e := newMockEngine(d)
-	e.Provider, e.ColParam, e.Supplier = DtORACLE, ":", DtDAMENG
+	e.Provider, e.ColParam = DtDAMENG, ":"
 	e.RegisterClass(pageWideRow{}, "t_wide")
 
 	rows := make([]pageWideRow, 1000)
@@ -303,25 +293,5 @@ func TestInsertPDamengSupplierBudget(t *testing.T) {
 	}
 	if got := len(d.insertValues); got != 10 {
 		t.Fatalf("DM 10 cols pages=%d want 10 (100 rows/page)", got)
-	}
-}
-
-func TestBatchDialectExplicitOverride(t *testing.T) {
-	e := newTestEngine()
-	e.Provider = DtORACLE
-	e.Supplier = 0
-	e.BatchDialect = DtDAMENG
-	if got := e.batchDialect(); got != DtDAMENG {
-		t.Fatalf("explicit BatchDialect=%v want DtDAMENG", got)
-	}
-	//#显式字段优先于 Supplier 推断;但 SQL 方言仍由 Provider 决定。
-	if got := e.dbFamily(); got != FmORACLE {
-		t.Fatalf("BatchDialect must not change dbFamily, got %v", got)
-	}
-
-	e.BatchDialect = 0
-	e.Supplier = DtDAMENG
-	if got := e.batchDialect(); got != DtDAMENG {
-		t.Fatalf("Supplier fallback=%v want DtDAMENG", got)
 	}
 }

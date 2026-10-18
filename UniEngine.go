@@ -70,15 +70,7 @@ type TUniEngine struct {
 	// INSERT ALL/COPY 白名单)。方言相关的一切分支都只看本字段。
 	Provider TDriveType
 
-	// BatchDialect 显式指定"批量写入预算"的厂商;0 表示按 Supplier/Provider 推断。
-	// 只影响 InsertP/InsertL 的页大小,不参与 SQL 方言选择(方言仍看 Provider)。
-	// 用于避免 Supplier 语义过载:达梦可写 BatchDialect: DtDAMENG,Provider 仍为 DtORACLE。
-	BatchDialect TDriveType
-
-	// Supplier 用于 InsertP 的批量路由/预算(不改变 SQL 方言):
-	//   - DtPOLODB:改走 COPY 协议(Provider 仍应为 PG 族);
-	//   - DtDAMENG:Provider=DtORACLE 的达梦部署按达梦 2000/列数预算收敛,
-	//     不套 Oracle 的 100 行/页性能上限。
+	// Supplier **仅**用于 InsertP 的批量路由:PolarDB 时改走 COPY 协议。
 	// 引擎内部从不赋值,须由调用方显式设置;它与 Provider 是两套开关——
 	// 只设 Provider=DtPOLODB 不会让 InsertP 走 COPY,
 	// 而 Supplier=DtPOLODB 配非 PG 族 Provider 会让 InsertP 直接报错。
@@ -418,40 +410,18 @@ const (
 	//#Oracle INSERT ALL 的性能拐点:999 个 INTO 约 144s,500 约 14s,200 约 0.3s,
 	//#100 约 0.1s,50 约 0.05s(10 列/1 列真机均复现);按 100 行/页收敛。
 	oracleMaxBatchRows int64 = 100
-	//#达梦 INSERT ALL 同样随 INTO 数增长:1000 行 2 列,999 行/页约 0.36s,
-	//#500 约 0.15s,200/100/50 约 0.1s(稳态);按 100 行/页收敛,并保留 2000/列数预算。
-	damengMaxBatchRows int64 = 100
 
-	//#单语句绑定参数预算(预留余量):Oracle 65535 工程上限取 60000;
-	//#达梦实测 2048 上限取 2000;SQLServer 2100 上限取 2000;PG/MySQL 65535 取 60000。
+	//#单语句绑定参数预算(预留余量):Oracle/达梦 65535 工程上限取 60000;
+	//#SQLServer 2100 上限取 2000;PG/MySQL 65535 取 60000。
 	oracleMaxBindParams    int64 = 60000
-	damengMaxBindParams    int64 = 2000
 	sqlserverMaxBindParams int64 = 2000
 	defaultMaxBindParams   int64 = 60000
 )
 
-// batchDialect 返回"批量写入预算"使用的厂商标识。
-//
-// Provider 仍是唯一的 SQL 方言开关(占位符/引号/元数据/UPSERT/INSERT ALL),
-// 不能因为达梦而改成 DtDAMENG——历史应用有大量 switch Provider==DtORACLE。
-// Supplier 是产品标识:达梦走 Oracle 兼容协议时保持 Provider=DtORACLE,
-// 用 Supplier=DtDAMENG 让批量页大小按达梦 2048 参数上限收敛。
-func (this *TUniEngine) batchDialect() TDriveType {
-	if this.BatchDialect != 0 {
-		return this.BatchDialect
-	}
-	if this.Supplier == DtDAMENG {
-		return DtDAMENG
-	}
-	return this.Provider
-}
-
 // maxBatchBindParams 返回当前方言单条 INSERT 的绑定参数预算。
 func (this *TUniEngine) maxBatchBindParams() int64 {
-	switch this.batchDialect() {
-	case DtDAMENG:
-		return damengMaxBindParams
-	case DtORACLE:
+	switch this.Provider {
+	case DtORACLE, DtDAMENG:
 		return oracleMaxBindParams
 	case DtSQLSRV:
 		return sqlserverMaxBindParams
@@ -463,8 +433,7 @@ func (this *TUniEngine) maxBatchBindParams() int64 {
 // normalizeBatchPageSize 归一化批量写入页大小:
 //   - 0/负值 → 999 行;
 //   - 超过 999 → 999;
-//   - Oracle 再压到 100 行/页(INSERT ALL 的 INTO 数量是性能拐点);
-//     达梦经 Supplier=DtDAMENG 走 2000/列数预算,不套 Oracle 100 行上限;
+//   - Oracle/达梦统一压到 100 行/页(INSERT ALL 的 INTO 数量是性能拐点);
 //   - 按列数把"行数 × 列数"压到方言绑定参数预算内,至少 1 行。
 //
 // Columns 为 0(未解析/未知)时只做行数上限,不做参数预算;单行超过预算时仍返回 1,
@@ -477,15 +446,8 @@ func (this *TUniEngine) normalizeBatchPageSize(Requested int64, Columns int) int
 	if Rows > maxBatchRows {
 		Rows = maxBatchRows
 	}
-	switch this.batchDialect() {
-	case DtORACLE:
-		if Rows > oracleMaxBatchRows {
-			Rows = oracleMaxBatchRows
-		}
-	case DtDAMENG:
-		if Rows > damengMaxBatchRows {
-			Rows = damengMaxBatchRows
-		}
+	if (this.Provider == DtORACLE || this.Provider == DtDAMENG) && Rows > oracleMaxBatchRows {
+		Rows = oracleMaxBatchRows
 	}
 
 	if Columns > 0 {
