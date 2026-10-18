@@ -50,7 +50,7 @@ jobs:
           out=$(gofmt -l .)
           [ -z "$out" ] || { echo "以下文件需要 gofmt:"; echo "$out"; exit 1; }
 
-      # -race 下覆盖率须用 atomic 模式;门槛取"当前水位(88%)回撤 8 个点"作下限,防止静默劣化
+      # -race 下覆盖率须用 atomic 模式;门槛取当前水位(约 89.7%)回撤约 5 个点,防止静默劣化
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic .
 
@@ -58,7 +58,7 @@ jobs:
         run: |
           total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
           echo "语句覆盖率: ${total}%"
-          awk -v t="$total" 'BEGIN { if (t+0 < 80) { printf "❌ 覆盖率 %.2f%% 低于门槛 80%%\n", t; exit 1 } printf "✅ 覆盖率 %.2f%% ≥ 80%%\n", t }'
+          awk -v t="$total" 'BEGIN { if (t+0 < 85) { printf "❌ 覆盖率 %.2f%% 低于门槛 85%%\n", t; exit 1 } printf "✅ 覆盖率 %.2f%% ≥ 85%%\n", t }'
 
       # 基准代码也在 CI 里编译并各执行一次,防止其随重构腐化
       - name: Benchmark smoke
@@ -70,6 +70,9 @@ jobs:
 
       - name: Fuzz smoke (FuzzUniFieldInitialize)
         run: go test -run '^$' -fuzz FuzzUniFieldInitialize -fuzztime 10s .
+
+      - name: Fuzz smoke (FuzzSQLMasking)
+        run: go test -run '^$' -fuzz FuzzSQLMasking -fuzztime 10s .
 
   # PostgreSQL 真实驱动(pgx)集成测试:独立模块 integration/,不污染库本体零依赖
   integration-pg:

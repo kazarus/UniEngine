@@ -499,7 +499,7 @@ UNIENGINE_TIDB_DB=demo go test ./integration/ -run TiDB -v
 
 | job | 族 | 触发 | 说明 |
 | --- | -- | ---- | ---- |
-| `build-test` | — | 每次 push/PR | Go 1.24–1.27 矩阵:`build`/`vet`/`gofmt`/`test -race` + **覆盖率门槛 80%** + 基准 smoke + 10s fuzz smoke |
+| `build-test` | — | 每次 push/PR | Go 1.24–1.27 矩阵:`build`/`vet`/`gofmt`/`test -race` + **覆盖率门槛 85%** + 基准 smoke + 10s fuzz smoke(含 SQL 掩码/占位符扫描) |
 | `integration-pg` | PostgreSQL 16 | 每次 push/PR | `postgres:16-alpine` service 容器 |
 | `integration-mysql` | MySQL 8.4 | 每次 push/PR | `mysql:8.4` service 容器 |
 | `integration-heavy` | SQL Server 2022 + Oracle Free 23 | **每日定时 + 手动** | 重容器(各 1–2 GB / 30–90s 就绪),不阻塞 PR,次日暴露腐化;失败时打印容器日志 |

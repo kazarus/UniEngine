@@ -104,3 +104,34 @@ func FuzzUniFieldInitialize(f *testing.F) {
 		}
 	})
 }
+
+// FuzzSQLMasking 把 hook 参数重写前的"掩码/占位符扫描"作为开放输入:
+// 掩码必须保持原串长度(调用方按位置回切原串),扫描不得 panic/越界。
+func FuzzSQLMasking(f *testing.F) {
+	for _, seed := range []string{
+		"insert into t(a,b) values (?,?)",
+		"insert into t(a) values ('?')",
+		`insert into t(a) values ("$1")`,
+		"insert into t(a) values (?) -- ?\n",
+		"insert into t(a) values (?) /* ? */",
+		"select ':1', '?', \"x\", `y` from t where id=$12",
+		"select 'unterminated",
+		"select /* unterminated",
+		"select $0, :0, ?",
+		"",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, query string) {
+		masked := maskSQLLiterals(query)
+		if len(masked) != len(query) {
+			t.Fatalf("mask changed length: in=%d out=%d query=%q masked=%q", len(query), len(masked), query, masked)
+		}
+		for _, place := range scanPlaceholders(masked) {
+			if place.Pos < 0 || place.Pos >= len(masked) {
+				t.Fatalf("placeholder pos out of range: pos=%d len=%d masked=%q", place.Pos, len(masked), masked)
+			}
+		}
+	})
+}
