@@ -8,7 +8,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -34,7 +33,7 @@ func verifyRowColumns() []string {
 func newVerifyTestEngine(d *mockDriver) *TUniEngine {
 	db := sql.OpenDB(mockConnector{d: d})
 	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		VerifyOn: 1, VerifyMode: 1, VerifyBy: "test-verify-key", VerifyMacVer: 1}
+		VerifyOn: 1, VerifyMode: 1, VerifyBy: "test-verify-key"}
 	eng.Initialize()
 	eng.RegisterClass(TVerifyRow{}, "tbl_verify_row").
 		SetKeys("who_build", "user_indx").
@@ -42,19 +41,20 @@ func newVerifyTestEngine(d *mockDriver) *TUniEngine {
 	return eng
 }
 
-// verifyExpect 按内置 v1 算法计算给定行的期望 MAC 伴随值(标签随引擎 VerifyMacVer)
+// verifyExpect 按唯一载荷格式计算给定行的期望 MAC 伴随值。
 func verifyExpect(t *testing.T, eng *TUniEngine, row TVerifyRow) string {
 	t.Helper()
-	payload := "tbl_verify_row" + verifySep +
-		strconv.FormatInt(row.WhoBuild, 10) + verifySep +
-		strconv.FormatInt(row.UserIndx, 10) + verifySep +
-		strconv.FormatInt(row.DataStat, 10) + verifySep +
-		row.MastName
-	sum, eror := eng.verifySign([]byte(payload))
+	payload, eror := verifyPayload("tbl_verify_row",
+		[]string{"who_build", "user_indx", "data_stat", "mast_name"},
+		[]int{0, 1, 2, 3}, reflect.ValueOf(row))
 	if eror != nil {
 		t.Fatal(eror)
 	}
-	return verifyTextOf(sum, eng.VerifyMacVer)
+	sum, eror := eng.verifySign(payload)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	return verifyTextOf(sum)
 }
 
 // #测试1:SetVerify 登记(置位/顺序/错误路径)
@@ -365,10 +365,15 @@ func TestVerifyCustomHook(t *testing.T) {
 	if len(payloads) != 1 {
 		t.Fatalf("hook should be called once, got %d", len(payloads))
 	}
-	//#载荷结构:表名 + 分隔符 + 登记序保护列值
-	want := "tbl_verify_row" + verifySep + "1" + verifySep + "2" + verifySep + "1" + verifySep + "mast"
-	if string(payloads[0]) != want {
-		t.Fatalf("payload mismatch:\n got %q\nwant %q", payloads[0], want)
+	//#载荷结构:版本头 + 表名 + 列数 + 逐列(列名+值长度+值)
+	wantPayload, eror := verifyPayload("tbl_verify_row",
+		[]string{"who_build", "user_indx", "data_stat", "mast_name"},
+		[]int{0, 1, 2, 3}, reflect.ValueOf(row))
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	if string(payloads[0]) != string(wantPayload) {
+		t.Fatalf("payload mismatch:\n got %q\nwant %q", payloads[0], wantPayload)
 	}
 }
 

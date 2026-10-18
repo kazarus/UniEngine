@@ -4,6 +4,10 @@
 
 ## master-20261018
 
+### 破坏性变更
+
+- **删除 `VerifyMacVer` 与旧 MAC v1 格式**:仅保留 `MAC:` 标签;载荷统一为 `UniMac` 头 + 表名 + 列数 + 逐列(列名+长度+值),仅需 HMAC-SHA256。旧 v1 `MAC:` 行不再验签;适用于未投产、无旧数据的部署。`verifyPayloadV2` 已重命名为 `verifyPayload`。
+
 ### 行为修复
 
 - **注册双键冲突不再静默覆盖**:`RegisterClass` 此前无条件写 `HashTabl[lower(table)]` 与 `HashTabl[class]`。现在发布前校验:

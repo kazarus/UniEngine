@@ -155,7 +155,7 @@ func TestStrictVerifyRejectsIncompleteProjection(t *testing.T) {
 	}
 }
 
-func TestDefaultMACWritesV2AndReadsLegacyV1(t *testing.T) {
+func TestDefaultMACWritesAndReads(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
@@ -167,8 +167,8 @@ func TestDefaultMACWritesV2AndReadsLegacyV1(t *testing.T) {
 	if eror := e.Insert(&r); eror != nil {
 		t.Fatal(eror)
 	}
-	if !strings.HasPrefix(r.MAC, "MAC2:") {
-		t.Fatalf("zero-value VerifyMacVer must write v2, got %q", r.MAC)
+	if !strings.HasPrefix(r.MAC, UniVerifyTag) {
+		t.Fatalf("MAC must use %q tag, got %q", UniVerifyTag, r.MAC)
 	}
 	d.queryRows = [][]driver.Value{{int64(1), r.A, r.B, r.MAC}}
 	var got reviewMACRow
@@ -176,20 +176,6 @@ func TestDefaultMACWritesV2AndReadsLegacyV1(t *testing.T) {
 		t.Fatalf("default v2 round trip: %v", eror)
 	}
 
-	legacy := &TUniEngine{Db: e.Db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		VerifyOn: 1, VerifyMode: 2, VerifyBy: "mac-default-key", VerifyMacVer: 1}
-	legacy.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
-	old := reviewMACRow{ID: 2, A: "old", B: "row"}
-	if eror := legacy.Insert(&old); eror != nil {
-		t.Fatal(eror)
-	}
-	if !strings.HasPrefix(old.MAC, "MAC:") {
-		t.Fatalf("explicit legacy write must retain v1 tag, got %q", old.MAC)
-	}
-	d.queryRows = [][]driver.Value{{int64(2), old.A, old.B, old.MAC}}
-	if eror := e.Select(&got, "select id,a,b,mac from review_mac"); eror != nil {
-		t.Fatalf("default reader must verify stored v1 row: %v", eror)
-	}
 }
 
 func TestStrictVerifyRejectsCustomResultHook(t *testing.T) {

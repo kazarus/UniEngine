@@ -20,15 +20,10 @@ import (
 type TVerifyHook func(Payload []byte) ([]byte, error)
 
 const (
-	// #MAC 标签:内置 HMAC-SHA256,载荷=表名+登记序保护列值(分隔符 verifySep);
-	// #读取自识别,带标签的值必验,不带标签的存量行按 VerifyMode 处理
+	// #MAC 标签:内置 HMAC-SHA256;唯一载荷格式为“版本头+表名+列名+值长度+值字节”。
 	UniVerifyTag = "MAC:"
-	// #v2 标签:无歧义载荷(评审Q1)——v1 载荷以 verifySep 直接拼接,值含 0x1f 时
-	// #不同数据可得相同载荷("admin\x1f0"+"user" ≡ "admin"+"0\x1fuser")。v2 逐列
-	// #带值长度前缀,构造性消除碰撞;标签前缀区分两代,读端按各自算法验签
-	verifyMac2Tag = "MAC2:"
-	// #v2 载荷版本头(与 v1 载荷的表名开头天然可区分)
-	verifyMac2Head = "UniMacV2"
+	// #载荷版本头
+	verifyMacHead = "UniMac"
 	// #载荷分隔符(ASCII 单元分隔符):授权键/状态列取值均为业务字符,不含该控制符
 	verifySep = "\x1f"
 )
@@ -120,31 +115,13 @@ func verifyFormat(FieldValue reflect.Value) ([]byte, error) {
 	return nil, fmt.Errorf("UniEngine: verify does not support field kind [%s]", FieldValue.Kind().String())
 }
 
-// #verifyPayload 规范化载荷:注册表名 + 分隔符 + 登记序保护列值(域分隔防跨表移植 MAC)
-func verifyPayload(TablName string, Cols []int, v reflect.Value) ([]byte, error) {
-	Buf := make([]byte, 0, 128)
-	Buf = append(Buf, TablName...)
-
-	for _, Idx := range Cols {
-		Buf = append(Buf, verifySep...)
-
-		item, eror := verifyFormat(v.Field(Idx))
-		if eror != nil {
-			return nil, eror
-		}
-		Buf = append(Buf, item...)
-	}
-
-	return Buf, nil
-}
-
-// #verifyPayloadV2 无歧义载荷(v2,评审Q1):版本头+表名+列数,逐列"列名+值长度+值字节"。
+// #verifyPayload 无歧义载荷:版本头+表名+列数,逐列"列名+值长度+值字节"。
 // #值带长度前缀,值中任意字节(含 verifySep)均被长度界定,不同元组必得不同字节串——
 // #构造性消除 v1 拼接歧义,无需禁止值中出现分隔符。列名取登记小写
 // #(identGuard 白名单字符,天然不含分隔符);列数防字段截断拼接
-func verifyPayloadV2(TablName string, Names []string, Cols []int, v reflect.Value) ([]byte, error) {
+func verifyPayload(TablName string, Names []string, Cols []int, v reflect.Value) ([]byte, error) {
 	Buf := make([]byte, 0, 128+len(TablName))
-	Buf = append(Buf, verifyMac2Head...)
+	Buf = append(Buf, verifyMacHead...)
 	Buf = append(Buf, verifySep...)
 	Buf = append(Buf, TablName...)
 	Buf = append(Buf, verifySep...)
@@ -167,13 +144,9 @@ func verifyPayloadV2(TablName string, Names []string, Cols []int, v reflect.Valu
 	return Buf, nil
 }
 
-// #verifyTextOf MAC 伴随值:标签 + base64(原始MAC);标签随载荷版本(v1=MAC:,v2=MAC2:)
-func verifyTextOf(Sum []byte, MacVer int64) string {
-	if MacVer == 1 {
-		return UniVerifyTag + base64.StdEncoding.EncodeToString(Sum)
-	}
-
-	return verifyMac2Tag + base64.StdEncoding.EncodeToString(Sum)
+// #verifyTextOf MAC 伴随值:标签 + base64(原始MAC);只有一种格式。
+func verifyTextOf(Sum []byte) string {
+	return UniVerifyTag + base64.StdEncoding.EncodeToString(Sum)
 }
 
 // #verifyColsOf 解析保护列的结构体字段下标(顺序=登记顺序=载荷顺序);
@@ -224,14 +197,7 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Col
 		ListName[Pos] = strings.ToLower(UniTable.ColVerify[Pos].FieldName)
 	}
 
-	//#缺省写 v2;显式 VerifyMacVer=1 才保留旧 v1 写法(读侧按标签兼容旧行)
-	var Payload []byte
-	var eror error
-	if this.VerifyMacVer == 1 {
-		Payload, eror = verifyPayload(UniTable.TableName, Cols, v)
-	} else {
-		Payload, eror = verifyPayloadV2(UniTable.TableName, ListName, Cols, v)
-	}
+	Payload, eror := verifyPayload(UniTable.TableName, ListName, Cols, v)
 	if eror != nil {
 		return eror
 	}
@@ -252,7 +218,7 @@ func (this *TUniEngine) verifySignCols(v reflect.Value, UniTable *TUniTable, Col
 		return fmt.Errorf("UniEngine: verify Column[%s.%s] is not addressable; pass the row as a pointer so the MAC can be backfilled", UniTable.TableName, MacCol.FieldName)
 	}
 
-	macField.SetString(verifyTextOf(sum, this.VerifyMacVer))
+	macField.SetString(verifyTextOf(sum))
 
 	return nil
 }
@@ -273,7 +239,7 @@ func (this *TUniEngine) verifySignRow(v reflect.Value, UniTable *TUniTable) erro
 
 // VerifySignRow 应用侧存量回填入口:对已注册结构体按当前字段值重算 MAC 并回填伴随字段,
 // 不组装 SQL、不产生任何写库动作。与写路径(Insert/Update/InsertL)签名同一实现,
-// 载荷版本(v1/v2)与钩子(VerifyHook)口径天然一致;典型用法=读侧解密后的行先本方法
+// 载荷与钩子(VerifyHook)口径天然一致;典型用法=读侧解密后的行先本方法
 // 签名,再由应用自行批量落库 MAC 列。行须传指针:值传入时 MAC 无法回填,返回普通错误
 func (this *TUniEngine) VerifySignRow(i interface{}) error {
 	if eror := nilParamOf("VerifySignRow", i); eror != nil {
@@ -369,22 +335,11 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
 		return nil
 	}
 
-	//#标签自识别版本:v2 用无歧义载荷重算,v1 保持原拼接算法(存量行升级后仍可验)
-	Tag := UniVerifyTag
-	IsV2 := strings.HasPrefix(stored, verifyMac2Tag)
-	if IsV2 {
-		Tag = verifyMac2Tag
-	} else if !strings.HasPrefix(stored, UniVerifyTag) {
+	if !strings.HasPrefix(stored, UniVerifyTag) {
 		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is invalid", RowCtx.TablName)
 	}
 
-	var Payload []byte
-	var eror error
-	if IsV2 {
-		Payload, eror = verifyPayloadV2(RowCtx.TablName, RowCtx.ColsName, RowCtx.Cols, v)
-	} else {
-		Payload, eror = verifyPayload(RowCtx.TablName, RowCtx.Cols, v)
-	}
+	Payload, eror := verifyPayload(RowCtx.TablName, RowCtx.ColsName, RowCtx.Cols, v)
 	if eror != nil {
 		return eror
 	}
@@ -394,7 +349,7 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
 		return eror
 	}
 
-	expect, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, Tag))
+	expect, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, UniVerifyTag))
 	if eror != nil {
 		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is not base64", RowCtx.TablName)
 	}

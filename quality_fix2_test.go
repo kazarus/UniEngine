@@ -23,9 +23,8 @@ type reviewMACRow struct {
 // Q1:MAC 载荷 v2 无歧义编码
 // ----------------------------------------
 
-// 载荷层直接验证:v1 拼接对 0x1f 注入元组产出相同载荷(v2 存在的理由),
-// v2 逐列长度前缀后两元组载荷必不同。
-func TestQ1PayloadV2Disambiguates(t *testing.T) {
+// 载荷层直接验证:逐列长度前缀后,0x1f 注入元组的载荷必不同。
+func TestQ1PayloadDisambiguates(t *testing.T) {
 	type rowAB struct {
 		A string `db:"a"`
 		B string `db:"b"`
@@ -33,37 +32,25 @@ func TestQ1PayloadV2Disambiguates(t *testing.T) {
 	Left := reflect.ValueOf(rowAB{A: "admin\x1f0", B: "user"})
 	Right := reflect.ValueOf(rowAB{A: "admin", B: "0\x1fuser"})
 
-	PayloadLeft, eror := verifyPayload("t", []int{0, 1}, Left)
+	PayloadLeft, eror := verifyPayload("t", []string{"a", "b"}, []int{0, 1}, Left)
 	if eror != nil {
 		t.Fatal(eror)
 	}
-	PayloadRight, eror := verifyPayload("t", []int{0, 1}, Right)
+	PayloadRight, eror := verifyPayload("t", []string{"a", "b"}, []int{0, 1}, Right)
 	if eror != nil {
 		t.Fatal(eror)
 	}
-	if string(PayloadLeft) != string(PayloadRight) {
-		t.Fatalf("v1 payload should collide for the probe tuples (probe precondition): %q vs %q", PayloadLeft, PayloadRight)
-	}
-
-	V2Left, eror := verifyPayloadV2("t", []string{"a", "b"}, []int{0, 1}, Left)
-	if eror != nil {
-		t.Fatal(eror)
-	}
-	V2Right, eror := verifyPayloadV2("t", []string{"a", "b"}, []int{0, 1}, Right)
-	if eror != nil {
-		t.Fatal(eror)
-	}
-	if string(V2Left) == string(V2Right) {
-		t.Fatal("v2 payload must differ for tuples that only differ by separator placement")
+	if string(PayloadLeft) == string(PayloadRight) {
+		t.Fatal("payload must differ for tuples that only differ by separator placement")
 	}
 }
 
-// VerifyMacVer=2:写入落 MAC2: 标签;0x1f 注入篡改(保留原 MAC)被严格模式拒绝。
-func TestQ1MacV2TamperRejected(t *testing.T) {
+// 写入落 MAC: 标签;0x1f 注入篡改(保留原 MAC)被严格模式拒绝。
+func TestQ1MacTamperRejected(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy, e.VerifyMacVer = 1, 2, "q1-test-key", 2
+	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
 	tbl := e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 	if tbl.LastError != nil {
 		t.Fatal(tbl.LastError)
@@ -73,8 +60,8 @@ func TestQ1MacV2TamperRejected(t *testing.T) {
 	if eror := e.Insert(&r); eror != nil {
 		t.Fatal(eror)
 	}
-	if !strings.HasPrefix(r.MAC, "MAC2:") {
-		t.Fatalf("VerifyMacVer=2 should emit MAC2: tag, got %q", r.MAC)
+	if !strings.HasPrefix(r.MAC, UniVerifyTag) {
+		t.Fatalf("MAC should use %q tag, got %q", UniVerifyTag, r.MAC)
 	}
 
 	//#篡改:值换成碰撞元组,MAC 保留原值——必须验签失败(评审 Q1 探针的反转)
@@ -86,12 +73,12 @@ func TestQ1MacV2TamperRejected(t *testing.T) {
 	}
 }
 
-// VerifyMacVer=2:仅分隔符位置不同的两元组 MAC 必不同(v1 下相同——碰撞根源)。
-func TestQ1MacV2CollisionMACsDiffer(t *testing.T) {
+// 仅分隔符位置不同的两元组 MAC 必不同(无歧义载荷)。
+func TestQ1MacCollisionMACsDiffer(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy, e.VerifyMacVer = 1, 2, "q1-test-key", 2
+	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
 	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 
 	r1 := reviewMACRow{ID: 1, A: "admin\x1f0", B: "user"}
@@ -103,16 +90,16 @@ func TestQ1MacV2CollisionMACsDiffer(t *testing.T) {
 		t.Fatal(eror)
 	}
 	if r1.MAC == r2.MAC {
-		t.Fatal("v2 MACs must differ for separator-ambiguous tuples")
+		t.Fatal("MACs must differ for separator-ambiguous tuples")
 	}
 }
 
 // v2 下含 0x1f/空串/Unicode 的值正常往返验签(无歧义编码不需要禁止任何字节)。
-func TestQ1MacV2WeirdValuesRoundTrip(t *testing.T) {
+func TestQ1MacWeirdValuesRoundTrip(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy, e.VerifyMacVer = 1, 2, "q1-test-key", 2
+	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
 	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 
 	r := reviewMACRow{ID: 7, A: "分隔符\x1f测试", B: ""}
@@ -123,31 +110,7 @@ func TestQ1MacV2WeirdValuesRoundTrip(t *testing.T) {
 	d.queryRows = [][]driver.Value{{int64(7), r.A, r.B, r.MAC}}
 	var got reviewMACRow
 	if eror := e.Select(&got, "select id,a,b,mac from review_mac"); eror != nil {
-		t.Fatalf("v2 round-trip with 0x1f/empty/unicode values should verify, got %v", eror)
-	}
-}
-
-// 显式 VerifyMacVer=1 保留旧写入格式;存量 v1 行升级后仍可读取。
-// 完整防碰撞保证仍需把存量数据重签为 v2,迁移步骤见 README。
-func TestQ1MacV1ExplicitCompatible(t *testing.T) {
-	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
-	e := newMockEngine(d)
-	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy, e.VerifyMacVer = 1, 2, "q1-test-key", 1
-	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
-
-	r := reviewMACRow{ID: 1, A: "admin", B: "user"}
-	if eror := e.Insert(&r); eror != nil {
-		t.Fatal(eror)
-	}
-	if !strings.HasPrefix(r.MAC, "MAC:") {
-		t.Fatalf("explicit legacy version should emit MAC: tag, got %q", r.MAC)
-	}
-
-	d.queryRows = [][]driver.Value{{int64(1), "admin", "user", r.MAC}}
-	var got reviewMACRow
-	if eror := e.Select(&got, "select id,a,b,mac from review_mac"); eror != nil {
-		t.Fatalf("v1 rows must keep verifying after upgrade, got %v", eror)
+		t.Fatalf("round-trip with 0x1f/empty/unicode values should verify, got %v", eror)
 	}
 }
 
