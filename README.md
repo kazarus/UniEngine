@@ -212,6 +212,28 @@ defer cancel()
 eror = UniEngineEx.InsertCtx(ctx, &row)
 ```
 
+##### 2.1.WithTx(事务闭包)
+
+`WithTx` 是现有 `Begin/Commit/Cancel` 的语法糖,不改变事务状态机:
+
+```go
+eror := UniEngineEx.WithTx(func() error {
+    if eror := UniEngineEx.Insert(&row); eror != nil {
+        return eror // 自动 Cancel
+    }
+    return nil // 自动 Commit
+})
+```
+
+- `fn` 返回 `nil` → `Commit`;返回错误 → `Cancel`;
+- `fn` panic → 先 `Cancel`,再原样 panic;
+- 闭包内继续使用**同一个** `*TUniEngine`(通常是当前请求副本);嵌套 `WithTx`/`Begin` 返回 `ErrAlreadyInTransaction`;
+- 闭包内自行 `Commit`/`Cancel` 属于混用,`WithTx` 返回 `ErrNoTransaction`;
+- 回滚错误不覆盖 `fn` 的原始错误/panic;
+- 它不提供跨 goroutine 的共享事务:同一引擎实例上的事务仍须串行,并发事务请使用各自的引擎副本(如每请求复制)。
+
+生产代码原有的 3800+ 个手工 `Begin/Commit/Cancel` 块无需修改;新代码可逐步采用。
+
 ##### 3.可空列与 NULL(读路径语义)
 
 引擎**不做 NULL 转换**:每一列直接扫进结构体对应字段,行为完全遵循 `database/sql`。真机实测(MySQL 8.4.6):

@@ -629,6 +629,52 @@ func (this *TUniEngine) Commit() error {
 	return tx.Commit()
 }
 
+// WithTx 在引擎当前事务状态上执行闭包:fn 返回 nil 才 Commit,返回错误或 panic 则 Cancel。
+// 它是现有 Begin/Commit/Cancel 的语法糖,不改变事务状态机:
+//   - 闭包内继续使用同一个 *TUniEngine(通常是当前请求副本);
+//   - 嵌套 WithTx/Begin 会被 Begin 的 ErrAlreadyInTransaction 拒绝;
+//   - 闭包内自行 Commit/Cancel 属于混用,WithTx 返回 ErrNoTransaction;
+//   - panic 时先回滚再重新 panic,避免吞掉业务异常;
+//   - 回滚错误不覆盖 fn 的原始错误/panic,避免改变调用方语义。
+func (this *TUniEngine) WithTx(fn func() error) (err error) {
+	if fn == nil {
+		return fmt.Errorf("UniEngine: WithTx requires a non-nil callback")
+	}
+	if eror := this.Begin(); eror != nil {
+		return eror
+	}
+
+	finalized := false
+	defer func() {
+		if rec := recover(); rec != nil {
+			_ = this.Cancel()
+			panic(rec)
+		}
+		if !finalized {
+			_ = this.Cancel()
+		}
+	}()
+
+	if eror := fn(); eror != nil {
+		return eror
+	}
+
+	//#闭包内自行 Commit/Cancel 会让这里的 Commit 变成 ErrNoTransaction;
+	//#显式识别,避免把"混用"误报成普通提交失败。
+	this.rlockTables()
+	active := this.inTx && this.tx != nil
+	this.mu.RUnlock()
+	if !active {
+		return fmt.Errorf("%w: WithTx callback committed or cancelled the transaction; do not mix WithTx with Begin/Commit/Cancel", ErrNoTransaction)
+	}
+
+	if eror := this.Commit(); eror != nil {
+		return eror
+	}
+	finalized = true
+	return nil
+}
+
 func (this *TUniEngine) RunDebug(Value bool) error {
 	if Value {
 		atomic.StoreInt32(&this.runDebug, 1)
