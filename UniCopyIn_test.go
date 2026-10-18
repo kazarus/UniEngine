@@ -305,3 +305,23 @@ func TestInsertPDamengSupplierBudget(t *testing.T) {
 		t.Fatalf("DM 10 cols pages=%d want 5 (2000/10=200 rows/page)", got)
 	}
 }
+
+func TestBatchDialectExplicitOverride(t *testing.T) {
+	e := newTestEngine()
+	e.Provider = DtORACLE
+	e.Supplier = 0
+	e.BatchDialect = DtDAMENG
+	if got := e.batchDialect(); got != DtDAMENG {
+		t.Fatalf("explicit BatchDialect=%v want DtDAMENG", got)
+	}
+	//#显式字段优先于 Supplier 推断;但 SQL 方言仍由 Provider 决定。
+	if got := e.dbFamily(); got != FmORACLE {
+		t.Fatalf("BatchDialect must not change dbFamily, got %v", got)
+	}
+
+	e.BatchDialect = 0
+	e.Supplier = DtDAMENG
+	if got := e.batchDialect(); got != DtDAMENG {
+		t.Fatalf("Supplier fallback=%v want DtDAMENG", got)
+	}
+}

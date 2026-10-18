@@ -101,6 +101,7 @@ UniEngine 用三个字段回答三个不同的问题,不要把它们混成“数
 | --- | --- | --- |
 | `Provider` | SQL 按**哪个协议族**生成? | 占位符、标识符引用、元数据目录、UPSERT/INSERT ALL、COPY 白名单,以及应用侧大量 `switch Provider` 分支 |
 | `Supplier` | 这个部署实际是**哪家产品**,是否需要某种**不改变 SQL 语义**的优化? | `InsertP` 的 PolarDB→COPY 路由;达梦在 Oracle 兼容接入下的批量预算;零值表示不启用 |
+| `BatchDialect` | 批量页大小按**哪家厂商**的参数上限计算? | 只影响 `InsertP`/`InsertL` 页大小;0=按 `Supplier`/`Provider` 推断,不参与 SQL 方言 |
 | `ProvideName` | `sql.Open` 实际使用的**驱动名**是什么? | SQL Server 的 `mssql` / `sqlserver` 占位符校验 |
 
 **引入 `Supplier` 的直接原因**是 PolarDB:
@@ -139,11 +140,12 @@ eng := &UniEngine.TUniEngine{
 1. `Provider` 只表达协议族;不要为了标注厂商而改成 `DtPOLODB` / `DtDAMENG`,否则应用侧按 `Provider` 的 SQL 分支会全部改变。
 2. `Supplier` 只承载“不改变 SQL 语义”的厂商差异;不要用它选择占位符、引号、UPSERT 或元数据方言。
 3. 标准 PostgreSQL / Oracle / MySQL / SQL Server 部署不需要设置 `Supplier`;零值即不启用任何厂商优化。
-4. 当前代码消费两个 `Supplier` 取值:
+4. `BatchDialect` 是显式的批量厂商字段,优先于 `Supplier` 推断;它只改页大小,不会改 `dbFamily()`/SQL。标准部署不需要设置,达梦也可写 `BatchDialect: DtDAMENG` 而不依赖 `Supplier`。
+5. 当前代码消费两个 `Supplier` 取值:
    - `DtPOLODB`:仅 `InsertP`→COPY;配到非 PG 族 `Provider` 上会直接报错;
    - `DtDAMENG`:仅把批量预算切到 2000/列数(用于 `Provider=DtORACLE` 的达梦兼容接入),不改变 SQL。
    其它取值当前不影响 SQL,也不影响批量预算。
-5. 达梦兼容接入的标准写法是 `Provider: DtORACLE, Supplier: DtDAMENG`:SQL/元数据/UPSERT 仍走 Oracle 分支,只有 `InsertP` 页大小按达梦 2048 上限收敛,不能反过来改 `Provider`。
+6. 达梦兼容接入的标准写法是 `Provider: DtORACLE, Supplier: DtDAMENG`(或 `BatchDialect: DtDAMENG`):SQL/元数据/UPSERT 仍走 Oracle 分支,只有 `InsertP` 页大小按达梦 2048 上限收敛,不能反过来改 `Provider`。
 
 > 一句话:`Provider` 决定“怎么生成 SQL”,`Supplier` 只决定“这个部署要不要启用某个厂商特有、且不改变 SQL 语义的行为”。两者不是二选一,也不是同一个维度的枚举。
 
@@ -469,7 +471,7 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | PG / MySQL | 60000(65535 留余量) | — | 600 行/页 |
 | 未知方言 | 60000 | — | 600 行/页 |
 
-达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,且不套 Oracle 的 100 行上限;这样不会触发应用侧 507 处 `switch Provider == DtORACLE` 的迁移。
+达梦兼容接入时保持 `Provider=DtORACLE`、设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`:SQL 仍走 Oracle 分支,批量预算改为达梦 `2000/列数`,且不套 Oracle 的 100 行上限;这样不会触发应用侧 507 处 `switch Provider == DtORACLE` 的迁移。
 
 Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果一致):
 `INSERT ALL` 每页 999 行约 **144s**,500 行约 **14s**,200 行约 **0.25–0.31s**,100 行约 **0.06–0.10s**,50 行约 **0.05s**。瓶颈是 `INTO` 子句数量而非绑定变量总数,因此 Oracle 单独压到 100 行/页;50–100 行是吞吐平台区,取 100 以少发包。

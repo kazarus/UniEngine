@@ -69,6 +69,11 @@ type TUniEngine struct {
 	// INSERT ALL/COPY 白名单)。方言相关的一切分支都只看本字段。
 	Provider TDriveType
 
+	// BatchDialect 显式指定"批量写入预算"的厂商;0 表示按 Supplier/Provider 推断。
+	// 只影响 InsertP/InsertL 的页大小,不参与 SQL 方言选择(方言仍看 Provider)。
+	// 用于避免 Supplier 语义过载:达梦可写 BatchDialect: DtDAMENG,Provider 仍为 DtORACLE。
+	BatchDialect TDriveType
+
 	// Supplier 用于 InsertP 的批量路由/预算(不改变 SQL 方言):
 	//   - DtPOLODB:改走 COPY 协议(Provider 仍应为 PG 族);
 	//   - DtDAMENG:Provider=DtORACLE 的达梦部署按达梦 2000/列数预算收敛,
@@ -433,6 +438,9 @@ const (
 // Supplier 是产品标识:达梦走 Oracle 兼容协议时保持 Provider=DtORACLE,
 // 用 Supplier=DtDAMENG 让批量页大小按达梦 2048 参数上限收敛。
 func (this *TUniEngine) batchDialect() TDriveType {
+	if this.BatchDialect != 0 {
+		return this.BatchDialect
+	}
 	if this.Supplier == DtDAMENG {
 		return DtDAMENG
 	}
