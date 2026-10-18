@@ -183,6 +183,8 @@ Rules for these files:
   while the connection is still open. `defer db.Close()` runs *before* every
   `t.Cleanup`, which silently leaks the table.
 - Credentials come from the environment only — never commit a DSN.
+- Use `UNIENGINE_TESTDB` as the database-name placeholder in docs/examples; never
+  commit a real database name.
 
 ## 8. Commits & pull requests
 

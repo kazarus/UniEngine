@@ -21,6 +21,7 @@
 - **新增 `ExistConstOn(TableName, CtDF, ColumnName)`**:默认值约束按“表名+列名”精确判定,解决 `ExistConst(CtDF,列名)` 只按列名匹配的歧义;PG/SQLServer/Oracle/MySQL 各自生成表名限定 SQL,其它约束类型仍委托 `ExistConst`。
 - **新增 `GetTableByClass`**:按类名键持读锁取表快照,替代生产代码直接读 `HashTabl["pkg.Type"]` 的无锁访问;README 明确 `HashTabl` 只读快照定位。
 - **新增显式 `BatchDialect`**:优先于 `Supplier` 推断,仅决定批量页大小的厂商预算,不改变 SQL 方言;达梦可用 `Provider=DtORACLE` + `BatchDialect=DtDAMENG`,避免 `Supplier` 语义过载。
+- **真机测试数据库名脱敏**:所有集成测试示例、README/CONTRIBUTING、CI 服务与历史评估报告统一使用 `UNIENGINE_TESTDB` 作为数据库名占位;真实库名/口令只经环境变量传入,不写入仓库。
 - **`Initialize` 基础配置校验**:`Db` 非空时检查 `ColLabel`/`ColParam`/`Provider`,非法返回新增的 `ErrInvalidConfig`;`Db` 为空的注册-only 引擎继续跳过,避免破坏单测/元数据登记用法。
 - **`AutoKeys` 默认 SQL 按协议族选择**:不传生成器时,PG/SQLServer/Oracle/MySQL 分别使用各自的主键探测 SQL,不再写死 PostgreSQL;MySQL 缺 `DataBase` 或未知 Provider 明确报错。
 - **达梦批量预算接入 `Supplier`**:新增 `batchDialect()`;`Provider=DtORACLE` + `Supplier=DtDAMENG` 时按达梦 2000 参数预算分页,不套 Oracle 100 行上限,SQL 生成仍走 Oracle 分支。生产无需改 `Provider`(避免 507 处 `case DtORACLE` 迁移)。

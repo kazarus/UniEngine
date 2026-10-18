@@ -184,14 +184,14 @@ db.SetMaxIdleConns(10)
 UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "?", Provider: UniEngine.DtMYSQLN}
 //#MySQL 族走 information_schema:ExistTable/ExistViews/ExistField/ExistConst/IfDropView 与 AutoKeys 均需库名,
 //#缺省报 `UniEngine: database is not specified`(其余族由连接或库自身元数据获得,无需该字段)
-UniEngineEx.DataBase = "kz2020_gcgl_demo"
+UniEngineEx.DataBase = "UNIENGINE_TESTDB"
 if eror := UniEngineEx.Initialize(); eror != nil {
   return eror
 }
 
 //#根据数据库元数据,主动获取主键
 var AutoKeys = UniEngine.TAutoKeys4MYSQLN{}
-AutoKeys.DataBase = "kz2020_gcgl_demo"
+AutoKeys.DataBase = "UNIENGINE_TESTDB"
 
 //#AutoKeys 不传生成器时按 Provider 协议族自动选择 PG/SQLServer/Oracle/MySQL 的内置 SQL;
 //#MySQL/TiDB 仍需 DataBase。也可显式传 TAutoKeys4* 覆盖。
@@ -509,36 +509,38 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 | `tidb_test.go` | `go-sql-driver/mysql` | TiDB(MySQL 协议,默认端口 4000):CRUD / `SaveIt` count-then-dispatch / `InsertL` / `InsertP` clamp / ENC 加密 / `information_schema` 元数据 / 事务提交回滚 |
 | `dameng_test.go` | `gitee.com/chunanyong/dm` | 达梦(Oracle 兼容):CRUD / `SaveIt` MERGE / `InsertL` INSERT ALL / `InsertP` 100 行预算 / ENC 加密 / `USER_*` 元数据 / AutoKeys / 事务;含 `Provider=DtORACLE+Supplier=DtDAMENG` 生产兼容用例 |
 
+> 以下示例统一用 `UNIENGINE_TESTDB` 作为数据库名占位;真实库名、口令只放在本地环境变量中,不要提交到仓库。
+
 ```sh
 # PostgreSQL(连不上时自动跳过;REQUIRED=1 则强制失败,CI 即如此)
-UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" go test ./integration/ -v
+UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/UNIENGINE_TESTDB?sslmode=disable" go test ./integration/ -v
 
 # SQL Server:分量式(口令含 @/#/$/% 时自动 URL 转义)或整串 DSN
 UNIENGINE_MSSQL_HOST=127.0.0.1 UNIENGINE_MSSQL_USER=sa UNIENGINE_MSSQL_PASS='...' \
-UNIENGINE_MSSQL_DB=demo go test ./integration/ -run MSSQL -v
+UNIENGINE_MSSQL_DB=UNIENGINE_TESTDB go test ./integration/ -run MSSQL -v
 
 # Oracle:分量式或整串 DSN;驱动默认纯 Go 的 go-ora
 UNIENGINE_ORACLE_HOST=127.0.0.1 UNIENGINE_ORACLE_USER=scott UNIENGINE_ORACLE_PASS='tiger' \
-UNIENGINE_ORACLE_SERVICE=ORCL go test ./integration/ -run Oracle -v
+UNIENGINE_ORACLE_SERVICE=UNIENGINE_TESTDB go test ./integration/ -run Oracle -v
 
 # Oracle + godror:给 URL DSN,并用 libDir 指向 Instant Client
 UNIENGINE_ORACLE_DRIVER=godror \
-UNIENGINE_ORACLE_DSN='oracle://scott:tiger@127.0.0.1:1521/ORCL?libDir=/path/to/instantclient' \
+UNIENGINE_ORACLE_DSN='oracle://scott:tiger@127.0.0.1:1521/UNIENGINE_TESTDB?libDir=/path/to/instantclient' \
 go test ./integration/ -run Oracle -v
 
 # MySQL:分量式或整串 DSN;元数据用例(Exist*/AutoKeys)需要库名,故分量模式下须给 UNIENGINE_MYSQL_DB
 UNIENGINE_MYSQL_HOST=127.0.0.1 UNIENGINE_MYSQL_USER=root UNIENGINE_MYSQL_PASS='...' \
-UNIENGINE_MYSQL_DB=demo go test ./integration/ -run MySQL -v
+UNIENGINE_MYSQL_DB=UNIENGINE_TESTDB go test ./integration/ -run MySQL -v
 
 # TiDB:MySQL 协议,默认端口 4000;同样需要库名供 information_schema 探测
 UNIENGINE_TIDB_HOST=127.0.0.1 UNIENGINE_TIDB_PORT=4000 \
 UNIENGINE_TIDB_USER=root UNIENGINE_TIDB_PASS='...' \
-UNIENGINE_TIDB_DB=demo go test ./integration/ -run TiDB -v
+UNIENGINE_TIDB_DB=UNIENGINE_TESTDB go test ./integration/ -run TiDB -v
 
 # 达梦:默认端口 5236;schema 可用 UNIENGINE_DM_DB 或 UNIENGINE_DM_SCHEMA 指定
 UNIENGINE_DM_HOST=127.0.0.1 UNIENGINE_DM_PORT=5236 \
 UNIENGINE_DM_USER=SYSDBA UNIENGINE_DM_PASS='...' \
-UNIENGINE_DM_DB=demo go test ./integration/ -run Dameng -v
+UNIENGINE_DM_DB=UNIENGINE_TESTDB go test ./integration/ -run Dameng -v
 ```
 
 各库有 `UNIENGINE_{PG,MSSQL,ORACLE,MYSQL,TIDB,DM}_REQUIRED=1` 开关(不可达时失败而非跳过),口径一致。TiDB/达梦需自备实例,未纳入固定 CI 服务。

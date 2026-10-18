@@ -6,9 +6,9 @@
 // #运行:
 // #  UNIENGINE_TIDB_HOST=127.0.0.1 UNIENGINE_TIDB_PORT=4000 \
 // #  UNIENGINE_TIDB_USER=root UNIENGINE_TIDB_PASS='...' \
-// #  UNIENGINE_TIDB_DB=demo go test ./integration/ -run TiDB -v
+// #  UNIENGINE_TIDB_DB=UNIENGINE_TESTDB go test ./integration/ -run TiDB -v
 // #  或整串:
-// #  UNIENGINE_TIDB_DSN='root:pass@tcp(127.0.0.1:4000)/demo?charset=utf8mb4' \
+// #  UNIENGINE_TIDB_DSN='root:pass@tcp(127.0.0.1:4000)/UNIENGINE_TESTDB?charset=utf8mb4' \
 // #  go test ./integration/ -run TiDB -v
 // #
 // #不可达时跳过;UNIENGINE_TIDB_REQUIRED=1 时失败。只操作自建 uni_it_tidb_* 表并清理。

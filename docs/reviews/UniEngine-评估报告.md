@@ -7,7 +7,9 @@
 | **评估版本** | **`f4f5ff5`**（HEAD，`master`）+ 未提交的 §4.7/§4.6/§4.8 修复、`style_test.go`、README/CHANGELOG/CONTRIBUTING 增补与本报文 |
 | 评估日期 | 2026-10-14 |
 | 工具链 | `go1.27.1 darwin/arm64`；`go build`/`go vet`/`gofmt`/`go test -race`/`go test -cover`；探针模块 `/tmp/uniprobe`、`/tmp/sqlsrvchk`、`/tmp/orachk`、`/tmp/mysqlchk` |
-| **真库实测** | ① **Microsoft SQL Server 2017**（14.0.1000.169 X64）@ `127.0.0.1:1433`，`go-mssqldb`；② **Oracle Database 11g EE 11.2.0.1.0** @ `127.0.0.1:1521/ORCL`，`sijms/go-ora/v2`；③ **MySQL 8.4.6** @ `127.0.0.1:3306/UNIENGINE_TESTDB`，`go-sql-driver/mysql`。**本会话共 11 个集成用例在真库上通过** |
+> 注:本报告中的数据库名已统一脱敏为 `UNIENGINE_TESTDB`,主机与端口保留以便复核。
+>
+| **真库实测** | ① **Microsoft SQL Server 2017**（14.0.1000.169 X64）@ `127.0.0.1:1433`，`go-mssqldb`；② **Oracle Database 11g EE 11.2.0.1.0** @ `127.0.0.1:1521/UNIENGINE_TESTDB`，`sijms/go-ora/v2`；③ **MySQL 8.4.6** @ `127.0.0.1:3306/UNIENGINE_TESTDB`，`go-sql-driver/mysql`。**本会话共 11 个集成用例在真库上通过** |
 | 本次方法 | 落实 v14 的修复清单（§4.7 写路径上界、§4.6 缓存键、§4.8 行级绑定门禁、§4.9/§4.10 文档），并补**对称性测试**与**仓库卫生门禁**；修复均做「修复前失败 / 修复后通过」的双向验证 |
 | 安全边界 | 只用自建对象并在结束时删除：SQL Server `uni_*`、Oracle `uni_it_ora_probe(_v)`、MySQL `uni_it_mysql_probe(_v)` / `uni_verify_probe` / `uni_rebind_probe` / `uni_page_probe` / `uni_dv_probe`。全部建在名为 `UNIENGINE_TESTDB` 的库上（非生产库），并逐个复查确认无残留；**未在生产库上运行任何 DDL** |
 | 工作区状态 | 前几轮成果（注册守卫、`noCopy`、风格清理、包级 godoc、四族集成测试、CI、CONTRIBUTING、fuzz）均已由业主提交至 `f4f5ff5`。**本轮改动**：`integration/mysql_test.go`、`integration/oracle_test.go` 各清理 9/10 处开括号后空行（修我自己引入的残留）；**本报告 v14**。 |

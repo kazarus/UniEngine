@@ -7,13 +7,13 @@
 // #  UNIENGINE_ORACLE_DRIVER 默认 "oracle"(go-ora);用 godror 时设为 "godror" 并给整串 DSN。
 // #  godror 需 Oracle Instant Client;macOS 用 URL DSN 的 libDir 参数最稳:
 // #    UNIENGINE_ORACLE_DRIVER=godror \
-// #    UNIENGINE_ORACLE_DSN="oracle://user:pass@host:1521/ORCL?libDir=/path/to/instantclient"
+// #    UNIENGINE_ORACLE_DSN="oracle://user:pass@host:1521/UNIENGINE_TESTDB?libDir=/path/to/instantclient"
 // #
 // #运行(需可达的 Oracle):
 // #  UNIENGINE_ORACLE_HOST=127.0.0.1 UNIENGINE_ORACLE_PORT=1521 \
 // #  UNIENGINE_ORACLE_USER=scott UNIENGINE_ORACLE_PASS='tiger' \
-// #  UNIENGINE_ORACLE_SERVICE=ORCL go test ./... -run Oracle -v
-// #  或整串: UNIENGINE_ORACLE_DSN="oracle://user:pass@host:1521/ORCL"
+// #  UNIENGINE_ORACLE_SERVICE=UNIENGINE_TESTDB go test ./... -run Oracle -v
+// #  或整串: UNIENGINE_ORACLE_DSN="oracle://user:pass@host:1521/UNIENGINE_TESTDB"
 // #
 // #不可达时默认跳过;设 UNIENGINE_ORACLE_REQUIRED=1 则失败(CI 用,与 pg/mssql 同口径)。
 // #
@@ -56,7 +56,7 @@ func oracleDSN() string {
 	}
 	service := os.Getenv("UNIENGINE_ORACLE_SERVICE")
 	if service == "" {
-		service = "ORCL"
+		service = "UNIENGINE_TESTDB"
 	}
 
 	u := &url.URL{

@@ -4,11 +4,11 @@
 // #驱动:github.com/go-sql-driver/mysql(库本体不依赖,仅 integration 模块引入)
 // #
 // #运行(需可达的 MySQL;连不上时自动跳过):
-// #  UNIENGINE_MYSQL_DSN="user:pass@tcp(127.0.0.1:3306)/demo?charset=utf8mb4" go test ./... -run MySQL -v
+// #  UNIENGINE_MYSQL_DSN="user:pass@tcp(127.0.0.1:3306)/UNIENGINE_TESTDB?charset=utf8mb4" go test ./... -run MySQL -v
 // #  或分量方式:
 // #  UNIENGINE_MYSQL_HOST=127.0.0.1 UNIENGINE_MYSQL_PORT=3306 \
 // #  UNIENGINE_MYSQL_USER=demo UNIENGINE_MYSQL_PASS='...' \
-// #  UNIENGINE_MYSQL_DB=demo go test ./... -run MySQL -v
+// #  UNIENGINE_MYSQL_DB=UNIENGINE_TESTDB go test ./... -run MySQL -v
 // #
 // #不可达时默认跳过;设 UNIENGINE_MYSQL_REQUIRED=1 则失败(CI 用,与 pg/mssql/oracle 同口径)。
 // #

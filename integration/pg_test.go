@@ -3,7 +3,7 @@
 // #覆盖:CRUD / 原生UPSERT / COPY协议 / 应用加密 / 元数据探测 / 事务。
 // #
 // #运行(需可达的 PostgreSQL):
-// #  UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/db?sslmode=disable" \
+// #  UNIENGINE_PG_DSN="postgres://user:pass@127.0.0.1:5432/UNIENGINE_TESTDB?sslmode=disable" \
 // #    go test ./integration/ -v
 // #连不上时默认跳过;设 UNIENGINE_PG_REQUIRED=1 则失败(CI 用)。
 
@@ -31,7 +31,7 @@ func pgDSN() string {
 	if v := os.Getenv("UNIENGINE_PG_DSN"); v != "" {
 		return v
 	}
-	return "postgres://uni:uni@127.0.0.1:5432/uni?sslmode=disable"
+	return "postgres://uni:uni@127.0.0.1:5432/UNIENGINE_TESTDB?sslmode=disable"
 }
 
 func newEngine(t *testing.T) *UniEngine.TUniEngine {

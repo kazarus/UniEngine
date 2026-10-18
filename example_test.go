@@ -22,7 +22,7 @@ type TUser struct {
 // 注意三处契约:ColParam 必须与 sql.Open 的驱动名匹配(见 README 0.1/0.2);
 // 注册类 API 的错误收敛到 LastError;引擎一律以 *TUniEngine 使用,不得按值拷贝。
 func Example() {
-	db, _ := sql.Open("mysql", "user:pass@tcp(127.0.0.1:3306)/demo")
+	db, _ := sql.Open("mysql", "user:pass@tcp(127.0.0.1:3306)/UNIENGINE_TESTDB")
 
 	Eng := &UniEngine.TUniEngine{
 		Db:       db,
