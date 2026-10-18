@@ -62,6 +62,8 @@ Oracle 系需要 Oracle Instant Client:将 `libclntsh`/`libnnz`/`libociei` 等�
 | SQLServer| DtSQLSRV                                                  | :      | :1     | "name"     |
 
 > **SQLServer 注意**:上表取值以驱动名 **`mssql`** 为前提;驱动名不同,占位符结论完全不同——见 0.2。
+>
+> **Oracle 注意**:元数据探测(`Exist*` / `AutoKeys`)使用 `USER_*`(当前登录用户拥有的对象),不是 `ALL_*`,也不是 `CURRENT_SCHEMA`;同义词、物化视图、显式 `schema.table` 及 `ExistConst(CtDF)` 均有已知限制——完整边界见 **§5.2**。
 
 ##### 0.2.SQL Server 驱动名与占位符
 
@@ -340,8 +342,25 @@ go test -bench . -benchmem -run '^$'
 - **`SelectL` 的整批语义落地**:查询中途失败(扫描错误/`rows.Err`)会回滚本次已追加的行,调用方预置的元素不变。
 - **链式登记改为快照 COW**:`SetKeys`/`SetSecret`/`SetVerify`/`AutoKeys` 现在克隆并发布新 `*TUniTable`,不再原地改写已发布快照。链式写法不受影响;若忽略返回值再读旧指针,会看到旧快照。`AutoKeys` 后请用 `eng.GetTable(name)` 重新取表。
 - **`PrepareTables`/`PrepareRunSQL` 也发布新快照**:旧 `*TUniTable` 指针保持只读,不再被原地更新。
-- **`ExistTable` 对象种类过滤**:PG `relkind in ('r','p')`、SQLServer `xtype='U'`、MySQL `table_type='BASE TABLE'`,同名视图/索引不再被误判为表;Oracle 统一用 `user_tables`(与其它元数据探测同一当前用户 schema 口径),`AutoKeys` 复合主键按 `position` 排序。
+- **`ExistTable` 对象种类过滤**:PG `relkind in ('r','p')`、SQLServer `xtype='U'`、MySQL `table_type='BASE TABLE'`,同名视图/索引不再被误判为表;Oracle 统一用 `user_tables`(与其它元数据探测同一当前用户 schema 口径),`AutoKeys` 复合主键按 `position` 排序。Oracle 的完整边界见 **§5.2**。
 - **调试输出不再打印实参值**;事务的 `Begin/Commit/Rollback` 也不再持注册表写锁等待网络往返。
+
+#### 5.2.Oracle 元数据探测边界(重要)
+
+Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `ExistField` / `ExistConst` / `AutoKeys` 统一查询 `USER_*` 数据字典,即**当前登录用户拥有的对象**,不是 `ALL_*`,也不是 `CURRENT_SCHEMA` 指向的 schema。这消除了“其它 schema 的同名表被 `ExistTable` 误判为存在、而 `AutoKeys` 查不到主键”的矛盾,但以下边界必须知晓:
+
+| 场景 | 当前行为 | 说明与建议 |
+| --- | --- | --- |
+| 同 schema 的普通表/视图/列/约束 | ✅ 支持 | `USER_TABLES` / `USER_VIEWS` / `USER_TAB_COLUMNS` / `USER_CONSTRAINTS` / `USER_CONS_COLUMNS` |
+| `ALTER SESSION SET CURRENT_SCHEMA=OTHER` 后访问裸表名 | ⚠️ 元数据可能失真 | CRUD 按 `CURRENT_SCHEMA` 解析裸表名,而 `USER_*` 仍看登录用户自己的对象。若依赖切换 schema,请自行查 `ALL_*` 加 `owner` 条件,或显式传入可解析的表名 |
+| 同义词(`SYNONYM`) | ❌ `ExistTable` / `ExistViews` 不识别 | 引擎不展开 `USER_SYNONYMS`;CRUD 可能经同义词正常读写,但迁移判存会得到 false。迁移场景请先查 `ALL_SYNONYMS` / `ALL_OBJECTS` |
+| 物化视图(`MATERIALIZED VIEW`) | ⚠️ `ExistViews` 不识别 | 只查 `USER_VIEWS`,未查 `USER_MVIEWS`;不要把 `ExistViews=false` 等同于“不是视图” |
+| 显式 `schema.table` 表名 | ❌ 元数据探测不支持 | 白名单与 CRUD 允许点号,但 `Exist*` / `AutoKeys` 把整串与 `TABLE_NAME` 比较,不会拆分 owner。元数据探测请传**裸表名** |
+| `ExistConst(CtDF, 列名)` | ⚠️ 仅按列名判断 | Oracle 默认值不是命名约束;同一 schema 下任意表有同名列且 `data_default is not null` 就返回 true。需要精确判定时请自行按 `USER_TAB_COLS(TABLE_NAME, COLUMN_NAME)` 查询 |
+| 复合主键 `AutoKeys` | ✅ 顺序稳定 | 已按 `USER_CONS_COLUMNS.POSITION` 排序,不依赖数据库返回序 |
+| 达梦(`DtDAMENG`) | ⚠️ 同路径、未真库覆盖 | 与 Oracle 共用上述 SQL;CI 只跑 Oracle 真库,达梦的 `USER_*` 兼容性需在目标库验证 |
+
+> **结论**:当前支持的稳定主路径是“登录用户即目标 schema、使用裸表名、对象为普通表/视图”。跨 schema、同义词、物化视图、显式 schema 前缀属于已知边界,不要仅凭 `Exist*` / `AutoKeys` 的结果做建表/迁移决策;必要时先用 `ALL_*` 数据字典自行校验。
 
 #### 6.真实数据库集成测试
 
