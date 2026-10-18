@@ -107,32 +107,38 @@ func (this *TUniEngine) checkClassRegistration(t reflect.Type, TableName string,
 			if !Force {
 				return fmt.Errorf("%w: table [%s] was registered manually (RegisterTable/RegisterField/RegisterPkeys); use RegisterClassForce to replace it or choose another table name", ErrTableConflict, TableName)
 			}
-		} else if ByTable.ClassType != t {
-			return fmt.Errorf("%w: table [%s] is already registered by class [%s], requested class [%s]; use a distinct table name", ErrTableConflict, TableName, ByTable.ClassType.String(), ClassKey)
 		}
+		//#不同类共享同一表名是合法用法(同一张表的多个投影/只读类);
+		//#表名键由最后一次注册覆盖,类名键各自保留。只有手工表需要 Force。
 
-		//#同一张表只允许一个类名键;历史上可能有遗留的多类别名,先拒绝而不是把别名留在旧快照上。
+		//#同一快照只允许一个类名键;其它类的类名键指向自己的快照,不是"遗留别名"。
 		for Key, Value := range this.HashTabl {
-			if Value == ByTable && Key != LowerTable && Key != ClassKey {
-				return fmt.Errorf("%w: table [%s] still has extra alias [%s]; clean the registry before re-registering", ErrRegistryInconsistent, TableName, Key)
+			if Value != ByTable || Key == LowerTable || Key == ClassKey {
+				continue
 			}
+			if ByTable.ClassType != nil && Key == ByTable.ClassType.String() {
+				continue
+			}
+			return fmt.Errorf("%w: table [%s] still has extra alias [%s]; clean the registry before re-registering", ErrRegistryInconsistent, TableName, Key)
 		}
 	}
 
-	if HasClass && HasTable && ByClass != ByTable {
+	if HasClass && HasTable && ByClass != ByTable && ByTable.ClassType == t {
 		return fmt.Errorf("%w: class [%s] and table [%s] point to different snapshots; re-initialize the registry", ErrRegistryInconsistent, ClassKey, LowerTable)
 	}
 
 	return nil
 }
 
-// RegisterClass 登记类并把表名/类名两个键指向同一快照。
+// RegisterClass 登记类并写入表名/类名两个键。
 //
 // 冲突策略(不静默覆盖):
 //   - 类已登记到另一个表名 → ErrClassConflict;
-//   - 表名已由手工 RegisterTable 登记,或已由另一个类登记 → ErrTableConflict;
+//   - 表名已由手工 RegisterTable 登记 → ErrTableConflict;确需替换用 RegisterClassForce;
+//   - 同一表名允许挂多个类(同一张表的多个投影/只读类),类名键各自保留;
+//     表名键指向最后一次注册的快照(沿用历史行为);
 //   - 同一类、同一表名重复登记 → 允许,按"重新注册"语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记);
-//   - 双键指向不同快照 → ErrRegistryInconsistent。
+//   - 同一个类出现两个不同快照 / 类键与表键悬空 → ErrRegistryInconsistent。
 //
 // 需要显式覆盖"手工登记表"时用 RegisterClassForce。
 func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUniTable {
@@ -141,7 +147,7 @@ func (this *TUniEngine) RegisterClass(Class interface{}, TableName string) *TUni
 
 // RegisterClassForce 与 RegisterClass 相同,但允许用类元数据替换一个**手工登记**的表
 // (RegisterTable/RegisterField/RegisterPkeys 创建、ClassType==nil)。
-// 它不会覆盖另一个类登记的表,也不会把已登记到其它表的类改绑;这两类冲突仍然报错。
+// 它不会把已登记到其它表的类改绑(ErrClassConflict);多个类共享同一表名本来就是允许的。
 func (this *TUniEngine) RegisterClassForce(Class interface{}, TableName string) *TUniTable {
 	return this.registerClass(Class, TableName, true)
 }

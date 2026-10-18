@@ -8,11 +8,12 @@
 
 - **注册双键冲突不再静默覆盖**:`RegisterClass` 此前无条件写 `HashTabl[lower(table)]` 与 `HashTabl[class]`。现在发布前校验:
   - 类已登记到另一个表名 → `ErrClassConflict`;
-  - 表名已由手工 `RegisterTable/RegisterField/RegisterPkeys` 登记,或已由另一个类登记 → `ErrTableConflict`;
+  - 表名已由手工 `RegisterTable/RegisterField/RegisterPkeys` 登记 → `ErrTableConflict`;
+  - 不同类共享同一表名 → **允许**(同一张表的多个投影/只读类),类名键各自保留,表名键指向最后一次注册;
   - 双键指向不同快照 / 类键存在但表键缺失 → `ErrRegistryInconsistent`;
   - 同一类、同一表名重复登记仍允许,按“重新注册”语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记)。
   冲突时不修改注册表,返回带 `LastError` 的未注册载体;`Initialize()` 的内置表登记错误不再被吞掉。
-- **新增 `RegisterClassForce`**:显式允许用类元数据替换**手工登记**的表(`ClassType==nil`);不会覆盖另一个类登记的表,也不会把已登记到其它表的类改绑,这两类冲突仍报错。
+- **新增 `RegisterClassForce`**:显式允许用类元数据替换**手工登记**的表(`ClassType==nil`);不会把已登记到其它表的类改绑(`ErrClassConflict`)。不同类共享同一表名本来就是允许的。
 - **批量分页 clamp**:`InsertP`/`CopyInP` 的 `PageSize` 统一归一化:
   - `0`/负值 → 999 行;超过 999 → 999 行;
   - `InsertP` 按可写列数压到方言单语句绑定参数预算内:Oracle 60000、达梦 2000、SQLServer 2000、PG/MySQL 60000;至少 1 行;
@@ -25,7 +26,7 @@
 
 ### 升级注意
 
-- 同类注册到第二个表名、或不同类注册同一表名,现在返回错误而不是静默覆盖;确需替换手工表时用 `RegisterClassForce`。
+- 同类注册到第二个表名现在返回 `ErrClassConflict`;不同类共享同一表名是允许的(表名键由最后一次注册覆盖)。确需替换手工表时用 `RegisterClassForce`。
 - `PageSize=-2/-5` 等负值从“永不分页”变为按 999 行分页;宽表会按列数自动减少每页行数。
 - 自定义写钩子下 `InsertP` 的列数按默认可写列估算;钩子改变列数时请自行控制批量大小。
 

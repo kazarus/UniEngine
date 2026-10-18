@@ -66,23 +66,7 @@ func TestRegisterClassForceReplacesManualTable(t *testing.T) {
 	}
 }
 
-func TestRegisterClassForceStillRejectsOtherClass(t *testing.T) {
-	eng := newTestEngine()
-	First := eng.RegisterClass(regConflictA{}, "t_owned")
-	if First.LastError != nil {
-		t.Fatal(First.LastError)
-	}
-
-	tbl := eng.RegisterClassForce(regConflictB{}, "t_owned")
-	if !errors.Is(tbl.LastError, ErrTableConflict) {
-		t.Fatalf("force must not override another class, got %v", tbl.LastError)
-	}
-	if eng.GetTable("t_owned") != First {
-		t.Fatal("force conflict must leave the first class table intact")
-	}
-}
-
-func TestRegisterClassRejectsDifferentClassSameTable(t *testing.T) {
+func TestRegisterClassAllowsDifferentClassSameTable(t *testing.T) {
 	eng := newTestEngine()
 	First := eng.RegisterClass(regConflictA{}, "t_shared")
 	if First.LastError != nil {
@@ -90,17 +74,36 @@ func TestRegisterClassRejectsDifferentClassSameTable(t *testing.T) {
 	}
 
 	Second := eng.RegisterClass(regConflictB{}, "t_shared")
-	if !errors.Is(Second.LastError, ErrTableConflict) {
-		t.Fatalf("different class on same table must be ErrTableConflict, got %v", Second.LastError)
+	if Second.LastError != nil {
+		t.Fatalf("different class on same table must be allowed, got %v", Second.LastError)
 	}
-	if got := eng.GetTable("t_shared"); got != First {
-		t.Fatal("table key must keep pointing at the first class")
+	if got := eng.GetTable("t_shared"); got != Second {
+		t.Fatal("table key must point at the latest registration")
 	}
 	if got := eng.HashTabl["UniEngine.regConflictA"]; got != First {
-		t.Fatal("first class key must be intact")
+		t.Fatal("first class key must stay intact")
 	}
-	if _, ok := eng.HashTabl["UniEngine.regConflictB"]; ok {
-		t.Fatal("second class key must not be published")
+	if got := eng.HashTabl["UniEngine.regConflictB"]; got != Second {
+		t.Fatal("second class key must be published")
+	}
+}
+
+func TestRegisterClassForceAllowsDifferentClassSameTable(t *testing.T) {
+	eng := newTestEngine()
+	First := eng.RegisterClass(regConflictA{}, "t_owned")
+	if First.LastError != nil {
+		t.Fatal(First.LastError)
+	}
+
+	tbl := eng.RegisterClassForce(regConflictB{}, "t_owned")
+	if tbl.LastError != nil {
+		t.Fatalf("force should allow another class on the same table, got %v", tbl.LastError)
+	}
+	if eng.GetTable("t_owned") != tbl {
+		t.Fatal("table key should point at the latest class")
+	}
+	if eng.HashTabl["UniEngine.regConflictA"] != First {
+		t.Fatal("first class key must stay intact")
 	}
 }
 

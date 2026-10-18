@@ -421,11 +421,11 @@ Oracle 族(`DtORACLE` 与达梦 `DtDAMENG`)的 `ExistTable` / `ExistViews` / `Ex
 | --- | --- |
 | 同一类、同一表名重复注册 | ✅ 允许,按“重新注册”重建类元数据(旧 pkeys/Secret/Verify 需重新登记) |
 | 同一个类注册到另一个表名 | ❌ `ErrClassConflict`,类键保持原表 |
-| 不同类注册同一表名 | ❌ `ErrTableConflict`,表键保持原类 |
+| 不同类注册同一表名 | ✅ 允许(同一张表的多个投影/只读类);类名键各自保留,表名键指向最后一次注册 |
 | 表名已被 `RegisterTable/RegisterField/RegisterPkeys` 手工登记 | ❌ `ErrTableConflict`;确需替换用 `RegisterClassForce` |
 | 双键指向不同快照 / 类键存在但表键缺失 | ❌ `ErrRegistryInconsistent` |
 
-冲突时不修改注册表,返回带 `LastError` 的未注册载体。`RegisterClassForce` **只**允许替换手工表;不会覆盖另一个类的表,也不会给已登记到其它表的类改绑。
+冲突时不修改注册表,返回带 `LastError` 的未注册载体。`RegisterClassForce` **只**放宽“手工表”这一种冲突;类改绑仍报错。同一表名的多个类共享表名键时,最后一次注册更新表名键,旧类的类名键仍指向自己的快照。
 
 **批量分页按方言绑定参数预算收敛。** `InsertP`/`CopyInP` 的 `PageSize`:
 
