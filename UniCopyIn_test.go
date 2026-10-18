@@ -263,3 +263,45 @@ func TestCopyInPClampsPageSize(t *testing.T) {
 		t.Fatalf("CopyInP pages=%d want 3", got)
 	}
 }
+
+// #达梦经 Oracle 兼容协议接入:Provider 保持 DtORACLE(应用 SQL 分支不变),
+// #Supplier=DtDAMENG 只把批量预算切到 2000/列数,不套 Oracle 100 行性能上限。
+func TestDamengSupplierUsesDamengBatchBudget(t *testing.T) {
+	e := newTestEngine()
+	e.Provider = DtORACLE
+	e.Supplier = DtDAMENG
+
+	if got := e.batchDialect(); got != DtDAMENG {
+		t.Fatalf("batchDialect=%v want DtDAMENG", got)
+	}
+	if got := e.normalizeBatchPageSize(999, 47); got != 42 {
+		t.Fatalf("DM 47 cols page=%d want 42 (2000/47)", got)
+	}
+	if got := e.normalizeBatchPageSize(999, 10); got != 200 {
+		t.Fatalf("DM 10 cols page=%d want 200 (2000/10), Oracle 100 cap must not apply", got)
+	}
+
+	//#不带 Supplier 时仍是 Oracle:100 行上限。
+	e.Supplier = 0
+	if got := e.normalizeBatchPageSize(999, 10); got != 100 {
+		t.Fatalf("Oracle page=%d want 100", got)
+	}
+}
+
+func TestInsertPDamengSupplierBudget(t *testing.T) {
+	d := &mockDriver{}
+	e := newMockEngine(d)
+	e.Provider, e.ColParam, e.Supplier = DtORACLE, ":", DtDAMENG
+	e.RegisterClass(pageWideRow{}, "t_wide")
+
+	rows := make([]pageWideRow, 1000)
+	for i := range rows {
+		rows[i] = pageWideRow{C01: int64(i), C02: 2, C03: 3, C04: 4, C05: 5, C06: 6, C07: 7, C08: 8, C09: 9, C10: 10}
+	}
+	if eror := e.InsertP(&rows, 999, "t_wide"); eror != nil {
+		t.Fatalf("InsertP: %v", eror)
+	}
+	if got := len(d.insertValues); got != 5 {
+		t.Fatalf("DM 10 cols pages=%d want 5 (2000/10=200 rows/page)", got)
+	}
+}

@@ -69,9 +69,12 @@ type TUniEngine struct {
 	// INSERT ALL/COPY 白名单)。方言相关的一切分支都只看本字段。
 	Provider TDriveType
 
-	// Supplier **仅**用于 InsertP 的批量路由:PolarDB 时改走 COPY 协议,其余走多行 INSERT
-	// (见 UniCopyIn.go 的 insertPage)。引擎内部从不赋值,须由调用方显式设置;
-	// 它与 Provider 是两套开关——只设 Provider=DtPOLODB 不会让 InsertP 走 COPY,
+	// Supplier 用于 InsertP 的批量路由/预算(不改变 SQL 方言):
+	//   - DtPOLODB:改走 COPY 协议(Provider 仍应为 PG 族);
+	//   - DtDAMENG:Provider=DtORACLE 的达梦部署按达梦 2000/列数预算收敛,
+	//     不套 Oracle 的 100 行/页性能上限。
+	// 引擎内部从不赋值,须由调用方显式设置;它与 Provider 是两套开关——
+	// 只设 Provider=DtPOLODB 不会让 InsertP 走 COPY,
 	// 而 Supplier=DtPOLODB 配非 PG 族 Provider 会让 InsertP 直接报错。
 	Supplier TDriveType
 
@@ -423,9 +426,22 @@ const (
 	defaultMaxBindParams   int64 = 60000
 )
 
+// batchDialect 返回"批量写入预算"使用的厂商标识。
+//
+// Provider 仍是唯一的 SQL 方言开关(占位符/引号/元数据/UPSERT/INSERT ALL),
+// 不能因为达梦而改成 DtDAMENG——历史应用有大量 switch Provider==DtORACLE。
+// Supplier 是产品标识:达梦走 Oracle 兼容协议时保持 Provider=DtORACLE,
+// 用 Supplier=DtDAMENG 让批量页大小按达梦 2048 参数上限收敛。
+func (this *TUniEngine) batchDialect() TDriveType {
+	if this.Supplier == DtDAMENG {
+		return DtDAMENG
+	}
+	return this.Provider
+}
+
 // maxBatchBindParams 返回当前方言单条 INSERT 的绑定参数预算。
 func (this *TUniEngine) maxBatchBindParams() int64 {
-	switch this.Provider {
+	switch this.batchDialect() {
 	case DtDAMENG:
 		return damengMaxBindParams
 	case DtORACLE:
@@ -441,6 +457,7 @@ func (this *TUniEngine) maxBatchBindParams() int64 {
 //   - 0/负值 → 999 行;
 //   - 超过 999 → 999;
 //   - Oracle 再压到 100 行/页(INSERT ALL 的 INTO 数量是性能拐点);
+//     达梦经 Supplier=DtDAMENG 走 2000/列数预算,不套 Oracle 100 行上限;
 //   - 按列数把"行数 × 列数"压到方言绑定参数预算内,至少 1 行。
 //
 // Columns 为 0(未解析/未知)时只做行数上限,不做参数预算;单行超过预算时仍返回 1,
@@ -453,7 +470,7 @@ func (this *TUniEngine) normalizeBatchPageSize(Requested int64, Columns int) int
 	if Rows > maxBatchRows {
 		Rows = maxBatchRows
 	}
-	if this.Provider == DtORACLE && Rows > oracleMaxBatchRows {
+	if this.batchDialect() == DtORACLE && Rows > oracleMaxBatchRows {
 		Rows = oracleMaxBatchRows
 	}
 
