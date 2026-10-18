@@ -27,7 +27,7 @@
 >   `sql.NullString` / `sql.NullInt64` / pointers, or `[]byte`. The scalar helpers
 >   (`SelectS`/`SelectD`/`SelectF`) are the opposite: they scan into `sql.NullXxx`
 >   and return a zero value on `NULL`. See §3 (Chinese) for the measured matrix.
-> - **Tests**: 250 unit tests (~90% statement coverage, mock driver) plus
+> - **Tests**: 272 unit tests (~90% statement coverage, mock driver) plus
 >   real-database suites for PostgreSQL, SQL Server, Oracle and MySQL under
 >   `integration/` (separate module, skipped when no server is reachable).
 >
