@@ -359,3 +359,57 @@ func TestMSSQLInitializeRejectsMismatchedBinding(t *testing.T) {
 		})
 	}
 }
+
+// #InsertP 分页 clamp 的 SQL Server 真机验证:
+// 10 列 × 999 行会超过 2100 参数上限,归一化后应为 2000/10 = 200 行/页,1000 行分 5 页。
+func TestMSSQLInsertPPageSizeClamp(t *testing.T) {
+	db := openMSSQL(t, driverMSSQL)
+	eng := mssqlEngineOn(t, db, driverMSSQL, "?")
+
+	tableName := newMSSQLProbeTable(t)
+	columns := "c1 bigint null, c2 bigint null, c3 bigint null, c4 bigint null, c5 bigint null, " +
+		"c6 bigint null, c7 bigint null, c8 bigint null, c9 bigint null, c10 bigint null"
+	create := fmt.Sprintf("create table %s (%s)", tableName, columns)
+	if eror := eng.Execute(create); eror != nil {
+		t.Fatalf("create %s: %v", tableName, eror)
+	}
+	t.Cleanup(func() {
+		drop := fmt.Sprintf("if object_id('%s','U') is not null drop table %s", tableName, tableName)
+		if eror := eng.Execute(drop); eror != nil {
+			t.Errorf("cleanup: drop %s 失败: %v", tableName, eror)
+		}
+	})
+
+	tbl := eng.RegisterClass(mssqlPageRow{}, tableName)
+	if tbl.LastError != nil {
+		t.Fatalf("register: %v", tbl.LastError)
+	}
+
+	rows := make([]mssqlPageRow, 1000)
+	for i := range rows {
+		rows[i] = mssqlPageRow{
+			C1: int64(i + 1), C2: 2, C3: 3, C4: 4, C5: 5,
+			C6: 6, C7: 7, C8: 8, C9: 9, C10: 10,
+		}
+	}
+	if eror := eng.InsertP(&rows, -5, tableName); eror != nil {
+		t.Fatalf("InsertP: %v", eror)
+	}
+	n, eror := eng.SelectD("select count(1) from " + tableName)
+	if eror != nil || n != 1000 {
+		t.Fatalf("count=(%d,%v), want 1000", n, eror)
+	}
+}
+
+type mssqlPageRow struct {
+	C1  int64 `db:"c1"`
+	C2  int64 `db:"c2"`
+	C3  int64 `db:"c3"`
+	C4  int64 `db:"c4"`
+	C5  int64 `db:"c5"`
+	C6  int64 `db:"c6"`
+	C7  int64 `db:"c7"`
+	C8  int64 `db:"c8"`
+	C9  int64 `db:"c9"`
+	C10 int64 `db:"c10"`
+}
