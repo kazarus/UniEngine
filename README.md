@@ -95,13 +95,13 @@ UniEngineEx := UniEngine.TUniEngine{Db: db, ColLabel: "db", ColParam: "@p", Prov
 
 ##### 0.3.为什么需要 `Supplier`(与 `Provider`、`ProvideName` 的区别)
 
-UniEngine 用三个字段回答三个不同的问题,不要把它们混成“数据库类型”:
+UniEngine 用四个字段回答不同的问题,不要把它们混成“数据库类型”:
 
 | 字段 | 回答的问题 | 影响范围 |
 | --- | --- | --- |
 | `Provider` | SQL 按**哪个协议族**生成? | 占位符、标识符引用、元数据目录、UPSERT/INSERT ALL、COPY 白名单,以及应用侧大量 `switch Provider` 分支 |
 | `Supplier` | 这个部署实际是**哪家产品**,是否需要某种**不改变 SQL 语义**的优化? | `InsertP` 的 PolarDB→COPY 路由;达梦在 Oracle 兼容接入下的批量预算;零值表示不启用 |
-| `BatchDialect` | 批量页大小按**哪家厂商**的参数上限计算? | 只影响 `InsertP`/`InsertL` 页大小;0=按 `Supplier`/`Provider` 推断,不参与 SQL 方言 |
+| `BatchDialect` | 批量页大小按**哪家厂商**的参数上限计算? | 只影响 `InsertP` 页大小;0=按 `Supplier`/`Provider` 推断,不参与 SQL 方言 |
 | `ProvideName` | `sql.Open` 实际使用的**驱动名**是什么? | SQL Server 的 `mssql` / `sqlserver` 占位符校验 |
 
 **引入 `Supplier` 的直接原因**是 PolarDB:
@@ -130,8 +130,9 @@ eng := &UniEngine.TUniEngine{
     Db:       db,
     ColLabel: "db",
     ColParam: ":",
-    Provider: UniEngine.DtORACLE, //#SQL 仍走 Oracle 分支
-    Supplier: UniEngine.DtDAMENG, //#产品: 达梦;用于标识部署,不改变 SQL 文本
+    Provider: UniEngine.DtORACLE,     //#SQL 仍走 Oracle 分支
+    Supplier: UniEngine.DtDAMENG,     //#产品: 达梦;标识部署,不改变 SQL 文本
+    BatchDialect: UniEngine.DtDAMENG, //#可选:显式指定批量预算;0 时用 Supplier 推断
 }
 ```
 
@@ -479,6 +480,19 @@ Oracle 的 100 行上限来自真机测量(999 行总量,1 列与 10 列结果�
 `INSERT ALL` 每页 999 行约 **144s**,500 行约 **14s**,200 行约 **0.25–0.31s**,100 行约 **0.06–0.10s**,50 行约 **0.05s**。瓶颈是 `INTO` 子句数量而非绑定变量总数,因此 Oracle 单独压到 100 行/页;50–100 行是吞吐平台区,取 100 以少发包。
 
 `CopyInP` 走 COPY 协议,没有绑定参数上限,只做 999 行上限。`InsertL` 不自动分页:单次超过 **999 行**返回 `ErrBatchTooLarge`,大行数请用 `InsertP`;`InsertP` 内部按上表切页,不受该限制。自定义写钩子改变列数时,`InsertP` 的预算按默认可写列估算,请调用方自行控制批量大小。
+
+#### 5.4.旧调用方接入检查清单
+
+把当前版本替换到既有生产代码(尤其大量按值复制 `TUniEngine`、同一表名多个投影类的项目)时,按以下顺序检查:
+
+1. **一表多类**:新版本允许不同类共享同一表名;类名键各自保留,表名键指向最后一次注册。若旧代码依赖“表名键固定指向第一个类”,需改用 `GetTableByClass`。
+2. **引擎复制**:`mu`/`txGate` 已恢复为共享指针,按值复制的副本仍共享注册表锁;但 `tx/inTx` 仍按值复制,事务只能在单个副本内使用。新代码请用 `*TUniEngine`。
+3. **达梦**:保持 `Provider=DtORACLE`;设置 `Supplier=DtDAMENG` 或 `BatchDialect=DtDAMENG`,只改批量预算,SQL 分支不变。
+4. **`SelectD/F/S`**:多行现在返回 `ErrMultipleRows`;抽查所有可能返回多行的标量查询。
+5. **`SelectL`**:失败会回滚本次已追加的行;不要忽略错误后继续使用半截切片。
+6. **注册表直接访问**:把 `HashTabl["pkg.Type"]` 改为 `GetTableByClass("pkg.Type")`,把 `HashTabl["table"]` 改为 `GetTable("table")`。
+7. **`InsertL`**:超过 999 行返回 `ErrBatchTooLarge`;大数据改用 `InsertP`。
+8. **事务**:现有 `Begin/Commit/Cancel` 无需改动;新代码可用 `WithTx`,但不要在同一事务内混用。
 
 #### 6.真实数据库集成测试
 

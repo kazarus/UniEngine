@@ -16,6 +16,7 @@
 - **新增引擎级 `WithTx`**:`fn` 成功才 Commit,错误/panic 自动 Cancel(panic 原样重抛);嵌套/闭包内手工 Commit/Cancel 显式报错。纯加法 API,现有 `Begin/Commit/Cancel` 代码零改动,不改变事务状态机。
 - **`InsertL` 超限保护**:单次超过 999 行返回新增的 `ErrBatchTooLarge`,并提示改用 `InsertP`;避免静默生成超大 SQL 撞绑定参数上限或 Oracle `INSERT ALL` 性能拐点。`InsertP` 内部分页不受影响。
 - **CI 加固**:根模块覆盖率门槛 80%→85%(当前约 89.7%);新增 `FuzzSQLMasking`,对 `maskSQLLiterals`/`scanPlaceholders` 做开放输入的短时模糊,断言掩码等长、占位符位置不越界。
+- **README 增加旧调用方接入检查清单**:一表多类、引擎复制、达梦批量预算、`SelectD/F/S` 多行、`SelectL` 整批回滚、`HashTabl` 访问、`InsertL` 上限、`WithTx` 混用边界。
 - **新增 `ExistConstOn(TableName, CtDF, ColumnName)`**:默认值约束按“表名+列名”精确判定,解决 `ExistConst(CtDF,列名)` 只按列名匹配的歧义;PG/SQLServer/Oracle/MySQL 各自生成表名限定 SQL,其它约束类型仍委托 `ExistConst`。
 - **新增 `GetTableByClass`**:按类名键持读锁取表快照,替代生产代码直接读 `HashTabl["pkg.Type"]` 的无锁访问;README 明确 `HashTabl` 只读快照定位。
 - **新增显式 `BatchDialect`**:优先于 `Supplier` 推断,仅决定批量页大小的厂商预算,不改变 SQL 方言;达梦可用 `Provider=DtORACLE` + `BatchDialect=DtDAMENG`,避免 `Supplier` 语义过载。
