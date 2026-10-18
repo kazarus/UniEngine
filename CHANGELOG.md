@@ -16,6 +16,7 @@
 - **新增引擎级 `WithTx`**:`fn` 成功才 Commit,错误/panic 自动 Cancel(panic 原样重抛);嵌套/闭包内手工 Commit/Cancel 显式报错。纯加法 API,现有 `Begin/Commit/Cancel` 代码零改动,不改变事务状态机。
 - **`InsertL` 超限保护**:单次超过 999 行返回新增的 `ErrBatchTooLarge`,并提示改用 `InsertP`;避免静默生成超大 SQL 撞绑定参数上限或 Oracle `INSERT ALL` 性能拐点。`InsertP` 内部分页不受影响。
 - **CI 加固**:根模块覆盖率门槛 80%→85%(当前约 89.7%);新增 `FuzzSQLMasking`,对 `maskSQLLiterals`/`scanPlaceholders` 做开放输入的短时模糊,断言掩码等长、占位符位置不越界。
+- **新增 `GetTableByClass`**:按类名键持读锁取表快照,替代生产代码直接读 `HashTabl["pkg.Type"]` 的无锁访问;README 明确 `HashTabl` 只读快照定位。
 - **新增显式 `BatchDialect`**:优先于 `Supplier` 推断,仅决定批量页大小的厂商预算,不改变 SQL 方言;达梦可用 `Provider=DtORACLE` + `BatchDialect=DtDAMENG`,避免 `Supplier` 语义过载。
 - **`Initialize` 基础配置校验**:`Db` 非空时检查 `ColLabel`/`ColParam`/`Provider`,非法返回新增的 `ErrInvalidConfig`;`Db` 为空的注册-only 引擎继续跳过,避免破坏单测/元数据登记用法。
 - **`AutoKeys` 默认 SQL 按协议族选择**:不传生成器时,PG/SQLServer/Oracle/MySQL 分别使用各自的主键探测 SQL,不再写死 PostgreSQL;MySQL 缺 `DataBase` 或未知 Provider 明确报错。

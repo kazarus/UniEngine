@@ -214,6 +214,8 @@ defer cancel()
 eror = UniEngineEx.InsertCtx(ctx, &row)
 ```
 
+> `HashTabl` 是公开的只读快照;运行时可能并发注册,调用方应按表名用 `GetTable`,按类名用 `GetTableByClass`(两者都持读锁),不要直接 `HashTabl["pkg.Type"]` 无锁读取。
+
 ##### 2.1.WithTx(事务闭包)
 
 `WithTx` 是现有 `Begin/Commit/Cancel` 的语法糖,不改变事务状态机:

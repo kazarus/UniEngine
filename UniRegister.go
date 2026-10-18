@@ -368,6 +368,17 @@ func (this *TUniEngine) GetTable(TableName string) *TUniTable {
 	return this.tableByName(TableName)
 }
 
+// GetTableByClass 按类名键(通常为完整包路径 + 类型名,如 "core.TUSER")取表快照。
+// 与 GetTable 一样持读锁;用于替代调用方直接读 HashTabl 的无锁访问。
+func (this *TUniEngine) GetTableByClass(ClassName string) *TUniTable {
+	if ClassName == "" {
+		return nil
+	}
+	this.rlockTables()
+	defer this.mu.RUnlock()
+	return this.HashTabl[ClassName]
+}
+
 // #ListSecretTable 返回全部含加密列的注册表(读锁,按表名去重排序)
 // #HashTabl 同时以表名与类全名双键登记且指向同一表,须按 TableName 去重;
 // #供存量加解密迁移等注册表驱动场景遍历,新增 SetSecret/secreton 登记即自动纳入
