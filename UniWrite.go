@@ -294,6 +294,12 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 		return nil
 	}
 
+	//#InsertL 是"单条 SQL"语义:超过 999 行会撞绑定参数上限/Oracle INSERT ALL 性能拐点。
+	//#大数据必须走 InsertP 自动分页,而不是静默生成一条超大 SQL。
+	if int64(v.Len()) > maxBatchRows {
+		return fmt.Errorf("%w: got %d rows, limit %d", ErrBatchTooLarge, v.Len(), maxBatchRows)
+	}
+
 	//#完整性:保护列下标解析一次,逐行重算 MAC 回填伴随字段
 	VerifyCols, eror := this.verifyColsOf(UniTable, v.Type().Elem())
 	if eror != nil {

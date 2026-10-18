@@ -34,6 +34,8 @@ var (
 	ErrInvalidDataBase = errors.New("UniEngine: invalid database name")
 	// ErrInvalidConfig 引擎基础配置缺失/非法(ColLabel/ColParam/Provider);Initialize 在使用真实 Db 时校验
 	ErrInvalidConfig = errors.New("UniEngine: invalid engine config")
+	// ErrBatchTooLarge InsertL 单条语句超过 999 行硬上限;大数据请用 InsertP 自动分页
+	ErrBatchTooLarge = errors.New("UniEngine: InsertL batch exceeds 999 rows; use InsertP")
 	// ErrMultipleRows 标量查询(SelectD/SelectF/SelectS)返回多行;此类入口只接受单行结果
 	ErrMultipleRows = errors.New("UniEngine: scalar query returned more than one row")
 	// ErrTableConflict 表名已被手工登记或由另一个类登记;RegisterClass 不会静默覆盖

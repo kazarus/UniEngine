@@ -13,6 +13,7 @@
   - 双键指向不同快照 / 类键存在但表键缺失 → `ErrRegistryInconsistent`;
   - 同一类、同一表名重复登记仍允许,按“重新注册”语义重建类元数据(手工 pkeys/Secret/Verify 需重新登记)。
   冲突时不修改注册表,返回带 `LastError` 的未注册载体;`Initialize()` 的内置表登记错误不再被吞掉。
+- **`InsertL` 超限保护**:单次超过 999 行返回新增的 `ErrBatchTooLarge`,并提示改用 `InsertP`;避免静默生成超大 SQL 撞绑定参数上限或 Oracle `INSERT ALL` 性能拐点。`InsertP` 内部分页不受影响。
 - **CI 加固**:根模块覆盖率门槛 80%→85%(当前约 89.7%);新增 `FuzzSQLMasking`,对 `maskSQLLiterals`/`scanPlaceholders` 做开放输入的短时模糊,断言掩码等长、占位符位置不越界。
 - **`Initialize` 基础配置校验**:`Db` 非空时检查 `ColLabel`/`ColParam`/`Provider`,非法返回新增的 `ErrInvalidConfig`;`Db` 为空的注册-only 引擎继续跳过,避免破坏单测/元数据登记用法。
 - **`AutoKeys` 默认 SQL 按协议族选择**:不传生成器时,PG/SQLServer/Oracle/MySQL 分别使用各自的主键探测 SQL,不再写死 PostgreSQL;MySQL 缺 `DataBase` 或未知 Provider 明确报错。
