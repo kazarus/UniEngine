@@ -112,8 +112,8 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 
 	//#钩子按首行探测;slice 元素可寻址,指针接收者实现同样可被识别
 	First := v.Index(0)
-	if x, Ok := hookOf[HasGetSqlCopyInL](First); Ok {
-		SqlQuery = x.GetSqlCopyInL(this, TablName, int64(v.Len()))
+	if x, Ok := hookOf[HasCopyInGetSqlInsertL](First); Ok {
+		SqlQuery = x.CopyInGetSqlInsertL(this, TablName, int64(v.Len()))
 	} else if x, Ok := hookOf[HasSpecialGetSqlInsertL](First); Ok {
 		//#兼容旧版接口
 		SqlQuery = x.SpecialGetSqlInsertL(this, TablName, int64(v.Len()))

@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// #编译期接口契约:COPY 钩子夹具必须同时满足新命名的列/值接口(HasCopyInGetSqlInsertL
+// / HasCopyInSetSqlValuesL);接口更名后由编译器在此钉住,不再依赖运行时探测
+var (
+	_ HasCopyInGetSqlInsertL = hookCopyRow{}
+	_ HasCopyInSetSqlValuesL = hookCopyRow{}
+	_ HasCopyInGetSqlInsertL = hookCopyVerifyRow{}
+	_ HasCopyInSetSqlValuesL = hookCopyVerifyRow{}
+	_ HasCopyInGetSqlInsertL = hookCopyShortRow{}
+	_ HasCopyInSetSqlValuesL = hookCopyShortRow{}
+	_ HasCopyInSetSqlValuesL = hookCopyNoColsRow{}
+)
+
 // ---------------------------------------------------------------------------
 // #指针接收者钩子:所有入口必须与值接收者同口径
 // ---------------------------------------------------------------------------
@@ -157,7 +169,7 @@ type hookCopyRow struct {
 	Password string `db:"password"`
 }
 
-func (r hookCopyRow) GetSqlCopyInL(e *TUniEngine, TableName string, Batch int64) []string {
+func (r hookCopyRow) CopyInGetSqlInsertL(e *TUniEngine, TableName string, Batch int64) []string {
 	return []string{"user_name", "password"}
 }
 
@@ -202,7 +214,7 @@ type hookCopyVerifyRow struct {
 	Mac  string `db:"mac"`
 }
 
-func (r hookCopyVerifyRow) GetSqlCopyInL(e *TUniEngine, TableName string, Batch int64) []string {
+func (r hookCopyVerifyRow) CopyInGetSqlInsertL(e *TUniEngine, TableName string, Batch int64) []string {
 	return []string{"id", "name"} //#故意不含 MAC 列
 }
 
@@ -235,7 +247,7 @@ type hookCopyShortRow struct {
 	Password string `db:"password"`
 }
 
-func (r hookCopyShortRow) GetSqlCopyInL(e *TUniEngine, TableName string, Batch int64) []string {
+func (r hookCopyShortRow) CopyInGetSqlInsertL(e *TUniEngine, TableName string, Batch int64) []string {
 	return []string{"user_name", "password"}
 }
 
