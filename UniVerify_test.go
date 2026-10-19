@@ -4,9 +4,11 @@
 package UniEngine
 
 import (
+	"bytes"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"log"
 	"reflect"
 	"strings"
 	"testing"
@@ -242,8 +244,8 @@ func TestVerifySelectVerifyPass(t *testing.T) {
 	}
 }
 
-// #测试6:篡改行验签失败(fail-closed)
-func TestVerifySelectTamperFails(t *testing.T) {
+// #测试6a:宽容模式 MAC 不匹配 -> 记录告警并放行,前端仍可取到行
+func TestVerifySelectTamperLenient(t *testing.T) {
 	eng := newVerifyTestEngine(&mockDriver{})
 	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "mast"}
 
@@ -254,13 +256,39 @@ func TestVerifySelectTamperFails(t *testing.T) {
 	}
 	eng.Db = sql.OpenDB(mockConnector{d: d})
 
+	var buf bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(old)
+
+	var rows []TVerifyRow
+	if eror := eng.SelectL(&rows, "select "+verifyRowCols+" from tbl_verify_row"); eror != nil {
+		t.Fatalf("lenient mode must accept tampered row: %v", eror)
+	}
+	if len(rows) != 1 || rows[0].DataStat != 0 {
+		t.Fatalf("front-end values must survive: %+v", rows)
+	}
+	if !strings.Contains(buf.String(), "MAC mismatch") {
+		t.Fatalf("lenient mode should log a warning, got %q", buf.String())
+	}
+}
+
+// #测试6b:严格模式 MAC 不匹配仍 fail-closed
+func TestVerifySelectTamperStrict(t *testing.T) {
+	eng := newVerifyTestEngine(&mockDriver{})
+	eng.VerifyMode = 2
+	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "mast"}
+
+	d := &mockDriver{
+		columns:   verifyRowColumns(),
+		queryRows: [][]driver.Value{{int64(1), int64(2), int64(0), "mast", verifyExpect(t, eng, row)}},
+	}
+	eng.Db = sql.OpenDB(mockConnector{d: d})
+
 	var rows []TVerifyRow
 	eror := eng.SelectL(&rows, "select "+verifyRowCols+" from tbl_verify_row")
-	if eror == nil {
-		t.Fatal("tampered row must fail verification")
-	}
-	if !strings.Contains(eror.Error(), "integrity check failed") {
-		t.Fatalf("error should be integrity failure, got: %v", eror)
+	if eror == nil || !strings.Contains(eror.Error(), "integrity check failed") {
+		t.Fatalf("strict mode must reject tampered row, got %v", eror)
 	}
 }
 
