@@ -289,35 +289,7 @@ func (this *TUniEngine) SecretDefault(Value string, Encrypt bool) (string, error
 	return string(PlainText), nil
 }
 
-// #查询结果解密:把标记了 secreton 的字段,从密文还原为明文
-func (this *TUniEngine) DecryptResult(Result *reflect.Value, UniTable *TUniTable, Column []string) error {
-	if this.SecretOn == 0 {
-		return nil
-	}
-
-	for _, ItemPara := range Column {
-		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-		if !Valid || !UniField.SecretOn {
-			continue
-		}
-
-		FieldValue := Result.FieldByName(UniField.AttriName)
-		if !FieldValue.IsValid() || FieldValue.Kind() != reflect.String {
-			continue
-		}
-
-		PlainText, eror := this.Secret(FieldValue.String(), false)
-		if eror != nil {
-			return eror
-		}
-
-		FieldValue.SetString(PlainText)
-	}
-
-	return nil
-}
-
-// #decryptRow 按预解析的字段下标解密(热路径;DecryptResult 的无查找版本,
+// #decryptRow 按预解析的字段下标解密(热路径,读路径唯一的解密入口,
 // #EncryIdx 由 selectRowsCtx 在行循环前一次性算好)
 func (this *TUniEngine) decryptRow(Result reflect.Value, EncryIdx []int) error {
 	if this.SecretOn == 0 {
@@ -342,7 +314,7 @@ func (this *TUniEngine) decryptRow(Result reflect.Value, EncryIdx []int) error {
 }
 
 // #加密写入值:secreton 仅支持 string 字段,非 string 字段直接报错
-// #(读取侧 DecryptResult 只还原 string 字段;写入侧若放行其它类型,会出现写入密文/读取不解密的不对称,故 fast-fail)
+// #(读取侧解密只还原 string 字段;写入侧若放行其它类型,会出现写入密文/读取不解密的不对称,故 fast-fail)
 func (this *TUniEngine) secretEncrypt(FieldValue reflect.Value) (interface{}, error) {
 	if !FieldValue.IsValid() || FieldValue.Kind() != reflect.String {
 		return nil, fmt.Errorf("UniEngine: secreton only supports string field, but got [%s]", FieldValue.Kind().String())

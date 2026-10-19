@@ -4,6 +4,7 @@
 package UniEngine
 
 import (
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -336,6 +337,92 @@ func TestSelectDRejectsMultipleRows(t *testing.T) {
 	}
 }
 
+// #SelectF 与 D/S 同口径:多行返回 ErrMultipleRows(标量三兄弟修"多行取尾行"时
+// #D/S 补了回归,F 漏了——本组补齐,见覆盖率尾部清单 B)。
+func TestSelectFRejectsMultipleRows(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"v"},
+		queryRows: [][]driver.Value{{float64(1.5)}, {float64(2.5)}},
+	}
+	eng := newMockEngine(d)
+
+	_, eror := eng.SelectF("select v from anything")
+	if !errors.Is(eror, ErrMultipleRows) {
+		t.Fatalf("scalar query with multiple rows must return ErrMultipleRows, got %v", eror)
+	}
+}
+
+// #SelectF 单行取值;SelectFCtx 走同一实现,一并钉住覆盖率
+func TestSelectFReturnsSingleValue(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"v"},
+		queryRows: [][]driver.Value{{float64(3.25)}},
+	}
+	eng := newMockEngine(d)
+
+	got, eror := eng.SelectF("select v from anything")
+	if eror != nil || got != 3.25 {
+		t.Fatalf("SelectF single row: got %v (%v)", got, eror)
+	}
+
+	got, eror = eng.SelectFCtx(context.Background(), "select v from anything")
+	if eror != nil || got != 3.25 {
+		t.Fatalf("SelectFCtx single row: got %v (%v)", got, eror)
+	}
+}
+
+// #NULL 行:sql.NullFloat64 宽容语义,回零值不报错(与 D/S 的标量口径一致)
+func TestSelectFNullReturnsZero(t *testing.T) {
+	d := &mockDriver{
+		columns:   []string{"v"},
+		queryRows: [][]driver.Value{{nil}},
+	}
+	eng := newMockEngine(d)
+
+	got, eror := eng.SelectF("select v from anything")
+	if eror != nil || got != 0 {
+		t.Fatalf("SelectF NULL row should return 0 without error: got %v (%v)", got, eror)
+	}
+}
+
+// #HasField 字段存在性检查(publish99999 synz 在消费此 API):存在/不存在两态。
+func TestHasField(t *testing.T) {
+	eng := newMockEngine(&mockDriver{})
+	tbl := eng.RegisterClass(TTestUser{}, "has_field_t").SetKeys("user_name")
+	if tbl.LastError != nil {
+		t.Fatal(tbl.LastError)
+	}
+
+	Ok, eror := tbl.HasField("user_name")
+	if eror != nil || !Ok {
+		t.Fatalf("已注册字段应存在: %v %v", Ok, eror)
+	}
+	Ok, eror = tbl.HasField("USER_NAME") //#大小写不敏感
+	if eror != nil || !Ok {
+		t.Fatalf("大小写不敏感匹配应命中: %v %v", Ok, eror)
+	}
+	Ok, eror = tbl.HasField("no_such_col")
+	if eror != nil || Ok {
+		t.Fatalf("未注册字段应返回 false 无错误: %v %v", Ok, eror)
+	}
+}
+
+// #argCountOf 为 sqlDebug 脱敏输出的实参计数器:单行/二维(COPY)/nil/未知类型四形态。
+func TestArgCountOf(t *testing.T) {
+	if got := argCountOf([]interface{}{"a", 1}); got != 2 {
+		t.Fatalf("单行实参计数: got %d", got)
+	}
+	if got := argCountOf([][]interface{}{{"a"}, {"b"}}); got != 2 {
+		t.Fatalf("COPY 二维按组计数: got %d", got)
+	}
+	if got := argCountOf(nil); got != 0 {
+		t.Fatalf("nil 应为 0: got %d", got)
+	}
+	if got := argCountOf("not-a-slice"); got != 0 {
+		t.Fatalf("未知类型应为 0: got %d", got)
+	}
+}
+
 func TestSelectHNilKeyFunctionRejected(t *testing.T) {
 	d := &mockDriver{columns: []string{"v"}, queryRows: [][]driver.Value{{"a"}}}
 	eng := newMockEngine(d)
@@ -360,6 +447,9 @@ func TestNilDbReturnsErrorNotPanic(t *testing.T) {
 	}
 	if eror := eng.Begin(); !errors.Is(eror, ErrNoDatabase) {
 		t.Fatalf("Begin with nil Db must return ErrNoDatabase, got %v", eror)
+	}
+	if _, eror := eng.SelectF("select 1"); !errors.Is(eror, ErrNoDatabase) {
+		t.Fatalf("SelectF with nil Db must return ErrNoDatabase, got %v", eror)
 	}
 }
 
