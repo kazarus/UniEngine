@@ -385,7 +385,7 @@ func TestSelectFNullReturnsZero(t *testing.T) {
 	}
 }
 
-// #HasField 字段存在性检查(publish99999 synz 在消费此 API):存在/不存在两态。
+// #HasField 字段存在性检查(下游调用方在消费此 API):存在/不存在两态。
 func TestHasField(t *testing.T) {
 	eng := newMockEngine(&mockDriver{})
 	tbl := eng.RegisterClass(TTestUser{}, "has_field_t").SetKeys("user_name")
