@@ -375,8 +375,9 @@ UPDATE t SET c1 = ?, c2 = ? WHERE k = ?             -- 每个赋值段右值须�
 | HasSpecialGetSqlInsertL / SpecialGetSqlInsertL | HasCopyInGetSqlInsertL / CopyInGetSqlInsertL |
 | HasSpecialSetSqlValuesL | HasCopyInSetSqlValuesL |
 
-- 旧方法名保留为**废弃包装**,直接委托到新实现,源码兼容无需改动;
-- 旧接口仍被引擎探测:已实现 `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` 的类**无需改动即可继续工作**,建议尽快迁移到新接口。
+- `Special*` 旧方法名保留为**废弃包装**,直接委托到新实现,源码兼容无需改动;
+- `SpecialGetSqlInsertL` / `SpecialSetSqlValuesL` 旧接口仍被引擎探测,已实现的类**无需改动即可继续工作**,建议尽快迁移到新接口;
+- **`HasGetSqlCopyInL` / `GetSqlCopyInL` 已移除,不是废弃包装。** 由于 Go 是隐式接口实现,只实现旧方法的类不会触发编译错误(除非显式写接口断言),但运行时不再被探测,`CopyInL` 会回退到默认列清单。迁移时必须把方法名改为 `CopyInGetSqlInsertL`。
 
 同版本其他行为变化:
 

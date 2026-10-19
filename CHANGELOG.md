@@ -50,7 +50,7 @@
 
 ### 行为修复
 
-- **COPY 钩子接口与方法更名(破坏性)**:`HasGetSqlCopyInL` → **`HasCopyInGetSqlInsertL`**,方法 `GetSqlCopyInL` → **`CopyInGetSqlInsertL`**——与伴生的 `HasCopyInSetSqlValuesL`/`CopyInSetSqlValuesL` 命名完全对齐。实现者需同步改方法名(编译器强制);`Special*` 废弃对仍被引擎探测,历史更名记录见文末旧表。
+- **COPY 钩子接口与方法更名(破坏性)**:`HasGetSqlCopyInL` → **`HasCopyInGetSqlInsertL`**,方法 `GetSqlCopyInL` → **`CopyInGetSqlInsertL`**——与伴生的 `HasCopyInSetSqlValuesL`/`CopyInSetSqlValuesL` 命名完全对齐。**旧接口/旧方法已移除,不是废弃包装**;由于 Go 是隐式接口实现,只实现旧方法的类不会自动编译失败,但运行时不再被探测,`CopyInL` 会回退默认列清单,必须手动改方法名。`Special*` 废弃对仍被引擎探测,历史更名记录见文末旧表。
 - **COPY 自定义列/值不再绕过加密与验签**(安全收紧,曾静默写明文):`CopyInL` 走 `HasCopyInGetSqlInsertL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)时,钩子行曾完全跳过默认分支的 `secretEncrypt`;现按列名映射注册表,**就地加密** secreton 实参,列名不可映射、行长度不符、实参类型非 string/[]byte、返回值却无列清单时 fail-fast 不执行 COPY;验签激活时一律拒绝(钩子列清单无法保证包含 MAC 伴随列,读侧验签会静默失效)。`SecretOn=0` 且未验签时行为不变。
 - **钩子接收者统一**:`SetSqlResult`/`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`/`GetMapUnique`/COPY 钩子此前仅在部分入口识别指针接收者,同一类在 `Select` 能走钩子、`SelectL`/`Insert`/`SaveIt` 却静默生成默认 SQL。现在值接收者与 `func (u *TUser) ...` 指针接收者全入口一致。
 - **`SelectL` 整批语义落地**:查询中途失败(扫描错误/`rows.Err`)时回滚本次已追加的行,与 README/doc.go 的"整批丢弃"契约一致;调用方预置的元素保留。此前错误路径会把已扫过的行留在切片里。
@@ -344,7 +344,7 @@
 | `SetKeys` / `SetSecret` 返回 `error` | 返回 `*TUniTable`（链式） | 错误改记入 `TUniTable.LastError`（首错短路后续登记），链尾 `if tbl.LastError != nil` 检查：`RegisterClass(...).SetKeys(...).SetSecret(...)` |
 | `SpecialInsertL` / `SpecialInsertLCtx` | `CopyInL` / `CopyInLCtx` | 旧名保留为 `deprecated` 转发 |
 | `SpecialInsertP` / `SpecialInsertPCtx` | `CopyInP` / `CopyInPCtx` | 旧名保留为 `deprecated` 转发 |
-| `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasGetSqlCopyInL` / `GetSqlCopyInL` | 旧接口仍被引擎探测（向后兼容） |
+| `HasSpecialGetSqlInsertL` / `SpecialGetSqlInsertL` | `HasCopyInGetSqlInsertL` / `CopyInGetSqlInsertL` | `Special*` 仍被引擎探测；`HasGetSqlCopyInL` / `GetSqlCopyInL` 已移除，不再兼容 |
 | `HasSpecialSetSqlValuesL` / `SpecialSetSqlValuesL` | `HasCopyInSetSqlValuesL` / `CopyInSetSqlValuesL` | 旧接口仍被引擎探测（向后兼容） |
 | `TUniEngine.CanClose()` | （移除） | 自调试打印移除后一直是 no-op 死代码 |
 | 写方法 `args ...interface{}`（首参字符串作表名） | `TableName ...string` | 类型安全：传非字符串由运行期报错变为**编译期报错**；已有调用点无需改动 |
