@@ -49,7 +49,7 @@ func (this *TUniEngine) verifyActive(UniTable *TUniTable) bool {
 
 // #verifyStrict 严格模式:无标签的存量行按篡改处理(存量回填完成后切换)
 func (this *TUniEngine) verifyStrict() bool {
-	return this.VerifyMode == 2
+	return this.VerificationMode == 2
 }
 
 // #verifySign MAC 计算:VerifyHook 非空走应用钩子,否则内置 HMAC-SHA256(VerifyBy)
@@ -319,7 +319,7 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。
-// #无标签的空值按 VerifyMode 分流(宽容=存量直通/严格=报错);
+// #无标签的空值按 VerificationMode 分流(宽容=存量直通/严格=报错);
 // #非空但无标签属非法值(本引擎写路径必带标签),一律报错。
 // #非空、格式合法但 MAC 不匹配:严格模式报错;宽容模式(0/1)记录告警后放行。
 // #告警/报错文案不含载荷与行值(避免敏感授权数据泄漏进日志)
@@ -360,9 +360,9 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
 		if this.verifyStrict() {
 			return fmt.Errorf("UniEngine: verify fail: table[%s] Row integrity check failed", RowCtx.TablName)
 		}
-		//#宽容模式(VerifyMode=0/1):放行并告警,不阻断前端取值。
+		//#宽容模式(VerificationMode=0/1):放行并告警,不阻断前端取值。
 		//#不打印载荷/行值,避免授权数据进入日志。
-		log.Printf("UniEngine: verify warning: table[%s] MAC mismatch; VerifyMode=%d lenient, row accepted", RowCtx.TablName, this.VerifyMode)
+		log.Printf("UniEngine: verify warning: table[%s] MAC mismatch; VerificationMode=%d lenient, row accepted", RowCtx.TablName, this.VerificationMode)
 		return nil
 	}
 

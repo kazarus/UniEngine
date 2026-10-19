@@ -386,7 +386,7 @@ func newMySQLVerifyProbe(t *testing.T, db *sql.DB) (*UniEngine.TUniTable, *UniEn
 	eng := mysqlEngineOn(db, "?")
 	eng.VerifyOn = 1
 	eng.VerifyBy = "mysql-verify-key"
-	eng.VerifyMode = 1
+	eng.VerificationMode = 1
 
 	drop := fmt.Sprintf("drop table if exists %s", mysqlVerifyTable)
 	if eror := eng.Execute(drop); eror != nil {

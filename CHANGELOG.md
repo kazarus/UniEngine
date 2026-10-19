@@ -6,12 +6,13 @@
 
 ### 破坏性变更
 
+- **字段更名**:`TUniEngine.VerifyMode` → **`VerificationMode`**(与 `VerifyOn`/`VerifyBy`/`VerifyHook` 的 Verify 动词族区分,名称完整度更高)。结构体赋值的调用方需同步改字段名(编译器强制);当前无已投产消费者,语义与取值不变(0/1=宽容、2=严格)。
 - **删除 `DecryptResult`**:全生态(库内/下游项目)零引用的遗留手动逐列解密入口——现读路径(默认与结果钩子)均由引擎自动解密。删除前经三面引用普查实证。
 - **删除 `VerifyMacVer` 与旧 MAC v1 格式**:仅保留 `MAC:` 标签;载荷统一为 `UniMac` 头 + 表名 + 列数 + 逐列(列名+长度+值),仅需 HMAC-SHA256。旧 v1 `MAC:` 行不再验签;适用于未投产、无旧数据的部署。`verifyPayloadV2` 已重命名为 `verifyPayload`。
 
 ### 行为修复
 
-- **宽容验签模式放行 MAC 不匹配**:`VerifyMode=0/1` 下,非空、带 `MAC:`、Base64 合法但 HMAC 不匹配的行改为记录 `UniEngine: verify warning: ... MAC mismatch ...` 后放行,不再阻断读取;`VerifyMode=2` 仍报 `Row integrity check failed`。这是安全姿态放宽,生产稳态应使用 2 并监控告警。
+- **宽容验签模式放行 MAC 不匹配**:`VerificationMode=0/1` 下,非空、带 `MAC:`、Base64 合法但 HMAC 不匹配的行改为记录 `UniEngine: verify warning: ... MAC mismatch ...` 后放行,不再阻断读取;`VerificationMode=2` 仍报 `Row integrity check failed`。这是安全姿态放宽,生产稳态应使用 2 并监控告警。
 
 - **注册双键冲突不再静默覆盖**:`RegisterClass` 此前无条件写 `HashTabl[lower(table)]` 与 `HashTabl[class]`。现在发布前校验:
   - 类已登记到另一个表名 → `ErrClassConflict`;
@@ -100,7 +101,7 @@
 - SQL Server 的 16 个真库子例覆盖原始绑定矩阵、有效组合读写和错误组合初始化拒绝。
 - 同表 `RegisterTable/RegisterField/RegisterPkeys` 改为复制并发布元数据快照,允许与读取并发;已取得的旧指针继续使用旧快照。直接修改返回的 `*TUniTable` 仍须遵守并发契约。
 - 缺省 `VerifyMacVer=0` 改为写 `MAC2:` v2 载荷;显式 `VerifyMacVer=1` 保留旧 v1 写法。读取仍按标签兼容 v1 行,但存量数据需要重签才能全面获得 v2 防歧义保证。
-- `VerifyMode=2` 的结构体读取若缺保护列或 MAC 列,或使用无法由引擎验签的结果钩子,现在返回 `ErrIncompleteVerification`。
+- `VerificationMode=2` 的结构体读取若缺保护列或 MAC 列,或使用无法由引擎验签的结果钩子,现在返回 `ErrIncompleteVerification`。
 - 内置派生密钥缓存最多 128 项;冷解密仅在 GCM 认证通过后缓存派生结果。
 - **`SetVerify` 之后主键冻结**(评审 Q2 的顺序变体,安全收紧):此前可在 `SetVerify` 成功后继续用 `SetKeys`/`AutoKeys`/`RegisterPkeys` 追加主键,使「主键必须全部纳入 MAC 载荷」这一保证失效(实测:事后追加的主键列被改写,原 MAC 仍通过验签)。现在这三种调用一律被拒并返回 `ErrPkeysFrozenAfterVerify`,且**不写入任何主键**;`AutoKeys` 的守卫置于最前,连元数据查询都不发起;`RegisterPkeys` 直接返回未注册表,**不克隆也不发布**,已发布快照的主键集合不变。被拒只影响后续登记,数据面读写与既有绑定不受影响。需变更主键请重新 `RegisterClass` 后按 `[SetKeys/AutoKeys → SetVerify]` 顺序登记;`VerifyOn=false`(含 `SetVerify` 失败)时主键不冻结,正常登记顺序不受影响。
 - **`SetKeys` 拒绝只读标记字段作主键**(评估发现,行为收紧):`db:"-"` / `db:"_"` 的 `FieldName` 就是标记本身、**没有真实列名**,作主键会生成 `-=?` 这类非法 WHERE;而 `pkeyFields` 只过滤 `AttriName` 为空、**不过滤 `ReadOnly`**,故 `Update`/`Delete`/`SaveIt`/`SaveItWhenNotExist` 的 WHERE 会一并语法错误(真机实测 `Error 1064 (42000)`),`PrepareRunSQL(EtDelete)` 同理。现在登记期直接拒绝且不写入主键。**只拦标记字段**:`db:"real_col,readonly"` 有真实列名,作 WHERE 定位键依然合法(回归用例 `TestSetKeysRejectsReadonlyMarker` 含该正向对照)。其余入口本已封住——`RegisterPkeys("-")` 被标识符白名单拒绝,`AutoKeys` 取库内真实列名。
@@ -297,7 +298,7 @@
 - **写路径**：`Insert`/`Update`/`InsertL`/`CopyInL`/`SaveIt`（含 `SaveItWhenNotExist`；`CopyInP`/`SpecialInsertL*`/PolarDB `InsertP` 分页均汇入 `CopyInLCtx`/`InsertLCtx`）组装 SQL/COPY 数据前按结构体当前值重算 MAC 回填伴随字段；幂等，`SaveIt` 回退链重复调用无副作用。注意 `Update` 是整行语义，更新前须先读后改（与本引擎既有契约一致）。
 - **读路径**：`Select`/`SelectL`/`SelectM`/`SelectH` 在解密后逐行验签（secreton 列参与载荷的是明文）；SELECT 未覆盖全部保护列+MAC 列时,宽容模式沿用跳过验签,严格模式返回 `ErrIncompleteVerification`；比对用 `crypto/hmac.Equal` 常量时间比较，失败即报错（文案不含载荷与行值）。
 - **算法**：内置 HMAC-SHA256（密钥 `VerifyBy`）；赋值 `VerifyHook` 可接管为 HMAC-SM3/密码机等应用实现。
-- **模式**：`VerifyOn` 引擎级总开关（0=关）；`VerifyMode` 1=宽容（无标签存量行直通，回填期用）→ 2=严格（无标签行报错，回填完成后切换）；非空但无标签的值一律报错。
+- **模式**：`VerifyOn` 引擎级总开关（0=关）；`VerificationMode` 1=宽容（无标签存量行直通，回填期用）→ 2=严格（无标签行报错，回填完成后切换）；非空但无标签的值一律报错。
 - **范围外**（与 secreton 同口径）：自定义 SQL 钩子类（`HasGetSqlUpdate`/`HasGetSqlInsert`/`HasSetSqlValues[L]`/`HasSetSqlResult`）与裸 `Execute` 语句不经签名/验签。
 
 ## ai-dev-20260904

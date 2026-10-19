@@ -229,7 +229,7 @@ func (r hookCopyVerifyRow) CopyInSetSqlValuesL(e *TUniEngine, qt TQueryType, Row
 func TestCopyInHookRejectedWhenVerifyActive(t *testing.T) {
 	d := &mockDriver{}
 	eng := &TUniEngine{Db: sql.OpenDB(mockConnector{d: d}), ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		VerifyOn: 1, VerifyMode: 1, VerifyBy: "verify-key"}
+		VerifyOn: 1, VerificationMode: 1, VerifyBy: "verify-key"}
 	eng.Initialize()
 	eng.RegisterClass(hookCopyVerifyRow{}, "hook_copy_verify").SetKeys("id").SetVerify("mac", "id", "name")
 

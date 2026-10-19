@@ -35,7 +35,7 @@ func verifyRowColumns() []string {
 func newVerifyTestEngine(d *mockDriver) *TUniEngine {
 	db := sql.OpenDB(mockConnector{d: d})
 	eng := &TUniEngine{Db: db, ColLabel: "db", ColParam: "$", Provider: DtPOSTGR,
-		VerifyOn: 1, VerifyMode: 1, VerifyBy: "test-verify-key"}
+		VerifyOn: 1, VerificationMode: 1, VerifyBy: "test-verify-key"}
 	eng.Initialize()
 	eng.RegisterClass(TVerifyRow{}, "tbl_verify_row").
 		SetKeys("who_build", "user_indx").
@@ -276,7 +276,7 @@ func TestVerifySelectTamperLenient(t *testing.T) {
 // #测试6b:严格模式 MAC 不匹配仍 fail-closed
 func TestVerifySelectTamperStrict(t *testing.T) {
 	eng := newVerifyTestEngine(&mockDriver{})
-	eng.VerifyMode = 2
+	eng.VerificationMode = 2
 	row := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "mast"}
 
 	d := &mockDriver{
@@ -305,7 +305,7 @@ func TestVerifyLegacyRowMode(t *testing.T) {
 
 	//#严格:回填完成后切换,无标签行按篡改处理
 	eng2 := newVerifyTestEngine(&mockDriver{columns: verifyRowColumns(), queryRows: [][]driver.Value{base}})
-	eng2.VerifyMode = 2
+	eng2.VerificationMode = 2
 	eror := eng2.SelectL(&rows, "select "+verifyRowCols+" from tbl_verify_row")
 	if eror == nil || !strings.Contains(eror.Error(), "no mac value") {
 		t.Fatalf("strict mode must reject legacy rows, got: %v", eror)

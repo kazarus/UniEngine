@@ -145,7 +145,7 @@ func TestStrictVerifyRejectsIncompleteProjection(t *testing.T) {
 	d := &mockDriver{columns: []string{"who_build", "user_indx"}, queryRows: [][]driver.Value{{int64(1), int64(2)}}}
 	e := newVerifyTestEngine(d)
 	defer e.Db.Close()
-	e.VerifyMode = 2
+	e.VerificationMode = 2
 	var rows []TVerifyRow
 	if eror := e.SelectL(&rows, "select who_build,user_indx from tbl_verify_row"); !errors.Is(eror, ErrIncompleteVerification) {
 		t.Fatalf("strict mode must reject a partial projection: %v", eror)
@@ -159,7 +159,7 @@ func TestDefaultMACWritesAndReads(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "mac-default-key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "mac-default-key"
 	if eror := e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b").LastError; eror != nil {
 		t.Fatal(eror)
 	}
@@ -181,7 +181,7 @@ func TestDefaultMACWritesAndReads(t *testing.T) {
 func TestStrictVerifyRejectsCustomResultHook(t *testing.T) {
 	e := newMockEngine(&mockDriver{})
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "key"
 	if eror := e.RegisterClass(setSqlResultRow{}, "hook_verify").SetKeys("user_name").SetVerify("password", "user_name").LastError; eror != nil {
 		t.Fatal(eror)
 	}

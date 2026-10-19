@@ -115,7 +115,7 @@ func TestQ4VerifyValueParamReturnsErrorNotPanic(t *testing.T) {
 			d := &mockDriver{columns: verifyRowColumns()}
 			e := newVerifyTestEngine(d)
 			defer e.Db.Close()
-			e.VerifyMode = 2
+			e.VerificationMode = 2
 
 			r := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "ok"}
 			var eror error
@@ -148,7 +148,7 @@ func TestQ4VerifyPointerParamStillBackfills(t *testing.T) {
 	d := &mockDriver{columns: verifyRowColumns()}
 	e := newVerifyTestEngine(d)
 	defer e.Db.Close()
-	e.VerifyMode = 2
+	e.VerificationMode = 2
 
 	r := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "ok"}
 	if eror := e.Insert(&r); eror != nil {

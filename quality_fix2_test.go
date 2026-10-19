@@ -50,7 +50,7 @@ func TestQ1MacTamperRejected(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "q1-test-key"
 	tbl := e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 	if tbl.LastError != nil {
 		t.Fatal(tbl.LastError)
@@ -78,7 +78,7 @@ func TestQ1MacCollisionMACsDiffer(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "q1-test-key"
 	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 
 	r1 := reviewMACRow{ID: 1, A: "admin\x1f0", B: "user"}
@@ -99,7 +99,7 @@ func TestQ1MacWeirdValuesRoundTrip(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "q1-test-key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "q1-test-key"
 	e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 
 	r := reviewMACRow{ID: 7, A: "分隔符\x1f测试", B: ""}
@@ -196,7 +196,7 @@ func TestQ2FullCoverageTamperRejected(t *testing.T) {
 	d := &mockDriver{columns: verifyRowColumns()}
 	e := newVerifyTestEngine(d)
 	defer e.Db.Close()
-	e.VerifyMode = 2
+	e.VerificationMode = 2
 
 	r := TVerifyRow{WhoBuild: 1, UserIndx: 2, DataStat: 1, MastName: "allowed"}
 	if eror := e.Insert(&r); eror != nil {

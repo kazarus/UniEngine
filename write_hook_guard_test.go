@@ -108,7 +108,7 @@ func TestInsertHookRejectedWhenVerifyActive(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
 	eng.VerifyOn = 1
-	eng.VerifyMode = 1
+	eng.VerificationMode = 1
 	eng.VerifyBy = "test-verify-key"
 	eng.RegisterClass(hookGuardUser{}, "hook_guard_user").SetKeys("user_name").
 		SetVerify("mac_text", "user_name", "password")

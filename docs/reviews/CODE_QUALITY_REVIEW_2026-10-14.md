@@ -153,7 +153,7 @@
 改值：A = "admin"，     B = "0\x1fuser"
 ```
 
-探针先通过 `Insert(&row)` 取得正常签名，再把两列改成第二组值，保留原 MAC，最后通过公共 `Select` 读取；即使 `VerifyMode=2` 也返回成功。
+探针先通过 `Insert(&row)` 取得正常签名，再把两列改成第二组值，保留原 MAC，最后通过公共 `Select` 读取；即使 `VerificationMode=2` 也返回成功。
 
 **影响条件：** 攻击者能修改存储中的受保护字符串，且字段允许该控制字符；引擎本身没有约束此字符。这不是 HMAC 算法碰撞，而是不同数据被编码成同一载荷。
 
@@ -285,7 +285,7 @@ type Row struct {
 - SQL Server 应显式记录驱动模式，并校验与 `ColParam` 的组合。仓库已详细记录 `mssql` 与 `sqlserver` 的差异，下一步应让错误配置在执行前失败；不能简单把全族统一改成 `@p`。
 - 注册链的 `LastError` 需要调用方主动检查。建议 CRUD 遇到存在 `LastError` 的表时拒绝继续执行，避免半完成的主键/加密配置流入运行阶段。
 - 为 `Update/Delete` 提供可选的受影响行数结果或严格版本，使“没有匹配任何行”可被业务区分。
-- 对部分列查询、标量查询和自定义扫描钩子的校验边界给出统一说明。当前部分列读取会跳过验签，即使 `VerifyMode=2` 也不代表每次查询都验签；可新增严格读取接口，在缺少保护列时返回错误。
+- 对部分列查询、标量查询和自定义扫描钩子的校验边界给出统一说明。当前部分列读取会跳过验签，即使 `VerificationMode=2` 也不代表每次查询都验签；可新增严格读取接口，在缺少保护列时返回错误。
 
 ### 5.2 测试：优先提高断言质量和场景覆盖
 
@@ -428,7 +428,7 @@ func TestReviewMACSeparatorCollision(t *testing.T) {
 	d := &mockDriver{columns: []string{"id", "a", "b", "mac"}}
 	e := newMockEngine(d)
 	defer e.Db.Close()
-	e.VerifyOn, e.VerifyMode, e.VerifyBy = 1, 2, "review-test-key"
+	e.VerifyOn, e.VerificationMode, e.VerifyBy = 1, 2, "review-test-key"
 	tbl := e.RegisterClass(reviewMACRow{}, "review_mac").SetKeys("id").SetVerify("mac", "id", "a", "b")
 	if tbl.LastError != nil {
 		t.Fatal(tbl.LastError)
@@ -452,7 +452,7 @@ func TestReviewCompositeKeyPartialBinding(t *testing.T) {
 	d := &mockDriver{columns: verifyRowColumns()}
 	e := newVerifyTestEngine(d)
 	defer e.Db.Close()
-	e.VerifyMode = 2
+	e.VerificationMode = 2
 	tbl := e.GetTable("tbl_verify_row").SetVerify("mac_text", "who_build", "data_stat", "mast_name")
 	if tbl.LastError != nil {
 		t.Fatal(tbl.LastError)

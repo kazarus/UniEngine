@@ -11,13 +11,13 @@ import (
 	"testing"
 )
 
-// #宽容模式(VerifyMode=1)下结果钩子 + 激活验签同样必须拒绝:
+// #宽容模式(VerificationMode=1)下结果钩子 + 激活验签同样必须拒绝:
 // #宽容跳过验签是给"无标签存量行"的回填期语义,不是给接管整行的钩子的
 func TestSelectLHookRejectedWhenVerifyLenient(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
 	eng.VerifyOn = 1
-	eng.VerifyMode = 1 //#宽容模式,缺省值,显式写出以标明被测对象
+	eng.VerificationMode = 1 //#宽容模式,缺省值,显式写出以标明被测对象
 	eng.VerifyBy = "test-verify-key"
 	eng.RegisterClass(setSqlResultRow{}, "hook_verify").SetKeys("user_name").
 		SetVerify("password", "user_name")
