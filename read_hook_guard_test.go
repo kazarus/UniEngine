@@ -6,14 +6,14 @@ package UniEngine
 
 import (
 	"database/sql/driver"
-	"errors"
 	"strings"
 	"testing"
 )
 
-// #宽容模式(VerificationMode=1)下结果钩子 + 激活验签同样必须拒绝:
-// #宽容跳过验签是给"无标签存量行"的回填期语义,不是给接管整行的钩子的
-func TestSelectLHookRejectedWhenVerifyLenient(t *testing.T) {
+// #宽容模式(VerificationMode=1)下结果钩子 + 激活验签:引擎按结果列覆盖预解析,
+// #覆盖完整时正常验签、覆盖不足时跳过;不再对钩子类整体 fail-fast
+// #(原策略见 git 历史:钩子接管整行时引擎无从判断可验性)
+func TestSelectLHookVerifyLenientAllowed(t *testing.T) {
 	d := &mockDriver{}
 	eng := newMockEngine(d)
 	eng.VerifyOn = 1
@@ -24,11 +24,11 @@ func TestSelectLHookRejectedWhenVerifyLenient(t *testing.T) {
 
 	var rows []setSqlResultRow
 	eror := eng.SelectL(&rows, "select user_name,password from hook_verify")
-	if !errors.Is(eror, ErrIncompleteVerification) {
-		t.Fatalf("宽容模式下结果钩子 + 激活验签应报 ErrIncompleteVerification: %v", eror)
+	if eror != nil {
+		t.Fatalf("宽容模式下结果钩子应放行(零行不触发验签): %v", eror)
 	}
-	if len(d.queries) != 0 {
-		t.Fatalf("被拒后不应有任何 SQL 执行: %v", d.queries)
+	if len(d.queries) != 1 {
+		t.Fatalf("钩子查询应正常执行: %v", d.queries)
 	}
 }
 

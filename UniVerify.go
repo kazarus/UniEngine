@@ -290,7 +290,7 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 				break
 			}
 		}
-		if Found < 0 {
+		if Found < 0 || FieldIdx[Found] < 0 {
 			if this.verifyStrict() {
 				return nil, fmt.Errorf("%w: table[%s] query omits protected column[%s]", ErrIncompleteVerification, UniTable.TableName, LowerTxt)
 			}

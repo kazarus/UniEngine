@@ -69,13 +69,10 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	if UniTable == nil {
 		return fmt.Errorf("%w: %s", ErrUnregisteredClass, TablName)
 	}
-	//#读钩子验签守卫:结果钩子接管整行填充,引擎侧验签对钩子路径不生效,激活态下
-	//#放行等于静默免验签,故 fail-fast。严格/宽容模式一并拒绝——宽容跳过验签是给
-	//#"无标签存量行"的回填期语义,不是给接管整行的结果钩子的(投影哪些列都不经
-	//#引擎,无从判断可验性)。加密侧不走拒绝:secreton 结果列在交接钩子前解密(见下)
-	if HasHook && this.verifyActive(UniTable) {
-		return fmt.Errorf("%w: table[%s] custom result hook cannot be verified by the engine", ErrIncompleteVerification, UniTable.TableName)
-	}
+	//#结果钩子路径验签:钩子接管整行填充,但引擎仍持有结果列清单,按与默认路径
+	//#相同的"列覆盖"口径预解析验签上下文,并在钩子填好结构体后补一次验签;
+	//#钩子未投影保护列/MAC 列时,严格模式报 ErrIncompleteVerification、宽容模式
+	//#沿用跳过语义。加密侧:secreton 结果列在交接钩子前解密(见下)
 
 	this.sqlDebug("select", SqlQuery, Args)
 
@@ -99,39 +96,43 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	Fields := make([]interface{}, length)
 	Values := make([]interface{}, length)
 
-	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描
+	//#热路径预计算:列→字段下标一次解析,行循环内避免每行每列的 FieldByName 线性扫描。
+	//#非钩子路径要求结果列全部能在类中定位;钩子路径允许钩子自取计算列/别名,
+	//#只映射能识别的列(验签只关心保护列与 MAC 列,其余列由钩子自行消费)。
 	FieldIdx := make([]int, length)
+	for Idx := range FieldIdx {
+		FieldIdx[Idx] = -1
+	}
 	EncryIdx := make([]int, 0, 2)
+
+	for ColIndex, ItemPara := range Column {
+		UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
+		if !Valid {
+			if HasHook {
+				continue
+			}
+			return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, elemType.String())
+		}
+		Sf, Ok := elemType.FieldByName(UniField.AttriName)
+		if !Ok {
+			return fmt.Errorf("UniEngine: class[%s] has no attribute[%s]", elemType.String(), UniField.AttriName)
+		}
+		//#仅支持扁平类:内嵌结构体的提升字段 Index 长度>1,取 [0] 会错绑到内嵌字段本身
+		if len(Sf.Index) != 1 {
+			return fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", elemType.String(), UniField.AttriName)
+		}
+		FieldIdx[ColIndex] = Sf.Index[0]
+
+		if !HasHook && UniField.SecretOn {
+			EncryIdx = append(EncryIdx, Sf.Index[0])
+		}
+	}
 
 	//#完整性验签预解析:SELECT 列覆盖全部保护列与 MAC 列时返回上下文;
 	//#宽容模式下部分列查询沿用跳过验签语义,严格模式返回 ErrIncompleteVerification。
-	var RowVerify *verifyRowCtx
-
-	if !HasHook {
-		for ColIndex, ItemPara := range Column {
-			UniField, Valid := UniTable.HashField[strings.ToLower(ItemPara)]
-			if !Valid {
-				return fmt.Errorf("UniEngine: database have field[%s], but not in class[%s]", ItemPara, elemType.String())
-			}
-			Sf, Ok := elemType.FieldByName(UniField.AttriName)
-			if !Ok {
-				return fmt.Errorf("UniEngine: class[%s] has no attribute[%s]", elemType.String(), UniField.AttriName)
-			}
-			//#仅支持扁平类:内嵌结构体的提升字段 Index 长度>1,取 [0] 会错绑到内嵌字段本身
-			if len(Sf.Index) != 1 {
-				return fmt.Errorf("UniEngine: class[%s] field[%s] is promoted from an embedded struct; flat classes only", elemType.String(), UniField.AttriName)
-			}
-			FieldIdx[ColIndex] = Sf.Index[0]
-
-			if UniField.SecretOn {
-				EncryIdx = append(EncryIdx, Sf.Index[0])
-			}
-		}
-
-		RowVerify, eror = this.verifyCtxOf(UniTable, Column, FieldIdx)
-		if eror != nil {
-			return eror
-		}
+	RowVerify, eror := this.verifyCtxOf(UniTable, Column, FieldIdx)
+	if eror != nil {
+		return eror
 	}
 
 	//#结果钩子路径的解密列预解析:secreton 结果列在交接钩子前还原明文,
@@ -178,6 +179,12 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 
 			x := u.Interface().(HasSetSqlResult)
 			x.SetSqlResult(this, u.Interface(), Column, Fields)
+
+			//#钩子填好结构体后补验签:载荷与默认路径同一口径(表名域分隔+保护列明文);
+			//#列覆盖不足时 verifyCtxOf 已按严格/宽容语义处理(RowVerify 为 nil 即跳过)
+			if eror = this.verifyRow(u.Elem(), RowVerify); eror != nil {
+				return eror
+			}
 		} else {
 			Elem := u.Elem()
 			for ColIndex := range Column {
