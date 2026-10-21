@@ -1055,3 +1055,12 @@ func TestListSecretColumns(t *testing.T) {
 		t.Fatalf("duplicate SetSecret should not grow ColSecret, got %+v", tbl2.ColSecret)
 	}
 }
+
+// #无钩子时拒绝 v1 信封:内置 GCM 会把它当 legacy base64,错误信息误导
+func TestSecretRejectsV1WithoutHook(t *testing.T) {
+	eng := &TUniEngine{SecretOn: 1, SecretBy: "v1-probe-key"}
+	_, eror := eng.Secret("ENC:v1:local:-:0:AAAA", false)
+	if eror == nil || !strings.Contains(eror.Error(), "SecretHook") {
+		t.Fatalf("v1 without hook should give SecretHook error, got %v", eror)
+	}
+}

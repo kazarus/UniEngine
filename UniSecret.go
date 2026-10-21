@@ -191,6 +191,13 @@ func (this *TUniEngine) Secret(Value string, Encrypt bool) (string, error) {
 		return this.SecretHook(Value, Encrypt)
 	}
 
+	//#v1 信封是 SecretHook 层格式(ENC:v1:<vendor>:<keyRef>:<keyVer>:<payload>);
+	//#无钩子时内置 GCM 只能按 legacy base64 解析,报错会误导为"密文损坏"。
+	//#提前给出可诊断错误,提示检查 SecretOnDataBase/SecretOnPlatForm。
+	if !Encrypt && strings.HasPrefix(Value, UniSecretTag+"v1:") {
+		return "", errors.New("UniEngine: SecretHook is not configured; cannot decrypt ENC:v1 envelope; check SecretOnDataBase/SecretOnPlatForm")
+	}
+
 	return this.SecretDefault(Value, Encrypt)
 }
 
