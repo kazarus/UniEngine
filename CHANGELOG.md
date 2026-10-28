@@ -16,6 +16,7 @@
 
 ### 行为修复
 
+- **结果钩子 MAC 回填守卫**:验签激活时,`SetSqlResult` 未把库中非空的 MAC 列回填到结构体会 fail-fast(`SetSqlResult did not assign MAC column[...]`,宽容/严格模式都报),不再被宽容模式当作存量行静默跳过;库中 MAC 为空时保持原有分流语义。
 - **宽容验签模式放行 MAC 不匹配**:`VerificationMode=0/1` 下,非空、带 `MAC:`、Base64 合法但 HMAC 不匹配的行改为记录 `UniEngine: verify warning: ... MAC mismatch ...` 后放行,不再阻断读取;`VerificationMode=2` 仍报 `Row integrity check failed`。这是安全姿态放宽,生产稳态应使用 2 并监控告警。
 
 - **注册双键冲突不再静默覆盖**:`RegisterClass` 此前无条件写 `HashTabl[lower(table)]` 与 `HashTabl[class]`。现在发布前校验:

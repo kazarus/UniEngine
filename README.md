@@ -295,7 +295,8 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
   | 非空、无 `MAC:` 前缀 | 报 `Mac value is invalid` | 报 `Mac value is invalid` |
   | Base64 解码失败 | 报 `Mac value is not Base64` | 报 `Mac value is not Base64` |
   | 查询缺保护列/MAC 列 | 通常跳过验签 | 报 `ErrIncompleteVerification` |
-  | 使用 `SetSqlResult` 结果钩子且验签激活 | 报 `ErrIncompleteVerification` | 报 `ErrIncompleteVerification` |
+  | 使用 `SetSqlResult` 结果钩子且验签激活 | 列覆盖完整:正常验签(失配告警放行);缺列:跳过 | 列覆盖完整:正常验签(失配报错);缺列:报 `ErrIncompleteVerification` |
+  | 结果钩子未回填 MAC 列(库中非空) | 报 `SetSqlResult did not assign MAC column[...]` | 报 `SetSqlResult did not assign MAC column[...]` |
 
   宽容模式告警格式:
 
@@ -318,7 +319,7 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
   }
   ```
 - **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)时 fail-fast;验签激活时钩子 SQL 必须显式携带 MAC 伴随列(`VerifyAt`)且该列实参等于引擎回填值,缺失/形态不可信/值不符同样 fail-fast 且不执行 SQL。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**
-- **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。 **完整契约见 §4.2**
+- **读钩子与加密/验签**:`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——引擎按**结果列覆盖**预解析验签:投影覆盖全部保护列与 MAC 列时,钩子填好结构体后逐行补验签(失配按 `VerificationMode` 处理,`StatusHook` 同样回调);覆盖不足时严格模式返回 `ErrIncompleteVerification`(`StatusHook` 以 `Row=-1` 回调)、宽容模式沿用跳过验签语义。验签激活时 `SetSqlResult` 必须把**全部保护列与 MAC 列**按 `fields` 原值回填;库中 MAC 非空而结构体为空时直接 fail-fast(两种模式都报 `SetSqlResult did not assign MAC column[...]`),避免漏赋值被当成存量行静默跳过。激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。 **完整契约见 §4.2**
 - **COPY 钩子与加密/验签**:`CopyInL` 走 `HasCopyInGetSqlInsertL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)自定义列/值时,引擎按列名映射注册表并**就地加密**secreton 实参;列名不可映射、行长度不符、实参类型非 string/[]byte、或返回了值却没有列清单时 fail-fast 不执行 COPY。验签激活时列清单必须显式包含 MAC 伴随列且逐行实参等于引擎回填值,缺失/值不符时拒绝。`SecretOn=0` 且未验签时行为不变。
 - **钩子接收者**:所有钩子(`SetSqlResult`/`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`/`GetMapUnique`/COPY 钩子)同时支持值接收者与指针接收者 `func (u *TUser) ...`;旧实现只在部分入口识别指针接收者,现已统一。
 - **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不再打印实参值(避免明文密码/证件号进入日志)。

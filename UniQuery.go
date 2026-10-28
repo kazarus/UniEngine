@@ -185,6 +185,11 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 			x := u.Interface().(HasSetSqlResult)
 			x.SetSqlResult(this, u.Interface(), Column, Fields)
 
+			//#守卫:结果集 MAC 列有值而钩子没回填——否则空 MAC 会被宽容模式当存量行静默跳过
+			if eror = this.verifyHookAssign(u.Elem(), RowVerify, Fields, Method, RowNo); eror != nil {
+				return eror
+			}
+
 			//#钩子填好结构体后补验签:载荷与默认路径同一口径(表名域分隔+保护列明文);
 			//#列覆盖不足时 verifyCtxOf 已按严格/宽容语义处理(RowVerify 为 nil 即跳过)
 			if eror = this.verifyRow(u.Elem(), RowVerify, Method, RowNo); eror != nil {

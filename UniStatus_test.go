@@ -449,3 +449,248 @@ func TestStatusHookUnkeyedPkeysNotProjected(t *testing.T) {
 		t.Fatalf("unexpected status payload: %+v", events[0])
 	}
 }
+
+// #statusHookRow 结果钩子用例类:按列名回填,容忍结果列被裁剪(不越界取 fields)
+type statusHookRow struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+// #statusText 结果钩子取列值:驱动可能返回 string 或 []byte
+func statusText(Value interface{}) string {
+	switch Item := Value.(type) {
+	case string:
+		return Item
+	case []byte:
+		return string(Item)
+	}
+	return ""
+}
+
+func (u statusHookRow) SetSqlResult(_ *TUniEngine, obj interface{}, column []string, fields []interface{}) {
+	p, Ok := obj.(*statusHookRow)
+	if !Ok {
+		return
+	}
+	for i, name := range column {
+		Text := statusText(fields[i])
+		switch strings.ToLower(name) {
+		case "user_name":
+			p.UserName = Text
+		case "password":
+			p.Password = Text
+		}
+	}
+}
+
+// #newStatusHookEngine 构造"SetSqlResult 结果钩子类 + 激活验签"的引擎。
+func newStatusHookEngine(d *mockDriver, mode int64) *TUniEngine {
+	eng := newMockEngine(d)
+	eng.VerifyOn, eng.VerificationMode, eng.VerifyBy = 1, mode, "status-hook-key"
+	eng.RegisterClass(statusHookRow{}, "hook_verify").SetKeys("user_name").
+		SetVerify("password", "user_name")
+	return eng
+}
+
+// #测试14:结果钩子 + 宽容模式 + 列覆盖完整——行放行,StatusHook 以 Accepted=true 回调
+func TestStatusHookResultHookLenientAccepted(t *testing.T) {
+	d := &mockDriver{}
+	eng := newStatusHookEngine(d, 1)
+
+	Signed := statusHookRow{UserName: "kazarus"}
+	if eror := eng.VerifySignRow(&Signed); eror != nil {
+		t.Fatal(eror)
+	}
+
+	d.columns = []string{"user_name", "password"}
+	d.queryRows = [][]driver.Value{{"tampered", Signed.Password}}
+
+	rec := &statusRecorder{}
+	eng.StatusHook = rec.hook
+
+	var rows []statusHookRow
+	if eror := eng.SelectL(&rows, "select user_name,password from hook_verify"); eror != nil {
+		t.Fatalf("lenient mode must accept the hook row: %v", eror)
+	}
+	if len(rows) != 1 || rows[0].UserName != "tampered" {
+		t.Fatalf("lenient mode must return the row: %+v", rows)
+	}
+
+	events := rec.snapshot()
+	if len(events) != 1 || !events[0].Accepted || events[0].Row != 0 || events[0].Method != "SelectL" {
+		t.Fatalf("unexpected status payload: %+v", events)
+	}
+	if !strings.Contains(events[0].Err.Error(), "integrity check failed") {
+		t.Fatalf("unexpected status err: %v", events[0].Err)
+	}
+}
+
+// #测试15:结果钩子 + 严格模式 + 列覆盖不足——查询在读到行前失败,钩子 Row=-1 且无主键
+func TestStatusHookResultHookIncompleteStrict(t *testing.T) {
+	d := &mockDriver{columns: []string{"user_name"}, queryRows: [][]driver.Value{{"kazarus"}}}
+	eng := newStatusHookEngine(d, 2)
+
+	rec := &statusRecorder{}
+	eng.StatusHook = rec.hook
+
+	var rows []statusHookRow
+	eror := eng.SelectL(&rows, "select user_name from hook_verify")
+	if !errors.Is(eror, ErrIncompleteVerification) {
+		t.Fatalf("strict hook select missing MAC column should fail, got %v", eror)
+	}
+
+	events := rec.snapshot()
+	if len(events) != 1 || events[0].Row != -1 || events[0].Accepted || events[0].Table != "hook_verify" {
+		t.Fatalf("unexpected status payload: %+v", events)
+	}
+	if !errors.Is(events[0].Err, ErrIncompleteVerification) || len(events[0].Pkeys) != 0 {
+		t.Fatalf("unexpected status err/pkeys: %+v", events[0])
+	}
+}
+
+// #测试16:结果钩子 + 宽容模式 + 列覆盖不足——按设计跳过验签:不报错,也不产生 StatusHook 事件
+func TestStatusHookResultHookIncompleteLenientSkips(t *testing.T) {
+	d := &mockDriver{columns: []string{"user_name"}, queryRows: [][]driver.Value{{"kazarus"}}}
+	eng := newStatusHookEngine(d, 1)
+
+	rec := &statusRecorder{}
+	eng.StatusHook = rec.hook
+
+	var rows []statusHookRow
+	if eror := eng.SelectL(&rows, "select user_name from hook_verify"); eror != nil {
+		t.Fatalf("lenient hook select should skip verification, got %v", eror)
+	}
+	if len(rows) != 1 || rows[0].UserName != "kazarus" {
+		t.Fatalf("hook should still fill the row: %+v", rows)
+	}
+	if events := rec.snapshot(); len(events) != 0 {
+		t.Fatalf("skipped verification is not a failure, got %+v", events)
+	}
+}
+
+// #hookSkipMacRow 故意不回填 MAC 列的结果钩子类(验证回填守卫)
+type hookSkipMacRow struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+}
+
+func (u hookSkipMacRow) SetSqlResult(_ *TUniEngine, obj interface{}, column []string, fields []interface{}) {
+	p, Ok := obj.(*hookSkipMacRow)
+	if !Ok {
+		return
+	}
+	for i, name := range column {
+		if strings.ToLower(name) == "user_name" {
+			Text, _ := fields[i].(string)
+			p.UserName = Text
+		}
+		//#故意漏掉 password(MAC 列)
+	}
+}
+
+// #newHookSkipMacEngine 构造"漏回填 MAC 的结果钩子类 + 激活验签"的引擎。
+func newHookSkipMacEngine(d *mockDriver, Mode int64) *TUniEngine {
+	eng := newMockEngine(d)
+	eng.VerifyOn, eng.VerificationMode, eng.VerifyBy = 1, Mode, "hook-guard-key"
+	eng.RegisterClass(hookSkipMacRow{}, "hook_guard").SetKeys("user_name").
+		SetVerify("password", "user_name")
+	return eng
+}
+
+// #hookGuardMac 按 hook_guard 表计算一行合法 MAC(保护列仅 user_name)。
+func hookGuardMac(t *testing.T, eng *TUniEngine, UserName string) string {
+	t.Helper()
+	Payload, eror := verifyPayload("hook_guard", []string{"user_name"}, []int{0}, reflect.ValueOf(hookSkipMacRow{UserName: UserName}))
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	Sum, eror := eng.verifySign(Payload)
+	if eror != nil {
+		t.Fatal(eror)
+	}
+	return verifyTextOf(Sum)
+}
+
+// #测试17:结果钩子漏回填 MAC(库中有值)——两种模式都 fail-fast,并经 StatusHook 上报
+func TestVerifyHookAssignGuard(t *testing.T) {
+	for _, Mode := range []int64{1, 2} {
+		d := &mockDriver{columns: []string{"user_name", "password"}}
+		eng := newHookSkipMacEngine(d, Mode)
+		d.queryRows = [][]driver.Value{{"kazarus", hookGuardMac(t, eng, "kazarus")}}
+
+		rec := &statusRecorder{}
+		eng.StatusHook = rec.hook
+
+		var rows []hookSkipMacRow
+		eror := eng.SelectL(&rows, "select user_name,password from hook_guard")
+		if eror == nil || !strings.Contains(eror.Error(), "SetSqlResult did not assign MAC column[password]") {
+			t.Fatalf("mode=%d: hook missing MAC must fail fast, got %v", Mode, eror)
+		}
+
+		events := rec.snapshot()
+		if len(events) != 1 {
+			t.Fatalf("mode=%d: expect one status event, got %+v", Mode, events)
+		}
+		ev := events[0]
+		if ev.Table != "hook_guard" || ev.Method != "SelectL" || ev.Row != 0 || ev.Accepted {
+			t.Fatalf("mode=%d: unexpected status payload: %+v", Mode, ev)
+		}
+		if !strings.Contains(ev.Err.Error(), "did not assign MAC column") {
+			t.Fatalf("mode=%d: unexpected status err: %v", Mode, ev.Err)
+		}
+		//#回填缺失时结构体主键不可信,事件不带 Pkeys
+		if len(ev.Pkeys) != 0 {
+			t.Fatalf("mode=%d: guard event must not carry pkeys, got %+v", Mode, ev.Pkeys)
+		}
+	}
+}
+
+// #测试18:库中 MAC 为空(存量行)——守卫不误报,仍按原语义分流
+func TestVerifyHookAssignGuardAllowsEmptyRawMac(t *testing.T) {
+	//#宽容:存量直通
+	d := &mockDriver{columns: []string{"user_name", "password"}, queryRows: [][]driver.Value{{"kazarus", ""}}}
+	eng := newHookSkipMacEngine(d, 1)
+
+	rec := &statusRecorder{}
+	eng.StatusHook = rec.hook
+
+	var rows []hookSkipMacRow
+	if eror := eng.SelectL(&rows, "select user_name,password from hook_guard"); eror != nil {
+		t.Fatalf("empty raw MAC should keep legacy skip semantics: %v", eror)
+	}
+	if len(rows) != 1 || rows[0].UserName != "kazarus" {
+		t.Fatalf("row should be returned: %+v", rows)
+	}
+	if events := rec.snapshot(); len(events) != 0 {
+		t.Fatalf("empty MAC skip is not a failure: %+v", events)
+	}
+
+	//#严格:仍报 no mac value(守卫不改变既有判定)
+	d2 := &mockDriver{columns: []string{"user_name", "password"}, queryRows: [][]driver.Value{{"kazarus", ""}}}
+	eng2 := newHookSkipMacEngine(d2, 2)
+	var rows2 []hookSkipMacRow
+	eror := eng2.SelectL(&rows2, "select user_name,password from hook_guard")
+	if eror == nil || !strings.Contains(eror.Error(), "no mac value") {
+		t.Fatalf("strict mode should still report no mac value, got %v", eror)
+	}
+}
+
+// #测试19:钩子正常回填 MAC 时守卫不干预(结果集 MAC 为 []byte 也能识别)
+func TestVerifyHookAssignGuardAcceptsAssignedMac(t *testing.T) {
+	d := &mockDriver{columns: []string{"user_name", "password"}}
+	eng := newStatusHookEngine(d, 2)
+	Signed := statusHookRow{UserName: "kazarus"}
+	if eror := eng.VerifySignRow(&Signed); eror != nil {
+		t.Fatal(eror)
+	}
+	//#驱动返回 []byte 形态的 MAC 值,守卫按字符串比较
+	d.queryRows = [][]driver.Value{{"kazarus", []byte(Signed.Password)}}
+
+	var rows []statusHookRow
+	if eror := eng.SelectL(&rows, "select user_name,password from hook_verify"); eror != nil {
+		t.Fatalf("assigned MAC should pass verification: %v", eror)
+	}
+	if len(rows) != 1 || rows[0].Password != Signed.Password {
+		t.Fatalf("hook should fill MAC column: %+v", rows)
+	}
+}

@@ -72,6 +72,8 @@
 // TUniStatus{Engine, Table, Method, Row, Pkeys, Mode, Accepted, Err}:Engine 为触发事件的
 // 引擎实例,Pkeys 为当前行主键实参(供审计定位/落审计表)。钩子在查询 goroutine 内、
 // Rows 关闭前同步执行,落库请用独立连接池异步写入,勿在钩子里复用同一引擎/事务。
+// 结果钩子(SetSqlResult)必须把保护列与 MAC 列按原值回填;库中 MAC 非空而钩子未回填
+// 会被判定为漏赋值并 fail-fast,不再静默跳过。
 // 统一写 MAC: 无歧义载荷;严格模式下
 // 缺保护列或 MAC 列的结构体查询返回 ErrIncompleteVerification。内置解密的
 // 派生密钥缓存最多 128 项,认证失败的冷密文不会进入缓存。

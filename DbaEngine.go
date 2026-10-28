@@ -170,6 +170,8 @@ type HasSpecialSetSqlValuesL interface {
 }
 
 // #读取数据
+// #验签激活时,实现必须把全部保护列与 MAC 列按 fields 原值回填到 obj:
+// #库中 MAC 非空而结构体为空会被判定为"钩子漏赋值"并 fail-fast(宽容/严格模式都报)。
 type HasSetSqlResult interface {
 	SetSqlResult(*TUniEngine, interface{}, []string, []interface{})
 }

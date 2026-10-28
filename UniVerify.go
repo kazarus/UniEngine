@@ -59,12 +59,14 @@ const (
 // #verifyRowCtx 读路径逐行验签的预解析上下文(查询列覆盖保护列+MAC列时才非 nil;
 // #列不全的查询无法验签,整行跳过——与 decryptRow 的 EncryIdx 同一预计算模式)
 type verifyRowCtx struct {
-	TablName string   //#注册表名,仅用于报错定位
-	MacIdx   int      //#MAC伴随列的结构体字段下标
-	Cols     []int    //#保护列的结构体字段下标,顺序=SetVerify登记顺序=载荷顺序
-	ColsName []string //#保护列小写名,与 Cols 同序(v2 载荷逐列编码列名)
-	PkeyIdx  []int    //#结果集实际投影的主键字段下标(StatusHook 审计定位用,未投影则不出现)
-	PkeyName []string //#主键列小写名,与 PkeyIdx 同序
+	TablName   string   //#注册表名,仅用于报错定位
+	MacIdx     int      //#MAC伴随列的结构体字段下标
+	MacColIdx  int      //#MAC列在结果集中的下标(结果钩子回填守卫用)
+	MacColName string   //#MAC列小写名,仅用于报错
+	Cols       []int    //#保护列的结构体字段下标,顺序=SetVerify登记顺序=载荷顺序
+	ColsName   []string //#保护列小写名,与 Cols 同序(v2 载荷逐列编码列名)
+	PkeyIdx    []int    //#结果集实际投影的主键字段下标(StatusHook 审计定位用,未投影则不出现)
+	PkeyName   []string //#主键列小写名,与 PkeyIdx 同序
 }
 
 // #verifyActive 引擎与表两侧开关同时打开才生效
@@ -331,9 +333,11 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 	}
 
 	MacIdx := -1
+	MacColIdx := -1
 	for ColIndex, ItemCol := range Column {
 		if strings.ToLower(ItemCol) == LowerCol {
 			MacIdx = FieldIdx[ColIndex]
+			MacColIdx = ColIndex
 			break
 		}
 	}
@@ -360,8 +364,8 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 		}
 	}
 
-	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols, ColsName: ColsName,
-		PkeyIdx: PkeyIdx, PkeyName: PkeyName}, nil
+	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, MacColIdx: MacColIdx, MacColName: LowerCol,
+		Cols: Cols, ColsName: ColsName, PkeyIdx: PkeyIdx, PkeyName: PkeyName}, nil
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。
@@ -396,6 +400,52 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx, Method 
 	if Accepted {
 		return nil
 	}
+
+	return eror
+}
+
+// #verifyHookAssign 结果钩子回填守卫:结果集里 MAC 列有非空值,但 SetSqlResult 没有回填
+// #到结构体时 fail-fast。
+// #为什么需要:钩子路径验签以结构体为源,空 MAC 在宽容模式会被当成存量行静默跳过——
+// #钩子漏赋值会让整条链路"看起来验过了",实际根本没验。
+// #只判定"库里有值、结构体没值"这一种;钩子回填了错值仍交给正常验签(失配照常上报)。
+// #原始值为 NULL/空串时放行,维持"空 MAC 按 VerificationMode 分流"的既有语义。
+func (this *TUniEngine) verifyHookAssign(v reflect.Value, RowCtx *verifyRowCtx, Fields []interface{}, Method string, Row int) error {
+	if RowCtx == nil || v.Kind() != reflect.Struct {
+		return nil
+	}
+	if RowCtx.MacIdx < 0 || RowCtx.MacIdx >= v.NumField() {
+		return nil
+	}
+	if RowCtx.MacColIdx < 0 || RowCtx.MacColIdx >= len(Fields) {
+		return nil
+	}
+
+	Raw := Fields[RowCtx.MacColIdx]
+	if Raw == nil {
+		return nil
+	}
+
+	var RawText string
+	switch Item := Raw.(type) {
+	case string:
+		RawText = Item
+	case []byte:
+		RawText = string(Item)
+	default:
+		RawText = fmt.Sprint(Item)
+	}
+	if RawText == "" {
+		return nil
+	}
+
+	if v.Field(RowCtx.MacIdx).String() != "" {
+		return nil
+	}
+
+	eror := fmt.Errorf("UniEngine: verify fail: table[%s] SetSqlResult did not assign MAC column[%s]; hook path cannot be verified", RowCtx.TablName, RowCtx.MacColName)
+	//#不带 RowCtx:回填缺失时结构体里的主键也可能是零值,不能作为审计定位上报
+	this.verifyStatus(TUniStatus{Table: RowCtx.TablName, Method: Method, Row: Row, Err: eror}, nil, reflect.Value{})
 
 	return eror
 }
