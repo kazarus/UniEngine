@@ -10,6 +10,10 @@
 - **删除 `DecryptResult`**:全生态(库内/下游项目)零引用的遗留手动逐列解密入口——现读路径(默认与结果钩子)均由引擎自动解密。删除前经三面引用普查实证。
 - **删除 `VerifyMacVer` 与旧 MAC v1 格式**:仅保留 `MAC:` 标签;载荷统一为 `UniMac` 头 + 表名 + 列数 + 逐列(列名+长度+值),仅需 HMAC-SHA256。旧 v1 `MAC:` 行不再验签;适用于未投产、无旧数据的部署。`verifyPayloadV2` 已重命名为 `verifyPayload`。
 
+### 新增
+
+- **`TUniEngine.StatusHook` 验签失败通知**:完整性校验失败时同步回调 `TUniStatus{Engine, Table, Method, Row, Pkeys, Mode, Accepted, Err}`,供下游写日志/监控/审计表。`Engine` 为触发事件的引擎实例;`Pkeys` 为当前行主键实参(登记顺序、仅限结果集投影的主键列,JSON 标签 `column`/`value`;`Row=-1` 或未投影时为空)。严格模式报错、宽容模式放行(`Accepted=true`)、严格模式列投影不足(`Row=-1`)都会回调;验签通过或宽容模式缺列跳过不回调。钩子只观察:不改变返回值与错误文本,不含主键之外的行值/MAC;为空时行为与旧版完全一致。审计表落库示例见 `example_test.go`(`ExampleTUniEngine_StatusHook_auditTable`)。
+
 ### 行为修复
 
 - **宽容验签模式放行 MAC 不匹配**:`VerificationMode=0/1` 下,非空、带 `MAC:`、Base64 合法但 HMAC 不匹配的行改为记录 `UniEngine: verify warning: ... MAC mismatch ...` 后放行,不再阻断读取;`VerificationMode=2` 仍报 `Row integrity check failed`。这是安全姿态放宽,生产稳态应使用 2 并监控告警。

@@ -50,6 +50,7 @@ type TUniEngine struct {
 	VerifyBy         string      //#内置HMAC-SHA256密钥,推荐BASE64#VerifyHook非空时不使用
 	VerificationMode int64       //#验签模式#1=宽容(空MAC跳过;非空MAC不匹配记录告警并放行);2=严格(空MAC/不匹配均报错);0及其它按1处理
 	VerifyHook       TVerifyHook //#应用完整性钩子#为空时使用内置HMAC-SHA256#应用可实现国密HMAC-SM3等
+	StatusHook       TStatusHook //#完整性校验失败通知钩子#为空时不通知;严格报错与宽容放行都回调(带引擎/行主键),不改变返回值
 
 	CopyInHook TCopyInHook //#COPY协议执行钩子#为空时使用内置pq风格协议(lib/pq兼容)
 

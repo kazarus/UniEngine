@@ -55,10 +55,11 @@ func (this *TUniEngine) selectColsCtx(Ctx context.Context, SqlQuery string, Dst 
 
 // selectRowsCtx 行查询公共核心,Select/L/M/H 共用：逐行解码后交给 sink 写入目标容器
 // （单个 struct / 切片 / map 由调用方决定）。HasSetSqlResult 钩子类的探测结果由
-// 调用方传入,保持各方法原有的钩子识别语义。
+// 调用方传入,保持各方法原有的钩子识别语义。Method 为触发入口名,仅用于 StatusHook
+// 定位(SelectCtx 等变体与同名方法一致)。
 // sink 第二参数为列→字段下标(热路径预计算结果,钩子路径传原始空切片)——
 // 单 struct 目标用它做按列合并,其余容器目标忽略即可。
-func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type, HasHook bool, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
+func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type, HasHook bool, Method string, SqlQuery string, sink func(reflect.Value, []int) error, Args ...interface{}) error {
 	SqlQuery, Args, eror := this.getSqlQuery(SqlQuery, Args...)
 	if eror != nil {
 		return eror
@@ -132,6 +133,8 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	//#宽容模式下部分列查询沿用跳过验签语义,严格模式返回 ErrIncompleteVerification。
 	RowVerify, eror := this.verifyCtxOf(UniTable, Column, FieldIdx)
 	if eror != nil {
+		//#投影不足=无法验签:严格模式在读到任何行之前即失败,行号记 -1 交给 StatusHook
+		this.verifyStatus(TUniStatus{Table: UniTable.TableName, Method: Method, Row: -1, Err: eror}, nil, reflect.Value{})
 		return eror
 	}
 
@@ -146,7 +149,9 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 		}
 	}
 
+	RowNo := -1
 	for Rows.Next() {
+		RowNo++
 		u := reflect.New(elemType)
 
 		if HasHook {
@@ -182,7 +187,7 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 
 			//#钩子填好结构体后补验签:载荷与默认路径同一口径(表名域分隔+保护列明文);
 			//#列覆盖不足时 verifyCtxOf 已按严格/宽容语义处理(RowVerify 为 nil 即跳过)
-			if eror = this.verifyRow(u.Elem(), RowVerify); eror != nil {
+			if eror = this.verifyRow(u.Elem(), RowVerify, Method, RowNo); eror != nil {
 				return eror
 			}
 		} else {
@@ -200,7 +205,7 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 			}
 
 			//#完整性验签:先解密后验签(secreton 列参与载荷的是明文)
-			if eror = this.verifyRow(Elem, RowVerify); eror != nil {
+			if eror = this.verifyRow(Elem, RowVerify, Method, RowNo); eror != nil {
 				return eror
 			}
 		}
@@ -293,7 +298,7 @@ func (this *TUniEngine) SelectCtx(Ctx context.Context, i interface{}, SqlQuery s
 	//#VerifyDX 的 FROM_WHO_BUILD);钩子类仍整结构体替换,填充范围由类自身
 	//#SetSqlResult 决定;零行结果不触发 sink,目标原样保留
 	RowCount := 0
-	return this.selectRowsCtx(Ctx, t, HasHook, SqlQuery, func(Row reflect.Value, FieldIdx []int) error {
+	return this.selectRowsCtx(Ctx, t, HasHook, "Select", SqlQuery, func(Row reflect.Value, FieldIdx []int) error {
 		RowCount++
 		if RowCount > 1 {
 			return errors.New("UniEngine: method [Select] expects a single row, but the query returned more; use [SelectL]")
@@ -340,7 +345,7 @@ func (this *TUniEngine) SelectLCtx(Ctx context.Context, i interface{}, SqlQuery 
 	//#整批语义:查询中途失败(扫描错误/rows.Err)时回滚本次已追加的行,
 	//#与 README/doc.go 的"SelectL 失败即整批丢弃"保持一致;调用方预置的元素不动。
 	StartLen := Result.Len()
-	eror := this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	eror := this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), "SelectL", SqlQuery, func(Row reflect.Value, _ []int) error {
 		Result.Set(reflect.Append(Result, Row))
 		return nil
 	}, Args...)
@@ -395,7 +400,7 @@ func (this *TUniEngine) SelectMCtx(Ctx context.Context, i interface{}, SqlQuery 
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), "SelectM", SqlQuery, func(Row reflect.Value, _ []int) error {
 		UniqueHook, Ok := hookOf[HasGetMapUnique](Row)
 		if !Ok {
 			return fmt.Errorf("UniEngine: class[%s] does not Implemented [HasGetMapUnique]", t.String())
@@ -449,7 +454,7 @@ func (this *TUniEngine) SelectHCtx(Ctx context.Context, i interface{}, f GetMapU
 
 	var Result = reflect.Indirect(reflect.ValueOf(i))
 
-	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), SqlQuery, func(Row reflect.Value, _ []int) error {
+	return this.selectRowsCtx(Ctx, t, typeHasHook(t, THasSetSqlResult), "SelectH", SqlQuery, func(Row reflect.Value, _ []int) error {
 		MapUnique := f(Row.Interface())
 		KeyValue := reflect.ValueOf(MapUnique)
 		if !KeyDirect {

@@ -68,6 +68,10 @@
 // 内置实现为 PBKDF2-HMAC-SHA256 派生密钥 + AES-256-GCM(密文自包含盐与迭代数);
 // SecretHook 可接管为业务密钥/国密/加密机。存量明文(无 ENC: 标签)读取时直通,便于渐进迁移。
 // 另提供存储完整性校验(SetVerify):对登记的保护列写时签名、读时验签。
+// 验签失败(含宽容模式放行、严格模式列投影不足)经 TUniEngine.StatusHook 回调
+// TUniStatus{Engine, Table, Method, Row, Pkeys, Mode, Accepted, Err}:Engine 为触发事件的
+// 引擎实例,Pkeys 为当前行主键实参(供审计定位/落审计表)。钩子在查询 goroutine 内、
+// Rows 关闭前同步执行,落库请用独立连接池异步写入,勿在钩子里复用同一引擎/事务。
 // 统一写 MAC: 无歧义载荷;严格模式下
 // 缺保护列或 MAC 列的结构体查询返回 ErrIncompleteVerification。内置解密的
 // 派生密钥缓存最多 128 项,认证失败的冷密文不会进入缓存。

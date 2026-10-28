@@ -20,6 +20,33 @@ import (
 // #然后赋值给 TUniEngine.VerifyHook,即可接管全部保护列的签名与验签
 type TVerifyHook func(Payload []byte) ([]byte, error)
 
+// #TUniPkey 行主键实参:Column 为登记列名(小写),Value 为该字段的原始 Go 值。
+// #供下游审计定位(写审计表/追查具体行);JSON 标签便于直接序列化落库。
+type TUniPkey struct {
+	Column string      `json:"column"`
+	Value  interface{} `json:"value"`
+}
+
+// #完整性校验失败事件:交给 TStatusHook 的载荷。
+// #携带定位信息、引擎实例与当前行主键,供应用写日志/监控或直接落审计表;
+// #不含主键之外的行值、MAC 与 HMAC 载荷。Pkeys 含主键实参,写日志时请注意脱敏。
+type TUniStatus struct {
+	Engine   *TUniEngine //#触发事件的引擎实例(多引擎共用钩子/审计落库时用于取 Db/Provider/DataBase)
+	Table    string      //#注册表名(SetVerify 所在表)
+	Method   string      //#触发入口:Select/SelectL/SelectM/SelectH(*Ctx 变体同名)
+	Mode     int64       //#本次生效的 VerificationMode;0/1=宽容,2=严格
+	Row      int         //#结果集行号(0 基);-1 表示非行级失败(列投影不足,尚未读到行)
+	Pkeys    []TUniPkey  //#当前行主键实参(登记顺序,仅限结果集实际投影的主键列);Row=-1 或未投影时为空
+	Accepted bool        //#true=宽容模式已放行(行仍返回调用方);false=失败已作为 error 上抛
+	Err      error       //#失败原因;恒非 nil,文本不含行值/载荷
+}
+
+// #应用完整性状态钩子:验签失败时同步回调一次——严格模式报错、宽容模式放行、
+// #严格模式列投影不足都在此列。钩子只观察、不参与判定:返回值与错误文本不受影响;
+// #实现须并发安全且不得阻塞查询(引擎在查询 goroutine 内同步调用,不另起协程);
+// #panic 与其它应用钩子(SecretHook/VerifyHook)一样沿调用栈向上传播。
+type TStatusHook func(Status TUniStatus)
+
 const (
 	// #MAC 标签:内置 HMAC-SHA256;唯一载荷格式为“版本头+表名+列名+值长度+值字节”。
 	UniVerifyTag = "MAC:"
@@ -36,6 +63,8 @@ type verifyRowCtx struct {
 	MacIdx   int      //#MAC伴随列的结构体字段下标
 	Cols     []int    //#保护列的结构体字段下标,顺序=SetVerify登记顺序=载荷顺序
 	ColsName []string //#保护列小写名,与 Cols 同序(v2 载荷逐列编码列名)
+	PkeyIdx  []int    //#结果集实际投影的主键字段下标(StatusHook 审计定位用,未投影则不出现)
+	PkeyName []string //#主键列小写名,与 PkeyIdx 同序
 }
 
 // #verifyActive 引擎与表两侧开关同时打开才生效
@@ -315,56 +344,130 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 		return nil, nil
 	}
 
-	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols, ColsName: ColsName}, nil
+	//#审计定位:只收结果集实际投影的主键列(VerifyUnkeyed 时主键可能不在查询里,
+	//#此时结构体对应字段是零值,不能作为主键上报)
+	var PkeyIdx []int
+	var PkeyName []string
+
+	for _, ItemPara := range UniTable.orderedPkeys() {
+		LowerTxt := strings.ToLower(ItemPara.FieldName)
+		for ColIndex, ItemCol := range Column {
+			if strings.ToLower(ItemCol) == LowerTxt && FieldIdx[ColIndex] >= 0 {
+				PkeyIdx = append(PkeyIdx, FieldIdx[ColIndex])
+				PkeyName = append(PkeyName, LowerTxt)
+				break
+			}
+		}
+	}
+
+	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, Cols: Cols, ColsName: ColsName,
+		PkeyIdx: PkeyIdx, PkeyName: PkeyName}, nil
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。
 // #无标签的空值按 VerificationMode 分流(宽容=存量直通/严格=报错);
 // #非空但无标签属非法值(本引擎写路径必带标签),一律报错。
 // #非空、格式合法但 MAC 不匹配:严格模式报错;宽容模式(0/1)记录告警后放行。
-// #告警/报错文案不含载荷与行值(避免敏感授权数据泄漏进日志)
-func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx) error {
+// #告警/报错/StatusHook 文案均不含载荷与行值(避免敏感授权数据泄漏进日志)。
+// #任何失败(含宽容模式放行)都经 StatusHook 上报一次;钩子为空时行为与旧版一致。
+func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx, Method string, Row int) error {
 	if RowCtx == nil || v.Kind() != reflect.Struct {
 		return nil
 	}
 
+	eror, Accepted := this.verifyRowVerdict(v, RowCtx)
+	if eror == nil {
+		return nil
+	}
+
+	if Accepted {
+		//#宽容模式(VerificationMode=0/1):放行并告警,不阻断前端取值。
+		//#不打印载荷/行值,避免授权数据进入日志。
+		log.Printf("UniEngine: verify warning: table[%s] MAC mismatch; VerificationMode=%d lenient, row accepted", RowCtx.TablName, this.VerificationMode)
+	}
+
+	this.verifyStatus(TUniStatus{
+		Method:   Method,
+		Row:      Row,
+		Accepted: Accepted,
+		Err:      eror,
+	}, RowCtx, v)
+
+	if Accepted {
+		return nil
+	}
+
+	return eror
+}
+
+// #verifyRowVerdict 单行验签判定:eror 为 nil 表示通过;Accepted=true 表示宽容模式
+// #失配——eror 仍携带失配原因供 StatusHook 记录,由 verifyRow 负责放行。
+func (this *TUniEngine) verifyRowVerdict(v reflect.Value, RowCtx *verifyRowCtx) (eror error, accepted bool) {
 	stored := v.Field(RowCtx.MacIdx).String()
 
 	if stored == "" {
 		if this.verifyStrict() {
-			return fmt.Errorf("UniEngine: verify fail: table[%s] row has no mac value (legacy row before backfill?)", RowCtx.TablName)
+			return fmt.Errorf("UniEngine: verify fail: table[%s] row has no mac value (legacy row before backfill?)", RowCtx.TablName), false
 		}
-		return nil
+		return nil, false
 	}
 
 	if !strings.HasPrefix(stored, UniVerifyTag) {
-		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is invalid", RowCtx.TablName)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is invalid", RowCtx.TablName), false
 	}
 
 	Payload, eror := verifyPayload(RowCtx.TablName, RowCtx.ColsName, RowCtx.Cols, v)
 	if eror != nil {
-		return eror
+		return eror, false
 	}
 
 	sum, eror := this.verifySign(Payload)
 	if eror != nil {
-		return eror
+		return eror, false
 	}
 
 	expect, eror := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, UniVerifyTag))
 	if eror != nil {
-		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is not base64", RowCtx.TablName)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row Mac value is not base64", RowCtx.TablName), false
 	}
 
 	if !hmac.Equal(expect, sum) {
-		if this.verifyStrict() {
-			return fmt.Errorf("UniEngine: verify fail: table[%s] Row integrity check failed", RowCtx.TablName)
-		}
-		//#宽容模式(VerificationMode=0/1):放行并告警,不阻断前端取值。
-		//#不打印载荷/行值,避免授权数据进入日志。
-		log.Printf("UniEngine: verify warning: table[%s] MAC mismatch; VerificationMode=%d lenient, row accepted", RowCtx.TablName, this.VerificationMode)
+		return fmt.Errorf("UniEngine: verify fail: table[%s] Row integrity check failed", RowCtx.TablName), !this.verifyStrict()
+	}
+
+	return nil, false
+}
+
+// #verifyStatus 把一次验签失败交给应用钩子;未设置钩子时直接返回(不构造主键载荷)。
+// #引擎侧补齐 Engine/Mode;行级事件从 RowCtx 取表名与已投影主键,投影不足时 RowCtx 为 nil。
+// #在查询 goroutine 内同步调用;Pkeys 为主键实参(审计定位用),不含其它行值。
+func (this *TUniEngine) verifyStatus(Status TUniStatus, RowCtx *verifyRowCtx, v reflect.Value) {
+	Hook := this.StatusHook
+	if Hook == nil {
+		return
+	}
+
+	Status.Engine = this
+	Status.Mode = this.VerificationMode
+	if RowCtx != nil {
+		Status.Table = RowCtx.TablName
+		Status.Pkeys = pkeysOfRow(v, RowCtx)
+	}
+
+	Hook(Status)
+}
+
+// #pkeysOfRow 按登记顺序取当前行的主键实参(列名+原始值);
+// #只使用结果集实际投影的主键字段(verifyCtxOf 预计算),未投影的主键不会以零值冒充。
+func pkeysOfRow(v reflect.Value, RowCtx *verifyRowCtx) []TUniPkey {
+	if RowCtx == nil || len(RowCtx.PkeyIdx) == 0 || !v.IsValid() || v.Kind() != reflect.Struct {
 		return nil
 	}
 
-	return nil
+	Keys := make([]TUniPkey, 0, len(RowCtx.PkeyIdx))
+	for Pos, Idx := range RowCtx.PkeyIdx {
+		Keys = append(Keys, TUniPkey{Column: RowCtx.PkeyName[Pos], Value: v.Field(Idx).Interface()})
+	}
+
+	return Keys
 }
