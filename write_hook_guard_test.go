@@ -364,3 +364,144 @@ func TestMaskUnclosedLiteralNoPhantomPlaceholder(t *testing.T) {
 		t.Fatalf("闭合字面量内部不应残留: %q", closed)
 	}
 }
+
+// hookGuardMacUser 钩子 SQL 显式携带 MAC 伴随列,SetSqlValues 追加引擎回填值
+type hookGuardMacUser struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+	MacText  string `db:"mac_text"`
+}
+
+func (u hookGuardMacUser) GetSqlInsert(e *TUniEngine, TableName string) string {
+	return "insert into hook_mac_user (user_name,password,mac_text) values (?,?,?)"
+}
+
+func (u hookGuardMacUser) SetSqlValues(e *TUniEngine, qt TQueryType, Out *[]interface{}) {
+	*Out = append(*Out, u.UserName, u.Password, u.MacText)
+}
+
+// hookGuardMacBatch 批量钩子携带 MAC 列(每行一组 VALUES)
+type hookGuardMacBatch struct {
+	Name    string `db:"name"`
+	Code    string `db:"code"`
+	MacText string `db:"mac_text"`
+}
+
+func (b hookGuardMacBatch) GetSqlInsertL(e *TUniEngine, TableName string, Batch int64) string {
+	var Rows []string
+	for i := int64(0); i < Batch; i++ {
+		Rows = append(Rows, "(?,?,?)")
+	}
+	return "insert into hook_mac_batch (name,code,mac_text) values " + strings.Join(Rows, ",")
+}
+
+func (b hookGuardMacBatch) SetSqlValuesL(e *TUniEngine, qt TQueryType, Row reflect.Value, Out *[]interface{}) {
+	*Out = append(*Out, Row.FieldByName("Name").Interface(), Row.FieldByName("Code").Interface(), Row.FieldByName("MacText").Interface())
+}
+
+// #Insert 钩子携带 MAC 列:放行,且实参必须是引擎回填的 MAC
+func TestInsertHookWithMACAllowed(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.VerifyOn = 1
+	eng.VerificationMode = 1
+	eng.VerifyBy = "test-verify-key"
+	eng.RegisterClass(hookGuardMacUser{}, "hook_mac_user").SetKeys("user_name").
+		SetVerify("mac_text", "user_name", "password")
+
+	row := hookGuardMacUser{UserName: "u", Password: "p"}
+	if eror := eng.Insert(&row); eror != nil {
+		t.Fatalf("钩子携带 MAC 列应放行: %v", eror)
+	}
+	if row.MacText == "" {
+		t.Fatal("引擎应先回填 MAC")
+	}
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 3 {
+		t.Fatalf("应有 1 次执行 3 个实参: %v", d.insertValues)
+	}
+	if d.insertValues[0][2] != row.MacText {
+		t.Fatalf("MAC 实参应等于引擎回填值: got %v want %q", d.insertValues[0][2], row.MacText)
+	}
+}
+
+// #Insert 钩子 MAC 实参被篡改:拒绝且不执行 SQL
+func TestInsertHookWithWrongMACRejected(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.VerifyOn = 1
+	eng.VerificationMode = 1
+	eng.VerifyBy = "test-verify-key"
+	eng.RegisterClass(hookGuardBadMac{}, "hook_bad_mac").SetKeys("user_name").
+		SetVerify("mac_text", "user_name", "password")
+
+	row := hookGuardBadMac{UserName: "u", Password: "p"}
+	if eror := eng.Insert(&row); eror == nil || !strings.Contains(eror.Error(), "does not match") {
+		t.Fatalf("MAC 实参不符应拒绝, got %v", eror)
+	}
+	if len(d.queries) != 0 {
+		t.Fatalf("被拒后不应执行 SQL: %v", d.queries)
+	}
+}
+
+type hookGuardBadMac struct {
+	UserName string `db:"user_name"`
+	Password string `db:"password"`
+	MacText  string `db:"mac_text"`
+}
+
+func (u hookGuardBadMac) GetSqlInsert(e *TUniEngine, TableName string) string {
+	return "insert into hook_bad_mac (user_name,password,mac_text) values (?,?,?)"
+}
+
+func (u hookGuardBadMac) SetSqlValues(e *TUniEngine, qt TQueryType, Out *[]interface{}) {
+	*Out = append(*Out, u.UserName, u.Password, "tampered")
+}
+
+// #InsertL 批量钩子携带 MAC 列:逐行放行且 MAC 实参逐行匹配
+func TestInsertLHookWithMACAllowed(t *testing.T) {
+	d := &mockDriver{}
+	eng := newMockEngine(d)
+	eng.VerifyOn = 1
+	eng.VerificationMode = 1
+	eng.VerifyBy = "test-verify-key"
+	eng.RegisterClass(hookGuardMacBatch{}, "hook_mac_batch").SetKeys("name").
+		SetVerify("mac_text", "name", "code")
+
+	rows := []hookGuardMacBatch{{Name: "a", Code: "c1"}, {Name: "b", Code: "c2"}}
+	if eror := eng.InsertL(&rows); eror != nil {
+		t.Fatalf("批量钩子携带 MAC 列应放行: %v", eror)
+	}
+	if len(d.insertValues) != 1 || len(d.insertValues[0]) != 6 {
+		t.Fatalf("应有 1 次执行 6 个实参: %v", d.insertValues)
+	}
+	for i := range rows {
+		if rows[i].MacText == "" {
+			t.Fatalf("第 %d 行引擎应先回填 MAC", i)
+		}
+		if d.insertValues[0][i*3+2] != rows[i].MacText {
+			t.Fatalf("第 %d 行 MAC 实参应等于回填值: got %v want %q", i, d.insertValues[0][i*3+2], rows[i].MacText)
+		}
+	}
+}
+
+// #CopyIn 钩子守卫:列清单须含 MAC 列,行值与引擎回填值逐一相等
+func TestCopyInHookGuardWithMAC(t *testing.T) {
+	eng := newMockEngine(&mockDriver{})
+	eng.VerifyOn = 1
+	eng.VerificationMode = 1
+	eng.VerifyBy = "test-verify-key"
+	tab := eng.RegisterClass(hookGuardMacUser{}, "hook_copy_mac").SetKeys("user_name").
+		SetVerify("mac_text", "user_name", "password")
+
+	Cols := []string{"user_name", "password", "mac_text"}
+	Rows := [][]interface{}{{"u", "p", "m1"}, {"v", "q", "m2"}}
+	if eror := eng.guardCopyInHook(tab, Cols, Rows, []string{"m1", "m2"}); eror != nil {
+		t.Fatalf("CopyIn 钩子携带 MAC 列应放行: %v", eror)
+	}
+	if eror := eng.guardCopyInHook(tab, Cols, Rows, []string{"m1", "bad"}); eror == nil {
+		t.Fatal("CopyIn 钩子 MAC 值不符应拒绝")
+	}
+	if eror := eng.guardCopyInHook(tab, []string{"user_name", "password"}, Rows, []string{"m1", "m2"}); eror == nil {
+		t.Fatal("CopyIn 钩子缺 MAC 列应拒绝")
+	}
+}

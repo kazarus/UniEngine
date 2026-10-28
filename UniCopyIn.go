@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 func (this *TUniEngine) CopyInL(i interface{}, TableName ...string) error {
@@ -25,14 +26,33 @@ func (this *TUniEngine) SpecialInsertLCtx(Ctx context.Context, i interface{}, Ta
 }
 
 // guardCopyInHook 校验并就地加密自定义 COPY 行:
-//   - 验签激活:拒绝(钩子列清单无法保证包含 MAC 伴随列,读侧会静默失效);
+//   - 验签激活:钩子列清单必须显式包含 MAC 伴随列,且逐行实参等于引擎回填值;
+//     缺失/值不符时 fail-fast(钩子列清单无法由引擎自行附加签名);
 //   - 加密激活:列名映射到注册表,secreton 列实参就地加密;列名不可映射/行长度不符/
 //     实参类型非 string([]byte)时 fail-fast,绝不把明文交给 COPY。
 //
 // SecretOn=0 且验签未激活时不做任何干预,与默认路径同口径。
-func (this *TUniEngine) guardCopyInHook(UniTable *TUniTable, Columns []string, Rows [][]interface{}) error {
+func (this *TUniEngine) guardCopyInHook(UniTable *TUniTable, Columns []string, Rows [][]interface{}, MacValues []string) error {
 	if this.verifyActive(UniTable) {
-		return fmt.Errorf("UniEngine: CopyInL on table [%s] takes the custom column/value hook path, which bypasses engine-side verify (MAC companion column [%s]); drop the hook or disable verify for this table", UniTable.TableName, UniTable.VerifyAt)
+		MacIdx := -1
+		for Pos, Col := range Columns {
+			if strings.EqualFold(Col, UniTable.VerifyAt) {
+				MacIdx = Pos
+				break
+			}
+		}
+		if MacIdx < 0 || len(Rows) != len(MacValues) {
+			return fmt.Errorf("UniEngine: CopyInL on table [%s] takes the custom column/value hook path, which bypasses engine-side verify: the hook must carry the MAC companion column [%s] with the engine-computed value; drop the hook or disable verify for this table", UniTable.TableName, UniTable.VerifyAt)
+		}
+		for RowIdx, Row := range Rows {
+			if MacIdx >= len(Row) {
+				return fmt.Errorf("UniEngine: CopyInL on table [%s] hook row[%d] shorter than MAC column index [%d]", UniTable.TableName, RowIdx, MacIdx)
+			}
+			Got, Ok := macArgString(Row[MacIdx])
+			if !Ok || Got != MacValues[RowIdx] {
+				return fmt.Errorf("UniEngine: CopyInL on table [%s] hook row[%d] MAC value does not match the engine-computed value; refusing to write", UniTable.TableName, RowIdx)
+			}
+		}
 	}
 
 	if this.SecretOn == 0 || len(UniTable.ColSecret) == 0 {
@@ -107,6 +127,15 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 		}
 	}
 
+	//#写钩子须携带的 MAC 值:在钩子执行前锁定,逐行对应
+	var MacValues []string
+	if this.verifyActive(UniTable) {
+		MacValues, eror = this.verifyMacValues(v, UniTable)
+		if eror != nil {
+			return eror
+		}
+	}
+
 	SqlQuery := make([]string, 0)
 	SqlValue := make([][]interface{}, 0)
 
@@ -135,7 +164,7 @@ func (this *TUniEngine) CopyInLCtx(Ctx context.Context, i interface{}, TableName
 	//#自定义 COPY 列/值同样受加密与验签约束:默认分支的 secretEncrypt 不覆盖钩子行,
 	//#旧实现会把 secreton 明文直接写库且不报错。守卫要么就地加密,要么 fail-fast。
 	if len(SqlQuery) > 0 || len(SqlValue) > 0 {
-		if eror := this.guardCopyInHook(UniTable, SqlQuery, SqlValue); eror != nil {
+		if eror := this.guardCopyInHook(UniTable, SqlQuery, SqlValue, MacValues); eror != nil {
 			return eror
 		}
 	}

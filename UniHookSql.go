@@ -26,11 +26,9 @@ type hookSecretPlan struct {
 	ArgCount int
 }
 
-// resolveHookSecretArgs 解析写钩子 SQL,Ok=false 表示形态无法可信解析。
+// resolveHookSecretArgs 解析写钩子 SQL,定位 secreton 列对应的实参下标;
+// Ok=false 表示形态无法可信解析。
 func resolveHookSecretArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan, bool) {
-	Masked := maskSQLLiterals(SqlQuery)
-	Plcs := scanPlaceholders(Masked)
-
 	secretOf := func(ColKey string) bool {
 		if ColKey == "" {
 			return false
@@ -38,9 +36,27 @@ func resolveHookSecretArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan
 		UniField, Valid := UniTable.HashField[ColKey]
 		return Valid && UniTable.secretColumn(UniField)
 	}
+	return resolveHookColumnArgs(SqlQuery, secretOf)
+}
+
+// resolveHookMacArgs 解析写钩子 SQL,定位 MAC 伴随列对应的实参下标;
+// 验签激活时钩子必须显式携带该列,且实参须等于引擎回填的 MAC。
+func resolveHookMacArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan, bool) {
+	if UniTable == nil || UniTable.VerifyAt == "" {
+		return hookSecretPlan{}, false
+	}
+	Want := strings.ToLower(UniTable.VerifyAt)
+	return resolveHookColumnArgs(SqlQuery, func(ColKey string) bool { return ColKey == Want })
+}
+
+// resolveHookColumnArgs 通用解析:按 Match 选出目标列,返回其占位符实参下标
+// (INSERT 按行序;UPDATE 单值)与 SQL 声明的实参总数。
+func resolveHookColumnArgs(SqlQuery string, Match func(string) bool) (hookSecretPlan, bool) {
+	Masked := maskSQLLiterals(SqlQuery)
+	Plcs := scanPlaceholders(Masked)
 
 	if ValuesPos := findKeyword(Masked, "values", 0); ValuesPos >= 0 {
-		Plan, Ok := resolveInsertSecretArgs(SqlQuery, Masked, Plcs, ValuesPos, secretOf)
+		Plan, Ok := resolveInsertColumnArgs(SqlQuery, Masked, Plcs, ValuesPos, Match)
 		if !Ok {
 			return hookSecretPlan{}, false
 		}
@@ -49,7 +65,7 @@ func resolveHookSecretArgs(UniTable *TUniTable, SqlQuery string) (hookSecretPlan
 		return Plan, true
 	}
 	if SetPos := findKeyword(Masked, "set", 0); SetPos >= 0 {
-		Plan, Ok := resolveUpdateSecretArgs(SqlQuery, Masked, Plcs, SetPos, secretOf)
+		Plan, Ok := resolveUpdateColumnArgs(SqlQuery, Masked, Plcs, SetPos, Match)
 		if !Ok {
 			return hookSecretPlan{}, false
 		}
@@ -98,9 +114,9 @@ func placeholderArgCount(Plcs []sqlPlace) int {
 	return Positional
 }
 
-// resolveInsertSecretArgs INSERT 形态:values 前最后一个括号组为列清单,其后为
+// resolveInsertColumnArgs INSERT 形态:values 前最后一个括号组为列清单,其后为
 // 若干纯占位符组 `( ?, ? ), ...`;占位符总数即实参布局。
-func resolveInsertSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, ValuesPos int, secretOf func(string) bool) (hookSecretPlan, bool) {
+func resolveInsertColumnArgs(SqlQuery, Masked string, Plcs []sqlPlace, ValuesPos int, Match func(string) bool) (hookSecretPlan, bool) {
 	//#values 之前出现占位符(如表名里掺占位符)→ 形态不可信
 	for _, Pl := range Plcs {
 		if Pl.Pos < ValuesPos || Pl.Arg < 0 {
@@ -180,7 +196,7 @@ func resolveInsertSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, ValuesPos
 	//#ArgCount 由调用方按 placeholderArgCount 统一赋值(本函数只产出 Idx)
 	Plan := hookSecretPlan{}
 	for j, ColKey := range Cols {
-		if !secretOf(ColKey) {
+		if !Match(ColKey) {
 			continue
 		}
 		for _, Row := range Groups {
@@ -193,9 +209,9 @@ func resolveInsertSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, ValuesPos
 	return Plan, true
 }
 
-// resolveUpdateSecretArgs UPDATE 形态:SET 段按深度 0 逗号切赋值,每段须为
+// resolveUpdateColumnArgs UPDATE 形态:SET 段按深度 0 逗号切赋值,每段须为
 // `col = ?`;非 secreton 列的字面量赋值跳过,secreton 列字面量/表达式 → 不可信。
-func resolveUpdateSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, SetPos int, secretOf func(string) bool) (hookSecretPlan, bool) {
+func resolveUpdateColumnArgs(SqlQuery, Masked string, Plcs []sqlPlace, SetPos int, Match func(string) bool) (hookSecretPlan, bool) {
 	End := len(Masked)
 	if WherePos := findKeyword(Masked, "where", SetPos+3); WherePos >= 0 {
 		End = WherePos
@@ -222,7 +238,7 @@ func resolveUpdateSecretArgs(SqlQuery, Masked string, Plcs []sqlPlace, SetPos in
 		Pl, Found := placeAt(Plcs, Abs)
 		IsPlace := Found && tokenEnd(Masked, Abs)-Abs == TrimmedLen && TrimmedLen > 0
 
-		if !secretOf(ColKey) {
+		if !Match(ColKey) {
 			continue //#非 secreton 列:字面量/表达式无需引擎处理
 		}
 		if !IsPlace || Pl.Arg < 0 {

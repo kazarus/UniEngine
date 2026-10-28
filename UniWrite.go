@@ -62,18 +62,80 @@ func (this *TUniEngine) resolveTarget(Method string, i interface{}, TableName []
 	return UniTable, reflect.Indirect(reflect.ValueOf(i)), TablName, nil
 }
 
+// macArgString 取钩子实参中的 MAC 文本;只接受 string/[]byte。
+func macArgString(Value interface{}) (string, bool) {
+	switch Item := Value.(type) {
+	case string:
+		return Item, true
+	case []byte:
+		return string(Item), true
+	default:
+		return "", false
+	}
+}
+
+// verifyMacValues 取验签回填后的 MAC 值(单行=一项;切片=逐行),用于校验写钩子实参。
+func (this *TUniEngine) verifyMacValues(v reflect.Value, UniTable *TUniTable) ([]string, error) {
+	Field, Ok := UniTable.HashField[UniTable.VerifyAt]
+	if !Ok || Field.AttriName == "" {
+		return nil, fmt.Errorf("UniEngine: table [%s] verify column [%s] has no mapped class attribute", UniTable.TableName, UniTable.VerifyAt)
+	}
+	Read := func(Row reflect.Value) (string, error) {
+		if Row.Kind() == reflect.Ptr {
+			if Row.IsNil() {
+				return "", fmt.Errorf("UniEngine: table [%s] verify column [%s] got a nil row pointer", UniTable.TableName, UniTable.VerifyAt)
+			}
+			Row = Row.Elem()
+		}
+		F := Row.FieldByName(Field.AttriName)
+		if !F.IsValid() || F.Kind() != reflect.String {
+			return "", fmt.Errorf("UniEngine: table [%s] verify column [%s] must map to a string field", UniTable.TableName, UniTable.VerifyAt)
+		}
+		return F.String(), nil
+	}
+	if v.Kind() == reflect.Slice {
+		Out := make([]string, 0, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			Value, eror := Read(v.Index(i))
+			if eror != nil {
+				return nil, eror
+			}
+			Out = append(Out, Value)
+		}
+		return Out, nil
+	}
+	Value, eror := Read(v)
+	if eror != nil {
+		return nil, eror
+	}
+	return []string{Value}, nil
+}
+
 // hookWriteGuard 写钩子统一守卫:
 //
-//	验签激活 → fail-fast(钩子语句无法附带 MAC 伴随列,读侧钩子行本就无法验签);
+//	验签激活 → 钩子 SQL 必须显式携带 MAC 伴随列,且该列实参必须等于引擎回填值;
+//	缺失/形态不可信/值不符 → fail-fast(钩子语句无法由引擎自行附加签名);
 //	加密激活 → 解析钩子 SQL 的"列→实参"映射(UniHookSql.go),就地加密 secreton
 //	列实参——与读钩子"交接前解密"对称,钩子方按列序给实参即拿到与默认路径同口径
 //	的加密语义;形态不可信解析(字面量赋值/表达式/未知结构/实参数不匹配)→ 维持
 //	fail-fast,不静默写明文。
 //
 // SecretOn=0 且验签未激活时不拦截,与默认路径同口径。
-func (this *TUniEngine) hookWriteGuard(Method string, UniTable *TUniTable, SqlQuery string, SqlValue []interface{}) error {
+func (this *TUniEngine) hookWriteGuard(Method string, UniTable *TUniTable, SqlQuery string, SqlValue []interface{}, MacValues ...string) error {
 	if this.verifyActive(UniTable) {
-		return fmt.Errorf("UniEngine: method [%s] on table [%s] takes the custom SQL write hook path, which bypasses engine-side verify (MAC companion column [%s]); drop the write hook or disable the feature for this table", Method, UniTable.TableName, UniTable.VerifyAt)
+		Plan, Ok := resolveHookMacArgs(UniTable, SqlQuery)
+		if !Ok || len(Plan.Idx) == 0 || len(Plan.Idx) != len(MacValues) || Plan.ArgCount != len(SqlValue) {
+			return fmt.Errorf("UniEngine: method [%s] on table [%s] takes the custom SQL write hook path, which bypasses engine-side verify: the hook must carry the MAC companion column [%s] with the engine-computed value; drop the write hook or disable the feature for this table", Method, UniTable.TableName, UniTable.VerifyAt)
+		}
+		for i, Idx := range Plan.Idx {
+			if Idx < 0 || Idx >= len(SqlValue) {
+				return fmt.Errorf("UniEngine: method [%s] on table [%s] MAC arg index [%d] out of [%d] args", Method, UniTable.TableName, Idx, len(SqlValue))
+			}
+			Got, Ok := macArgString(SqlValue[Idx])
+			if !Ok || Got != MacValues[i] {
+				return fmt.Errorf("UniEngine: method [%s] on table [%s] hook arg for MAC column [%s] does not match the engine-computed value; refusing to write", Method, UniTable.TableName, UniTable.VerifyAt)
+			}
+		}
 	}
 	if this.SecretOn == 0 || !UniTable.hasSecretDataCols() {
 		return nil
@@ -130,6 +192,15 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 		return eror
 	}
 
+	//#写钩子须携带的 MAC 值:在钩子执行前锁定,防止钩子篡改结构体后自证
+	var MacValues []string
+	if this.verifyActive(UniTable) {
+		MacValues, eror = this.verifyMacValues(v, UniTable)
+		if eror != nil {
+			return eror
+		}
+	}
+
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
@@ -140,9 +211,9 @@ func (this *TUniEngine) UpdateCtx(Ctx context.Context, i interface{}, TableName 
 		x.SetSqlValues(this, EtUpdate, &SqlValue)
 	}
 
-	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过;验签激活时钩子须携带 MAC 列
 	if SqlQuery != "" || len(SqlValue) > 0 {
-		if eror := this.hookWriteGuard("Update", UniTable, SqlQuery, SqlValue); eror != nil {
+		if eror := this.hookWriteGuard("Update", UniTable, SqlQuery, SqlValue, MacValues...); eror != nil {
 			return eror
 		}
 	}
@@ -220,6 +291,15 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 		return eror
 	}
 
+	//#写钩子须携带的 MAC 值:在钩子执行前锁定,防止钩子篡改结构体后自证
+	var MacValues []string
+	if this.verifyActive(UniTable) {
+		MacValues, eror = this.verifyMacValues(v, UniTable)
+		if eror != nil {
+			return eror
+		}
+	}
+
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
@@ -230,9 +310,9 @@ func (this *TUniEngine) InsertCtx(Ctx context.Context, i interface{}, TableName 
 		x.SetSqlValues(this, EtInsert, &SqlValue)
 	}
 
-	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过;验签激活时钩子须携带 MAC 列
 	if SqlQuery != "" || len(SqlValue) > 0 {
-		if eror := this.hookWriteGuard("Insert", UniTable, SqlQuery, SqlValue); eror != nil {
+		if eror := this.hookWriteGuard("Insert", UniTable, SqlQuery, SqlValue, MacValues...); eror != nil {
 			return eror
 		}
 	}
@@ -311,6 +391,15 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 		}
 	}
 
+	//#写钩子须携带的 MAC 值:在钩子执行前锁定,逐行对应
+	var MacValues []string
+	if this.verifyActive(UniTable) {
+		MacValues, eror = this.verifyMacValues(v, UniTable)
+		if eror != nil {
+			return eror
+		}
+	}
+
 	SqlQuery := ""
 	SqlValue := make([]interface{}, 0)
 
@@ -327,9 +416,9 @@ func (this *TUniEngine) InsertLCtx(Ctx context.Context, i interface{}, TableName
 		}
 	}
 
-	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过
+	//#钩子路径守卫:激活的加密/验签不能被自定义 SQL 静默绕过;验签激活时钩子须携带 MAC 列
 	if SqlQuery != "" || len(SqlValue) > 0 {
-		if eror := this.hookWriteGuard("InsertL", UniTable, SqlQuery, SqlValue); eror != nil {
+		if eror := this.hookWriteGuard("InsertL", UniTable, SqlQuery, SqlValue, MacValues...); eror != nil {
 			return eror
 		}
 	}

@@ -304,9 +304,9 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
   ```
 
   告警不打印载荷与行值。**宽容模式会放行被篡改的行**;生产稳态应使用 `VerificationMode=2`,并监控宽容模式告警。
-- **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)或验签激活时 fail-fast 报错且不执行 SQL——验签侧签名无法附带进钩子语句。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**
+- **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)时 fail-fast;验签激活时钩子 SQL 必须显式携带 MAC 伴随列(`VerifyAt`)且该列实参等于引擎回填值,缺失/形态不可信/值不符同样 fail-fast 且不执行 SQL。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**
 - **读钩子与加密/验签**(与写钩子同批规则):`Select`/`SelectL`/`SelectM`/`SelectH` 走 `SetSqlResult` 结果钩子时——激活验签的表(宽容/严格模式一并)返回 `ErrIncompleteVerification` 且不执行 SQL(钩子行无法由引擎验签);激活加密列的表,secreton 结果列在交接钩子前由引擎解密,钩子拿到明文(与默认路径同口径,`SecretOn=0` 时同口径不解密)。 **完整契约见 §4.2**
-- **COPY 钩子与加密/验签**:`CopyInL` 走 `HasCopyInGetSqlInsertL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)自定义列/值时,引擎按列名映射注册表并**就地加密**secreton 实参;列名不可映射、行长度不符、实参类型非 string/[]byte、或返回了值却没有列清单时 fail-fast 不执行 COPY。验签激活时一律拒绝(钩子列清单无法保证包含 MAC 伴随列)。`SecretOn=0` 且未验签时行为不变。
+- **COPY 钩子与加密/验签**:`CopyInL` 走 `HasCopyInGetSqlInsertL`/`HasCopyInSetSqlValuesL`(含废弃 `Special*`)自定义列/值时,引擎按列名映射注册表并**就地加密**secreton 实参;列名不可映射、行长度不符、实参类型非 string/[]byte、或返回了值却没有列清单时 fail-fast 不执行 COPY。验签激活时列清单必须显式包含 MAC 伴随列且逐行实参等于引擎回填值,缺失/值不符时拒绝。`SecretOn=0` 且未验签时行为不变。
 - **钩子接收者**:所有钩子(`SetSqlResult`/`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`/`GetMapUnique`/COPY 钩子)同时支持值接收者与指针接收者 `func (u *TUser) ...`;旧实现只在部分入口识别指针接收者,现已统一。
 - **调试输出脱敏**:`RunDebug(true)` 只打印 SQL 文本与实参个数,不再打印实参值(避免明文密码/证件号进入日志)。
 
@@ -344,7 +344,7 @@ for i := range users {
 
 | 场景 | 行为 |
 | --- | --- |
-| **验签激活**(`SetVerify` 且引擎 `VerifyOn` 开) | **一律报错且不执行 SQL** —— 钩子语句无法附带 MAC 伴随列,读侧那行本就无法验签 |
+| **验签激活**(`SetVerify` 且引擎 `VerifyOn` 开) | 钩子 SQL/列清单必须显式携带 MAC 伴随列(`VerifyAt`),且实参等于引擎回填值;缺失/形态不可信/值不符 → 报错且不执行 SQL |
 | 加密未激活,或该表无加密列 | **不干预**,与默认路径完全一致(升级不影响既有钩子) |
 | 加密激活且表含加密列 | 解析钩子 SQL 的"列→实参"映射 → **就地加密**加密列实参 → 执行 |
 
