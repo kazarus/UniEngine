@@ -20,33 +20,6 @@ import (
 // #然后赋值给 TUniEngine.VerifyHook,即可接管全部保护列的签名与验签
 type TVerifyHook func(Payload []byte) ([]byte, error)
 
-// #TUniPkey 行主键实参:Column 为登记列名(小写),Value 为该字段的原始 Go 值。
-// #供下游审计定位(写审计表/追查具体行);JSON 标签便于直接序列化落库。
-type TUniPkey struct {
-	Column string      `json:"column"`
-	Value  interface{} `json:"value"`
-}
-
-// #完整性校验失败事件:交给 TStatusHook 的载荷。
-// #携带定位信息、引擎实例与当前行主键,供应用写日志/监控或直接落审计表;
-// #不含主键之外的行值、MAC 与 HMAC 载荷。Pkeys 含主键实参,写日志时请注意脱敏。
-type TUniStatus struct {
-	Engine   *TUniEngine //#触发事件的引擎实例(多引擎共用钩子/审计落库时用于取 Db/Provider/DataBase)
-	Table    string      //#注册表名(SetVerify 所在表)
-	Method   string      //#触发入口:Select/SelectL/SelectM/SelectH(*Ctx 变体同名)
-	Mode     int64       //#本次生效的 VerificationMode;0/1=宽容,2=严格
-	Row      int         //#结果集行号(0 基);-1 表示非行级失败(列投影不足,尚未读到行)
-	Pkeys    []TUniPkey  //#当前行主键实参(登记顺序,仅限结果集实际投影的主键列);Row=-1 或未投影时为空
-	Accepted bool        //#true=宽容模式已放行(行仍返回调用方);false=失败已作为 error 上抛
-	Err      error       //#失败原因;恒非 nil,文本不含行值/载荷
-}
-
-// #应用完整性状态钩子:验签失败时同步回调一次——严格模式报错、宽容模式放行、
-// #严格模式列投影不足都在此列。钩子只观察、不参与判定:返回值与错误文本不受影响;
-// #实现须并发安全且不得阻塞查询(引擎在查询 goroutine 内同步调用,不另起协程);
-// #panic 与其它应用钩子(SecretHook/VerifyHook)一样沿调用栈向上传播。
-type TStatusHook func(Status TUniStatus)
-
 const (
 	// #MAC 标签:内置 HMAC-SHA256;唯一载荷格式为“版本头+表名+列名+值长度+值字节”。
 	UniVerifyTag = "MAC:"
@@ -60,6 +33,7 @@ const (
 // #列不全的查询无法验签,整行跳过——与 decryptRow 的 EncryIdx 同一预计算模式)
 type verifyRowCtx struct {
 	TablName   string   //#注册表名,仅用于报错定位
+	ModuleBy   string   //#所属模块快照(UniTable.ModuleBy),仅用于状态事件
 	MacIdx     int      //#MAC伴随列的结构体字段下标
 	MacColIdx  int      //#MAC列在结果集中的下标(结果钩子回填守卫用)
 	MacColName string   //#MAC列小写名,仅用于报错
@@ -364,8 +338,8 @@ func (this *TUniEngine) verifyCtxOf(UniTable *TUniTable, Column []string, FieldI
 		}
 	}
 
-	return &verifyRowCtx{TablName: UniTable.TableName, MacIdx: MacIdx, MacColIdx: MacColIdx, MacColName: LowerCol,
-		Cols: Cols, ColsName: ColsName, PkeyIdx: PkeyIdx, PkeyName: PkeyName}, nil
+	return &verifyRowCtx{TablName: UniTable.TableName, ModuleBy: UniTable.ModuleBy, MacIdx: MacIdx, MacColIdx: MacColIdx,
+		MacColName: LowerCol, Cols: Cols, ColsName: ColsName, PkeyIdx: PkeyIdx, PkeyName: PkeyName}, nil
 }
 
 // #verifyRow 读路径验签:重算期望 MAC 与伴随列常量时间比对。
@@ -391,10 +365,10 @@ func (this *TUniEngine) verifyRow(v reflect.Value, RowCtx *verifyRowCtx, Method 
 	}
 
 	this.verifyStatus(TUniStatus{
-		Method:   Method,
+		MethodIn: Method,
 		Row:      Row,
 		Accepted: Accepted,
-		Err:      eror,
+		ErrorOut: eror,
 	}, RowCtx, v)
 
 	if Accepted {
@@ -445,7 +419,7 @@ func (this *TUniEngine) verifyHookAssign(v reflect.Value, RowCtx *verifyRowCtx, 
 
 	eror := fmt.Errorf("UniEngine: verify fail: table[%s] SetSqlResult did not assign MAC column[%s]; hook path cannot be verified", RowCtx.TablName, RowCtx.MacColName)
 	//#不带 RowCtx:回填缺失时结构体里的主键也可能是零值,不能作为审计定位上报
-	this.verifyStatus(TUniStatus{Table: RowCtx.TablName, Method: Method, Row: Row, Err: eror}, nil, reflect.Value{})
+	this.verifyStatus(TUniStatus{TablFrom: RowCtx.TablName, ModuleBy: RowCtx.ModuleBy, MethodIn: Method, Row: Row, ErrorOut: eror}, nil, reflect.Value{})
 
 	return eror
 }
@@ -488,23 +462,22 @@ func (this *TUniEngine) verifyRowVerdict(v reflect.Value, RowCtx *verifyRowCtx) 
 	return nil, false
 }
 
-// #verifyStatus 把一次验签失败交给应用钩子;未设置钩子时直接返回(不构造主键载荷)。
-// #引擎侧补齐 Engine/Mode;行级事件从 RowCtx 取表名与已投影主键,投影不足时 RowCtx 为 nil。
-// #在查询 goroutine 内同步调用;Pkeys 为主键实参(审计定位用),不含其它行值。
+// #verifyStatus 组装一次验签失败事件并派发;未设置钩子时直接返回(不构造主键载荷)。
+// #只补验签语义字段(Mode/Table/Pkeys),Engine 与钩子调用由 UniStatus.go 的 emitStatus 负责。
+// #投影不足时 RowCtx 为 nil;Pkeys 为主键实参(审计定位用),不含其它行值。
 func (this *TUniEngine) verifyStatus(Status TUniStatus, RowCtx *verifyRowCtx, v reflect.Value) {
-	Hook := this.StatusHook
-	if Hook == nil {
+	if this.StatusHook == nil {
 		return
 	}
 
-	Status.Engine = this
 	Status.Mode = this.VerificationMode
 	if RowCtx != nil {
-		Status.Table = RowCtx.TablName
+		Status.TablFrom = RowCtx.TablName
+		Status.ModuleBy = RowCtx.ModuleBy
 		Status.Pkeys = pkeysOfRow(v, RowCtx)
 	}
 
-	Hook(Status)
+	this.emitStatus(Status)
 }
 
 // #pkeysOfRow 按登记顺序取当前行的主键实参(列名+原始值);

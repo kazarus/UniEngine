@@ -134,7 +134,7 @@ func (this *TUniEngine) selectRowsCtx(Ctx context.Context, elemType reflect.Type
 	RowVerify, eror := this.verifyCtxOf(UniTable, Column, FieldIdx)
 	if eror != nil {
 		//#投影不足=无法验签:严格模式在读到任何行之前即失败,行号记 -1 交给 StatusHook
-		this.verifyStatus(TUniStatus{Table: UniTable.TableName, Method: Method, Row: -1, Err: eror}, nil, reflect.Value{})
+		this.verifyStatus(TUniStatus{TablFrom: UniTable.TableName, ModuleBy: UniTable.ModuleBy, MethodIn: Method, Row: -1, ErrorOut: eror}, nil, reflect.Value{})
 		return eror
 	}
 

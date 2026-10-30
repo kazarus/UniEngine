@@ -111,7 +111,7 @@ func ExampleTUniEngine_StatusHook() {
 	//#失败通知:引擎在查询 goroutine 内同步调用,只做轻量记录,勿阻塞或用它替代错误处理
 	Eng.StatusHook = func(Status UniEngine.TUniStatus) {
 		log.Printf("integrity: table=%s method=%s row=%d mode=%d accepted=%v err=%v",
-			Status.Table, Status.Method, Status.Row, Status.Mode, Status.Accepted, Status.Err)
+			Status.TablFrom, Status.MethodIn, Status.Row, Status.Mode, Status.Accepted, Status.ErrorOut)
 
 		if Status.Accepted {
 			//#宽容模式已放行:适合升级告警/审计;严格模式下不会走到这里
@@ -173,8 +173,8 @@ func ExampleTUniEngine_StatusHook_auditTable() {
 		for Status := range events {
 			Keys, _ := json.Marshal(Status.Pkeys) //#[{"column":"who_build","value":1},...]
 			if _, eror := audit.Exec(SqlInsert,
-				Status.Engine.DataBase, Status.Table, Status.Method, Status.Row,
-				Status.Mode, Status.Accepted, string(Keys), Status.Err.Error()); eror != nil {
+				Status.Engine.DataBase, Status.TablFrom, Status.MethodIn, Status.Row,
+				Status.Mode, Status.Accepted, string(Keys), Status.ErrorOut.Error()); eror != nil {
 				log.Printf("audit insert failed: %v", eror)
 			}
 		}

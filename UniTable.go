@@ -32,6 +32,7 @@ type TUniTable struct {
 
 	VerifyOn  bool        //#是否含完整性保护字段#SetVerify登记时置位
 	VerifyAt  string      //#MAC伴随列(字段名,小写)#如 hmac_text,建议建列 varchar(200) not null default ''
+	ModuleBy  string      //#记录某表隶属哪个模块
 	ColVerify []TUniField //#保护列(登记顺序=载荷顺序)#MAC覆盖 who_build/user_indx 等授权键与 data_stat 等状态列
 
 	//#VerifyUnkeyed 关闭"保护列须覆盖全部已登记主键"的登记期强制(缺省 false=强制)。
@@ -340,6 +341,20 @@ func (this *TUniTable) setSecret(Fields ...interface{}) {
 			}
 		}
 	}
+}
+
+// #SetModule 设置表所属模块(ModuleBy)并返回**新快照**,支持链式(错误处理同 SetKeys:记入 LastError 并短路):
+// #  UniEngineEx.RegisterClass(core.TUSER{}, "tbl_user").SetModule("core")
+// #ModuleBy 是纯业务元数据,不参与 SQL 生成/加密/验签,供调用方按模块筛选、路由或生成审计信息;
+// #传空串表示清空。与主键冻结无关,可在 SetVerify 之后调用。
+func (this *TUniTable) SetModule(ModuleBy string) *TUniTable {
+	if this.LastError != nil {
+		return this
+	}
+
+	return this.updateSnapshot(func(Next *TUniTable) {
+		Next.ModuleBy = ModuleBy
+	})
 }
 
 // #SetVerify 登记存储完整性保护并返回**新快照**,支持链式(错误处理同 SetKeys:记入 LastError 并短路):

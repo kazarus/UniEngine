@@ -12,7 +12,8 @@
 
 ### 新增
 
-- **`TUniEngine.StatusHook` 验签失败通知**:完整性校验失败时同步回调 `TUniStatus{Engine, Table, Method, Row, Pkeys, Mode, Accepted, Err}`,供下游写日志/监控/审计表。`Engine` 为触发事件的引擎实例;`Pkeys` 为当前行主键实参(登记顺序、仅限结果集投影的主键列,JSON 标签 `column`/`value`;`Row=-1` 或未投影时为空)。严格模式报错、宽容模式放行(`Accepted=true`)、严格模式列投影不足(`Row=-1`)都会回调;验签通过或宽容模式缺列跳过不回调。钩子只观察:不改变返回值与错误文本,不含主键之外的行值/MAC;为空时行为与旧版完全一致。审计表落库示例见 `example_test.go`(`ExampleTUniEngine_StatusHook_auditTable`)。
+- **`TUniTable.SetModule`**:链式设置表所属模块 `ModuleBy`(纯业务元数据,不参与 SQL 生成/加密/验签,可在 `SetVerify` 之后调用;传空串清空),与其它登记项一样按新快照发布。
+- **`TUniEngine.StatusHook` 验签失败通知**:完整性校验失败时同步回调 `TUniStatus{Engine, TablFrom, ModuleBy, MethodIn, Row, Pkeys, Mode, Accepted, ErrorOut}`,供下游写日志/监控/审计表。`Engine` 为触发事件的引擎实例;`Pkeys` 为当前行主键实参(登记顺序、仅限结果集投影的主键列,JSON 标签 `column`/`value`;`Row=-1` 或未投影时为空)。严格模式报错、宽容模式放行(`Accepted=true`)、严格模式列投影不足(`Row=-1`)都会回调;验签通过或宽容模式缺列跳过不回调。钩子只观察:不改变返回值与错误文本,不含主键之外的行值/MAC;为空时行为与旧版完全一致。审计表落库示例见 `example_test.go`(`ExampleTUniEngine_StatusHook_auditTable`)。
 
 ### 行为修复
 

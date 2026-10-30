@@ -307,7 +307,7 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
   告警不打印载荷与行值。**宽容模式会放行被篡改的行**;生产稳态应使用 `VerificationMode=2`,并监控宽容模式告警。
 - **验签失败通知钩子 `StatusHook`**:完整性校验失败时同步回调一次,把表名、入口方法、行号、模式、是否已放行与错误原因交给应用写日志/监控/审计。严格模式报错、宽容模式放行(`Accepted=true`,行仍返回)以及严格模式列投影不足(`Row=-1`)都会回调;验签通过、宽容模式缺列跳过都不回调。钩子只观察:返回值与错误文本不变。
 
-  - 载荷 `TUniStatus` 含 `Engine`(触发事件的引擎实例)、`Table`、`Method`、`Row`、`Pkeys`(当前行主键实参,登记顺序、仅限结果集投影的主键列;JSON 标签 `column`/`value`)、`Mode`、`Accepted`、`Err`,不含主键之外的行值/MAC。
+  - 载荷 `TUniStatus` 含 `Engine`(触发事件的引擎实例)、`TablFrom`(来源表名)、`ModuleBy`(表所属模块,见 `SetModule`)、`MethodIn`(入口方法)、`Row`、`Pkeys`(当前行主键实参,登记顺序、仅限结果集投影的主键列;JSON 标签 `column`/`value`)、`Mode`、`Accepted`、`ErrorOut`,不含主键之外的行值/MAC。
   - `Pkeys` 用于审计定位与审计表落库;`Row=-1`(列投影不足)时为空。`Pkeys` 含主键实参,写入不受控日志前请脱敏;长期持有 `Engine` 会阻止引擎回收。
   - 钩子在查询 goroutine 内、`Rows` 尚未关闭时执行:**不要**用同一个引擎/事务同步写库(事务内 Rows 与写不能并行,单连接池会互相等连接);应入队后用**独立 `*sql.DB`** 异步落库,完整示例见 `example_test.go` 的 `ExampleTUniEngine_StatusHook_auditTable`。
   - 与其它配置字段一样,应在并发查询开始前设置。
@@ -315,7 +315,7 @@ UniEngineEx.SecretHook = func(Value string, Encrypt bool) (string, error) {
   ```go
   UniEngineEx.StatusHook = func(Status UniEngine.TUniStatus) {
       log.Printf("integrity: table=%s method=%s row=%d mode=%d accepted=%v pkeys=%v err=%v",
-          Status.Table, Status.Method, Status.Row, Status.Mode, Status.Accepted, Status.Pkeys, Status.Err)
+          Status.TablFrom, Status.MethodIn, Status.Row, Status.Mode, Status.Accepted, Status.Pkeys, Status.ErrorOut)
   }
   ```
 - **写钩子与加密/验签**:`Update`/`Insert`/`InsertL`(及经 count-then-dispatch 回退的 `SaveIt`/`SaveItWhenNotExist`)走自定义 SQL 写钩子(`GetSqlUpdate`/`GetSqlInsert`/`GetSqlInsertL`/`SetSqlValues*`)时,引擎解析钩子 SQL 的"列→实参"映射并自动加密激活的 secreton 列实参(与读钩子交接前解密对称;支持 `?`/`$N`/`:N` 与多行 VALUES)。形态不可信解析(secreton 列字面量/表达式、实参数与 SQL 声明不符)时 fail-fast;验签激活时钩子 SQL 必须显式携带 MAC 伴随列(`VerifyAt`)且该列实参等于引擎回填值,缺失/形态不可信/值不符同样 fail-fast 且不执行 SQL。功能未激活时钩子路径行为不变。 **完整形态契约(可解析/不可解析清单与已知边界)见 §4.2**

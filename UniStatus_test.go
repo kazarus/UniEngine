@@ -71,15 +71,15 @@ func TestStatusHookStrictMismatch(t *testing.T) {
 		t.Fatalf("StatusHook should fire exactly once, got %d", len(events))
 	}
 	ev := events[0]
-	if ev.Table != "tbl_verify_row" || ev.Method != "SelectL" || ev.Mode != 2 || ev.Row != 0 || ev.Accepted {
+	if ev.TablFrom != "tbl_verify_row" || ev.MethodIn != "SelectL" || ev.Mode != 2 || ev.Row != 0 || ev.Accepted {
 		t.Fatalf("unexpected status payload: %+v", ev)
 	}
-	if ev.Err == nil || ev.Err.Error() != eror.Error() {
-		t.Fatalf("status err should be the failure returned to caller: %v vs %v", ev.Err, eror)
+	if ev.ErrorOut == nil || ev.ErrorOut.Error() != eror.Error() {
+		t.Fatalf("status err should be the failure returned to caller: %v vs %v", ev.ErrorOut, eror)
 	}
 	//#脱敏:错误文本只带表名,不得出现行值
-	if strings.Contains(ev.Err.Error(), "mast") {
-		t.Fatalf("status err must not leak row values: %q", ev.Err.Error())
+	if strings.Contains(ev.ErrorOut.Error(), "mast") {
+		t.Fatalf("status err must not leak row values: %q", ev.ErrorOut.Error())
 	}
 	//#Engine + 主键:下游可据此定位并落审计表
 	if ev.Engine != eng {
@@ -122,11 +122,11 @@ func TestStatusHookLenientMismatchAccepted(t *testing.T) {
 		t.Fatalf("StatusHook should fire exactly once, got %d", len(events))
 	}
 	ev := events[0]
-	if !ev.Accepted || ev.Mode != 1 || ev.Row != 0 || ev.Method != "SelectL" {
+	if !ev.Accepted || ev.Mode != 1 || ev.Row != 0 || ev.MethodIn != "SelectL" {
 		t.Fatalf("unexpected status payload: %+v", ev)
 	}
-	if ev.Err == nil || !strings.Contains(ev.Err.Error(), "integrity check failed") {
-		t.Fatalf("accepted status should still carry the failure reason, got %v", ev.Err)
+	if ev.ErrorOut == nil || !strings.Contains(ev.ErrorOut.Error(), "integrity check failed") {
+		t.Fatalf("accepted status should still carry the failure reason, got %v", ev.ErrorOut)
 	}
 }
 
@@ -152,8 +152,8 @@ func TestStatusHookStrictNoMac(t *testing.T) {
 	if len(events) != 1 || events[0].Accepted {
 		t.Fatalf("legacy row failure should be reported as rejected: %+v", events)
 	}
-	if !strings.Contains(events[0].Err.Error(), "no mac value") {
-		t.Fatalf("unexpected status err: %v", events[0].Err)
+	if !strings.Contains(events[0].ErrorOut.Error(), "no mac value") {
+		t.Fatalf("unexpected status err: %v", events[0].ErrorOut)
 	}
 }
 
@@ -176,7 +176,7 @@ func TestStatusHookBadPrefix(t *testing.T) {
 	}
 
 	events := rec.snapshot()
-	if len(events) != 1 || events[0].Accepted || !strings.Contains(events[0].Err.Error(), "invalid") {
+	if len(events) != 1 || events[0].Accepted || !strings.Contains(events[0].ErrorOut.Error(), "invalid") {
 		t.Fatalf("unexpected status payload: %+v", events)
 	}
 }
@@ -199,7 +199,7 @@ func TestStatusHookBadBase64(t *testing.T) {
 	}
 
 	events := rec.snapshot()
-	if len(events) != 1 || !strings.Contains(events[0].Err.Error(), "not base64") {
+	if len(events) != 1 || !strings.Contains(events[0].ErrorOut.Error(), "not base64") {
 		t.Fatalf("unexpected status payload: %+v", events)
 	}
 }
@@ -227,11 +227,11 @@ func TestStatusHookIncompleteProjection(t *testing.T) {
 		t.Fatalf("StatusHook should fire exactly once, got %d", len(events))
 	}
 	ev := events[0]
-	if ev.Row != -1 || ev.Accepted || ev.Method != "SelectL" || ev.Table != "tbl_verify_row" {
+	if ev.Row != -1 || ev.Accepted || ev.MethodIn != "SelectL" || ev.TablFrom != "tbl_verify_row" {
 		t.Fatalf("unexpected status payload: %+v", ev)
 	}
-	if !errors.Is(ev.Err, ErrIncompleteVerification) {
-		t.Fatalf("status err should wrap ErrIncompleteVerification, got %v", ev.Err)
+	if !errors.Is(ev.ErrorOut, ErrIncompleteVerification) {
+		t.Fatalf("status err should wrap ErrIncompleteVerification, got %v", ev.ErrorOut)
 	}
 	//#还没读到行:主键未知,但引擎实例仍要带上
 	if ev.Engine != eng || ev.Pkeys != nil {
@@ -287,7 +287,7 @@ func TestStatusHookMethodSelect(t *testing.T) {
 	}
 
 	events := rec.snapshot()
-	if len(events) != 1 || events[0].Method != "Select" {
+	if len(events) != 1 || events[0].MethodIn != "Select" {
 		t.Fatalf("method should be Select, got %+v", events)
 	}
 }
@@ -321,7 +321,7 @@ func TestStatusHookResultHookPath(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("StatusHook should fire exactly once, got %d", len(events))
 	}
-	if events[0].Table != "hook_verify" || events[0].Method != "SelectL" || events[0].Row != 0 || events[0].Accepted {
+	if events[0].TablFrom != "hook_verify" || events[0].MethodIn != "SelectL" || events[0].Row != 0 || events[0].Accepted {
 		t.Fatalf("unexpected status payload: %+v", events[0])
 	}
 	wantKeys := []TUniPkey{{Column: "user_name", Value: "tampered"}}
@@ -445,7 +445,7 @@ func TestStatusHookUnkeyedPkeysNotProjected(t *testing.T) {
 	if len(events[0].Pkeys) != 0 {
 		t.Fatalf("unprojected pkeys must not be reported as zero values: %+v", events[0].Pkeys)
 	}
-	if events[0].Engine != eng || events[0].Table != "tbl_verify_row" {
+	if events[0].Engine != eng || events[0].TablFrom != "tbl_verify_row" {
 		t.Fatalf("unexpected status payload: %+v", events[0])
 	}
 }
@@ -517,11 +517,11 @@ func TestStatusHookResultHookLenientAccepted(t *testing.T) {
 	}
 
 	events := rec.snapshot()
-	if len(events) != 1 || !events[0].Accepted || events[0].Row != 0 || events[0].Method != "SelectL" {
+	if len(events) != 1 || !events[0].Accepted || events[0].Row != 0 || events[0].MethodIn != "SelectL" {
 		t.Fatalf("unexpected status payload: %+v", events)
 	}
-	if !strings.Contains(events[0].Err.Error(), "integrity check failed") {
-		t.Fatalf("unexpected status err: %v", events[0].Err)
+	if !strings.Contains(events[0].ErrorOut.Error(), "integrity check failed") {
+		t.Fatalf("unexpected status err: %v", events[0].ErrorOut)
 	}
 }
 
@@ -540,10 +540,10 @@ func TestStatusHookResultHookIncompleteStrict(t *testing.T) {
 	}
 
 	events := rec.snapshot()
-	if len(events) != 1 || events[0].Row != -1 || events[0].Accepted || events[0].Table != "hook_verify" {
+	if len(events) != 1 || events[0].Row != -1 || events[0].Accepted || events[0].TablFrom != "hook_verify" {
 		t.Fatalf("unexpected status payload: %+v", events)
 	}
-	if !errors.Is(events[0].Err, ErrIncompleteVerification) || len(events[0].Pkeys) != 0 {
+	if !errors.Is(events[0].ErrorOut, ErrIncompleteVerification) || len(events[0].Pkeys) != 0 {
 		t.Fatalf("unexpected status err/pkeys: %+v", events[0])
 	}
 }
@@ -616,6 +616,13 @@ func TestVerifyHookAssignGuard(t *testing.T) {
 	for _, Mode := range []int64{1, 2} {
 		d := &mockDriver{columns: []string{"user_name", "password"}}
 		eng := newHookSkipMacEngine(d, Mode)
+		Tbl := eng.GetTableByClass("UniEngine.hookSkipMacRow")
+		if Tbl == nil {
+			t.Fatal("guard table not registered")
+		}
+		if Tbl = Tbl.SetModule("audit"); Tbl.LastError != nil {
+			t.Fatal(Tbl.LastError)
+		}
 		d.queryRows = [][]driver.Value{{"kazarus", hookGuardMac(t, eng, "kazarus")}}
 
 		rec := &statusRecorder{}
@@ -632,11 +639,11 @@ func TestVerifyHookAssignGuard(t *testing.T) {
 			t.Fatalf("mode=%d: expect one status event, got %+v", Mode, events)
 		}
 		ev := events[0]
-		if ev.Table != "hook_guard" || ev.Method != "SelectL" || ev.Row != 0 || ev.Accepted {
+		if ev.TablFrom != "hook_guard" || ev.ModuleBy != "audit" || ev.MethodIn != "SelectL" || ev.Row != 0 || ev.Accepted {
 			t.Fatalf("mode=%d: unexpected status payload: %+v", Mode, ev)
 		}
-		if !strings.Contains(ev.Err.Error(), "did not assign MAC column") {
-			t.Fatalf("mode=%d: unexpected status err: %v", Mode, ev.Err)
+		if !strings.Contains(ev.ErrorOut.Error(), "did not assign MAC column") {
+			t.Fatalf("mode=%d: unexpected status err: %v", Mode, ev.ErrorOut)
 		}
 		//#回填缺失时结构体主键不可信,事件不带 Pkeys
 		if len(ev.Pkeys) != 0 {
@@ -692,5 +699,57 @@ func TestVerifyHookAssignGuardAcceptsAssignedMac(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Password != Signed.Password {
 		t.Fatalf("hook should fill MAC column: %+v", rows)
+	}
+}
+
+// #测试20:状态事件携带表所属模块(ModuleBy)——行级与非行级事件都带
+func TestStatusModuleBy(t *testing.T) {
+	//#行级:严格失配
+	d := &mockDriver{columns: verifyRowColumns()}
+	eng := newVerifyTestEngine(d)
+	eng.VerificationMode = 2
+	Tbl := eng.GetTableByClass("UniEngine.TVerifyRow")
+	if Tbl == nil {
+		t.Fatal("table not registered")
+	}
+	if Tbl = Tbl.SetModule("core"); Tbl.LastError != nil {
+		t.Fatal(Tbl.LastError)
+	}
+	d.queryRows = [][]driver.Value{tamperedVerifyValues(t, eng)}
+
+	rec := &statusRecorder{}
+	eng.StatusHook = rec.hook
+
+	var rows []TVerifyRow
+	if eror := eng.SelectL(&rows, "select "+verifyRowCols+" from tbl_verify_row"); eror == nil {
+		t.Fatal("strict mode should reject the tampered row")
+	}
+	events := rec.snapshot()
+	if len(events) != 1 || events[0].ModuleBy != "core" {
+		t.Fatalf("row event should carry ModuleBy, got %+v", events)
+	}
+
+	//#非行级:严格模式列投影不足
+	d2 := &mockDriver{
+		columns:   []string{"who_build", "user_indx"},
+		queryRows: [][]driver.Value{{int64(1), int64(2)}},
+	}
+	eng2 := newVerifyTestEngine(d2)
+	eng2.VerificationMode = 2
+	Tbl2 := eng2.GetTableByClass("UniEngine.TVerifyRow")
+	if Tbl2 = Tbl2.SetModule("risk"); Tbl2.LastError != nil {
+		t.Fatal(Tbl2.LastError)
+	}
+
+	rec2 := &statusRecorder{}
+	eng2.StatusHook = rec2.hook
+
+	var rows2 []TVerifyRow
+	if eror := eng2.SelectL(&rows2, "select who_build,user_indx from tbl_verify_row"); eror == nil {
+		t.Fatal("strict partial select should fail")
+	}
+	events2 := rec2.snapshot()
+	if len(events2) != 1 || events2[0].ModuleBy != "risk" || events2[0].Row != -1 {
+		t.Fatalf("projection event should carry ModuleBy, got %+v", events2)
 	}
 }

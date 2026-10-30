@@ -69,7 +69,7 @@
 // SecretHook 可接管为业务密钥/国密/加密机。存量明文(无 ENC: 标签)读取时直通,便于渐进迁移。
 // 另提供存储完整性校验(SetVerify):对登记的保护列写时签名、读时验签。
 // 验签失败(含宽容模式放行、严格模式列投影不足)经 TUniEngine.StatusHook 回调
-// TUniStatus{Engine, Table, Method, Row, Pkeys, Mode, Accepted, Err}:Engine 为触发事件的
+// TUniStatus{Engine, TablFrom, ModuleBy, MethodIn, Row, Pkeys, Mode, Accepted, ErrorOut}:Engine 为触发事件的
 // 引擎实例,Pkeys 为当前行主键实参(供审计定位/落审计表)。钩子在查询 goroutine 内、
 // Rows 关闭前同步执行,落库请用独立连接池异步写入,勿在钩子里复用同一引擎/事务。
 // 结果钩子(SetSqlResult)必须把保护列与 MAC 列按原值回填;库中 MAC 非空而钩子未回填
